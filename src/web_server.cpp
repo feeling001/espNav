@@ -130,7 +130,7 @@ void WebServer::handleGetWiFiConfig(AsyncWebServerRequest* request) {
     WiFiConfig config;
     configManager->getWiFiConfig(config);
     
-    StaticJsonDocument<256> doc;
+    JsonDocument doc;
     doc["ssid"] = config.ssid;
     doc["mode"] = config.mode;
     doc["has_password"] = (strlen(config.password) > 0);
@@ -142,7 +142,7 @@ void WebServer::handleGetWiFiConfig(AsyncWebServerRequest* request) {
 }
 
 void WebServer::handlePostWiFiConfig(AsyncWebServerRequest* request, uint8_t* data, size_t len) {
-    StaticJsonDocument<512> doc;
+    JsonDocument doc;
     DeserializationError error = deserializeJson(doc, (char*)data, len);
     
     if (error) {
@@ -171,7 +171,7 @@ void WebServer::handleGetSerialConfig(AsyncWebServerRequest* request) {
     SerialConfig config;
     configManager->getSerialConfig(config);
     
-    StaticJsonDocument<256> doc;
+    JsonDocument doc;
     doc["baudRate"] = config.baudRate;
     doc["dataBits"] = config.dataBits;
     doc["parity"] = config.parity;
@@ -184,7 +184,7 @@ void WebServer::handleGetSerialConfig(AsyncWebServerRequest* request) {
 }
 
 void WebServer::handlePostSerialConfig(AsyncWebServerRequest* request, uint8_t* data, size_t len) {
-    StaticJsonDocument<256> doc;
+    JsonDocument doc;
     DeserializationError error = deserializeJson(doc, (char*)data, len);
     
     if (error) {
@@ -207,16 +207,16 @@ void WebServer::handlePostSerialConfig(AsyncWebServerRequest* request, uint8_t* 
 }
 
 void WebServer::handleGetStatus(AsyncWebServerRequest* request) {
-    DynamicJsonDocument doc(1024);
+    JsonDocument doc;
     
     doc["uptime"] = millis() / 1000;
     
-    JsonObject heap = doc.createNestedObject("heap");
+    JsonObject heap = doc["heap"].to<JsonObject>();
     heap["free"] = ESP.getFreeHeap();
     heap["total"] = ESP.getHeapSize();
     heap["min_free"] = ESP.getMinFreeHeap();
     
-    JsonObject wifi = doc.createNestedObject("wifi");
+    JsonObject wifi = doc["wifi"].to<JsonObject>();
     
     const char* modeStr = "Unknown";
     switch (wifiManager->getState()) {
@@ -233,11 +233,11 @@ void WebServer::handleGetStatus(AsyncWebServerRequest* request) {
     wifi["ip"] = wifiManager->getIP().toString();
     wifi["clients"] = wifiManager->getConnectedClients();
     
-    JsonObject tcp = doc.createNestedObject("tcp");
+    JsonObject tcp = doc["tcp"].to<JsonObject>();
     tcp["clients"] = tcpServer->getClientCount();
     tcp["port"] = TCP_PORT;
     
-    JsonObject uart = doc.createNestedObject("uart");
+    JsonObject uart = doc["uart"].to<JsonObject>();
     uart["baud"] = 38400;  // TODO: Get from config
     uart["sentences_received"] = uartHandler->getSentencesReceived();
     uart["errors"] = uartHandler->getErrors();
@@ -288,3 +288,4 @@ void WebServer::broadcastNMEA(const char* sentence) {
         wsNMEA->textAll(sentence);
     }
 }
+

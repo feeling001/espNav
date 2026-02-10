@@ -29,7 +29,7 @@ void UARTHandler::init(const SerialConfig& cfg) {
         .stop_bits = (uart_stop_bits_t)config.stopBits,
         .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
         .rx_flow_ctrl_thresh = 122,
-        .source_clk = UART_SCLK_DEFAULT,
+        .source_clk = UART_SCLK_APB,
     };
     
     uart_param_config(UART_NUM, &uart_config);

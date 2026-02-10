@@ -1,63 +1,40 @@
-.PHONY: all build flash dashboard firmware clean check help setup-venv
-
-# Virtual environment settings
-VENV_DIR = .venv
-VENV_BIN = $(VENV_DIR)/bin
-PYTHON = $(VENV_BIN)/python
-PIO = $(VENV_BIN)/pio
-
-# Check if venv exists, if not create it
-$(VENV_DIR):
-	@echo "Creating Python virtual environment..."
-	python3 -m venv $(VENV_DIR)
-	@echo "Installing PlatformIO..."
-	$(VENV_BIN)/pip install --upgrade pip
-	$(VENV_BIN)/pip install platformio
-	@echo "✓ Virtual environment ready"
-
-# Setup virtual environment
-setup-venv: $(VENV_DIR)
+.PHONY: all build flash dashboard firmware clean check help
 
 # Default target
-all: setup-venv build flash
+all: build flash
 
 # Build everything
-build: setup-venv dashboard firmware
-
-# Check if npm dependencies are installed
-web-dashboard/node_modules:
-	@echo "Installing npm dependencies..."
-	cd web-dashboard && npm install
+build: dashboard firmware
 
 # Build React dashboard
-dashboard: web-dashboard/node_modules
+dashboard:
 	@echo "Building React dashboard..."
 	cd web-dashboard && npm run build
 
 # Build ESP32 firmware
-firmware: setup-venv
+firmware:
 	@echo "Building firmware..."
-	$(PIO) run
+	pio run
 
 # Flash everything to ESP32
-flash: setup-venv
+flash:
 	@echo "Uploading filesystem..."
-	$(PIO) run -t uploadfs
+	pio run -t uploadfs
 	@echo "Uploading firmware..."
-	$(PIO) run -t upload
+	pio run -t upload
 
 # Upload only filesystem
-uploadfs: setup-venv
-	$(PIO) run -t uploadfs
+uploadfs:
+	pio run -t uploadfs
 
 # Upload only firmware
-upload: setup-venv
-	$(PIO) run -t upload
+upload:
+	pio run -t upload
 
 # Clean build artifacts
 clean:
 	@echo "Cleaning build artifacts..."
-	@if [ -d $(VENV_DIR) ]; then $(PIO) run -t clean; fi
+	pio run -t clean
 	rm -rf data/www/*
 	cd web-dashboard && rm -rf dist/
 
@@ -65,31 +42,28 @@ clean:
 clean-all: clean
 	@echo "Cleaning dependencies..."
 	cd web-dashboard && rm -rf node_modules/
-	rm -rf $(VENV_DIR)
-	@echo "✓ Cleaned venv and dependencies"
 
 # Install dashboard dependencies
-install: web-dashboard/node_modules
-	@echo "✓ npm dependencies installed"
+install:
+	cd web-dashboard && npm install
 
 # Open serial monitor
-monitor: setup-venv
-	$(PIO) device monitor
+monitor:
+	pio device monitor
 
 # Check setup
-check: setup-venv
+check:
 	@chmod +x check_setup.sh
 	@./check_setup.sh
 
 # Erase ESP32 flash
-erase: setup-venv
-	$(PIO) run -t erase
+erase:
+	pio run -t erase
 
 # Show help
 help:
 	@echo "Marine Gateway - Makefile Commands"
 	@echo ""
-	@echo "  make setup-venv - Create Python venv and install PlatformIO"
 	@echo "  make all        - Build and flash everything (default)"
 	@echo "  make build      - Build dashboard and firmware"
 	@echo "  make flash      - Upload filesystem and firmware"
@@ -99,9 +73,8 @@ help:
 	@echo "  make upload     - Upload firmware only"
 	@echo "  make monitor    - Open serial monitor"
 	@echo "  make clean      - Clean build artifacts"
-	@echo "  make clean-all  - Clean everything including venv"
+	@echo "  make clean-all  - Clean everything including node_modules"
 	@echo "  make install    - Install dashboard dependencies"
 	@echo "  make check      - Check development environment"
 	@echo "  make erase      - Erase ESP32 flash"
 	@echo "  make help       - Show this help"
-

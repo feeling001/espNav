@@ -25,7 +25,12 @@ Thumbs.db
 # Environment
 .env
 
+# Python virtual environment
+.venv/
+venv/
+__pycache__/
+*.pyc
 
 node_modules/
 dist/
-.DS_Store
+
