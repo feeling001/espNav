@@ -32,6 +32,8 @@ void nmeaTask(void* parameter);
 void wifiTask(void* parameter);
 
 void setup() {
+
+
     // Initialize Serial for debugging
     Serial.begin(115200);
     delay(1000);  // Give serial time to initialize
