@@ -1,8 +1,8 @@
 # Name,     Type, SubType,  Offset,   Size,     Flags
-# ESP32-S3 4MB Flash - No OTA
-nvs,        data, nvs,      0x9000,   0x5000,
-otadata,    data, ota,      0xe000,   0x2000,
-phy_init,   data, phy,      0x10000,  0x1000,
-factory,    app,  factory,  0x20000,  0x200000,
-littlefs,   data, spiffs,   0x220000, 0x1E0000,
+# ESP32-S3-Zero: 4MB Flash + 2MB PSRAM
+# Optimized partition table without OTA for maximum space
 
+nvs,        data, nvs,      0x9000,   0x6000,
+phy_init,   data, phy,      0xf000,   0x1000,
+factory,    app,  factory,  0x10000,  0x1F0000,
+littlefs,   data, spiffs,   0x200000, 0x200000,
