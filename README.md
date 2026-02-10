@@ -1,74 +1,92 @@
-# Marine Gateway - Project Documentation
+# Marine Gateway - ESP32-S3 MVP
 
-Complete documentation for the Marine Gateway ESP32-S3 firmware development.
+Firmware pour ESP32-S3 permettant d'interfacer avec des systèmes de navigation marine (données de vent, vitesse, profondeur, etc.) et de diffuser ces informations via WiFi.
 
-## Overview
+## Fonctionnalités MVP
 
-Firmware for ESP32-S3 to interface with marine navigation systems (wind, speed, depth data, etc.) and stream this information via WiFi and Bluetooth (TCP and/or SignalK).
+- ✅ Interface NMEA0183 via UART1
+- ✅ Serveur TCP sur port 10110
+- ✅ Diffusion NMEA vers plusieurs clients TCP
+- ✅ Configuration WiFi via dashboard web
+- ✅ Configuration port série via dashboard web
+- ✅ Moniteur NMEA en temps réel
 
-## Documents
+## Matériel requis
 
-- [01-REQUIREMENTS.md](./01-REQUIREMENTS.md) - Initial requirements and product breakdown
-- [02-ARCHITECTURE.md](./02-ARCHITECTURE.md) - Detailed technical architecture
-- [03-PROJECT_STRUCTURE.md](./03-PROJECT_STRUCTURE.md) - File and folder structure
-- [04-ITERATIONS.md](./04-ITERATIONS.md) - Iterative development plan
-- [05-CONFIGURATION.md](./05-CONFIGURATION.md) - PlatformIO configuration and partitioning
-- [06-BUILD_DEPLOY.md](./06-BUILD_DEPLOY.md) - Build and deployment procedures
-- [07-IMPLEMENTATION_NOTES.md](./07-IMPLEMENTATION_NOTES.md) - Technical implementation notes
-- [08-TESTING.md](./08-TESTING.md) - Testing strategy and plan
+- ESP32-S3 (4MB Flash minimum)
+- Câble USB
+- Appareil NMEA0183 (GPS, instruments marins)
 
-## Quick Start
+## Installation
 
-### Prerequisites
-- PlatformIO (via pip or VS Code extension)
-- Node.js 18+ (for React dashboard)
-- ESP32-S3 with 4MB Flash
+### Prérequis
 
-### Build MVP
+- PlatformIO (`pip install platformio`)
+- Node.js 18+ (pour le dashboard React)
+
+### Build complet
+
 ```bash
+chmod +x build_and_flash.sh
 ./build_and_flash.sh
 ```
 
-See [06-BUILD_DEPLOY.md](./06-BUILD_DEPLOY.md) for details.
+Ou étape par étape:
 
-## MVP Roadmap
+```bash
+# 1. Build dashboard React
+cd web-dashboard
+npm install
+npm run build
+cd ..
 
-**Phase 1**: UART + NMEA parsing  
-**Phase 2**: Persistent WiFi configuration  
-**Phase 3**: TCP server on port 10110  
-**Phase 4**: Web dashboard backend (REST API + WebSocket)  
-**Phase 5**: Web dashboard frontend (React)  
-**Phase 6**: Final integration and testing
+# 2. Build firmware
+pio run
 
-## Target Hardware
+# 3. Upload filesystem
+pio run -t uploadfs
 
-- **Microcontroller**: ESP32-S3 Zero (4MB Flash)
-- **UART**: UART1 for NMEA0183 input
-- **WiFi**: 2.4GHz 802.11 b/g/n
-- **Storage**: LittleFS for web dashboard
+# 4. Upload firmware
+pio run -t upload
 
-## MVP Features
+# 5. Moniteur série
+pio device monitor
+```
 
-- [x] Product 101: NMEA0183 via UART1 interface
-- [x] Product 201: TCP stream (port 10110)
-- [x] Product 301: NMEA stream buffering
-- [x] Product 901: WiFi configuration dashboard
-- [x] Product 902: Serial port configuration dashboard
+## Configuration initiale
 
-## Future Features (Post-MVP)
+1. L'ESP32 démarre en mode AP: `MarineGateway-XXXXXX`
+2. Connectez-vous au WiFi AP
+3. Ouvrez `http://192.168.4.1`
+4. Configurez vos paramètres WiFi et série
+5. Redémarrez
 
-**Priority A**: TCP and NMEA  
-**Priority B**: Bluetooth support  
-**Priority C**: Calculated values (TWS/TWA)  
-**Priority D**: SD card storage  
-**Priority E**: SignalK integration  
-**Priority F**: SeaTalk1 support  
-**Priority G**: Additional features  
+## Utilisation
 
-## License
+### Connexion TCP
 
-TBD
+```bash
+nc <ESP_IP> 10110
+```
 
-## Contributing
+Ou utilisez OpenCPN, SignalK, etc.
+
+### Dashboard web
+
+Ouvrez `http://<ESP_IP>` dans votre navigateur.
+
+## Structure du projet
+
+```
+marine-gateway/
+├── platformio.ini       # Configuration PlatformIO
+├── partitions.csv       # Table de partitions
+├── include/            # Headers
+├── src/                # Code source firmware
+├── web-dashboard/      # Dashboard React
+└── data/www/          # Dashboard compilé (LittleFS)
+```
+
+## Licence
 
 TBD
