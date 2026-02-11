@@ -83,7 +83,8 @@ void setup() {
     Serial.println("[LittleFS] Initializing filesystem...");
     
     // Try to mount LittleFS with format on failure
-    if (!LittleFS.begin(true)) {
+//    if (!LittleFS.begin(true)) {
+     if (!LittleFS.begin(false, "/littlefs", 10, "littlefs")) {
         Serial.println("[LittleFS] ❌ MOUNT FAILED!");
         Serial.println("[LittleFS] Possible reasons:");
         Serial.println("  1. Filesystem not formatted");

@@ -19,7 +19,7 @@ $(VENV_DIR):
 setup-venv: $(VENV_DIR)
 
 # Default target
-all: setup-venv build flash
+all: setup-venv build flash monitor
 
 # Build everything
 build: setup-venv dashboard firmware
