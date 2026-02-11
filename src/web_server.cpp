@@ -70,20 +70,7 @@ void WebServer::stop() {
 
 void WebServer::registerRoutes() {
     // ============================================================
-    // Static file serving from LittleFS
-    // ============================================================
-    Serial.println("[Web]   Registering static file handler: /www/");
-    server->serveStatic("/", LittleFS, "/www/")
-          .setDefaultFile("index.html")
-          .setCacheControl("max-age=86400");
-    
-    // Fallback for root path if /www/ doesn't exist
-    server->serveStatic("/", LittleFS, "/")
-          .setDefaultFile("index.html")
-          .setCacheControl("max-age=86400");
-    
-    // ============================================================
-    // REST API endpoints
+    // REST API endpoints (MUST be registered BEFORE static files!)
     // ============================================================
     Serial.println("[Web]   Registering API endpoints...");
     
@@ -134,10 +121,28 @@ void WebServer::registerRoutes() {
         this->handleGetWiFiScanResults(request);
     });
     
-    // 404 Handler
+    Serial.println("[Web]   ✓ All API routes registered");
+    
+    // ============================================================
+    // Static file serving from LittleFS (AFTER API routes!)
+    // ============================================================
+    Serial.println("[Web]   Registering static file handler...");
+    
+    // Serve static files - try /www/ first, fallback to /
+    server->serveStatic("/", LittleFS, "/www/")
+          .setDefaultFile("index.html")
+          .setCacheControl("max-age=600");
+    
+    Serial.println("[Web]   ✓ Static file handler registered");
+    
+    // ============================================================
+    // 404 Handler (LAST!) - Simple version without complex logic
+    // ============================================================
     server->onNotFound([](AsyncWebServerRequest* request) {
-        Serial.printf("[Web] 404 Not Found: %s\n", request->url().c_str());
-        request->send(404, "application/json", "{\"error\":\"Not Found\"}");
+        Serial.printf("[Web] 404: %s %s\n", 
+                     request->methodToString(), 
+                     request->url().c_str());
+        request->send(404, "text/plain", "Not Found");
     });
     
     Serial.println("[Web]   ✓ All routes registered");
@@ -157,12 +162,8 @@ void WebServer::handleWebSocketEvent(AsyncWebSocket* server, AsyncWebSocketClien
             break;
             
         case WS_EVT_DATA:
-            // We don't expect data from clients on NMEA websocket
-            Serial.printf("[WebSocket] Unexpected data from client #%u\n", client->id());
-            break;
-            
         case WS_EVT_PONG:
-            Serial.printf("[WebSocket] Pong from client #%u\n", client->id());
+            // Ignore
             break;
             
         case WS_EVT_ERROR:
@@ -183,6 +184,8 @@ void WebServer::broadcastNMEA(const char* sentence) {
 // ============================================================
 
 void WebServer::handleGetWiFiConfig(AsyncWebServerRequest* request) {
+    Serial.println("[Web] → GET /api/config/wifi");
+    
     WiFiConfig config;
     configManager->getWiFiConfig(config);
     
@@ -202,10 +205,13 @@ void WebServer::handleGetWiFiConfig(AsyncWebServerRequest* request) {
 }
 
 void WebServer::handlePostWiFiConfig(AsyncWebServerRequest* request, uint8_t* data, size_t len) {
+    Serial.println("[Web] → POST /api/config/wifi");
+    
     JsonDocument doc;
     DeserializationError error = deserializeJson(doc, (char*)data, len);
     
     if (error) {
+        Serial.printf("[Web]   JSON error: %s\n", error.c_str());
         request->send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
         return;
     }
@@ -233,11 +239,11 @@ void WebServer::handlePostWiFiConfig(AsyncWebServerRequest* request, uint8_t* da
     
     request->send(200, "application/json", 
                  "{\"success\":true,\"message\":\"WiFi config saved. Restart to apply.\"}");
-    
-    Serial.println("[Web] WiFi config updated, restart required");
 }
 
 void WebServer::handleGetSerialConfig(AsyncWebServerRequest* request) {
+    Serial.println("[Web] → GET /api/config/serial");
+    
     UARTConfig config;
     configManager->getSerialConfig(config);
     
@@ -254,10 +260,13 @@ void WebServer::handleGetSerialConfig(AsyncWebServerRequest* request) {
 }
 
 void WebServer::handlePostSerialConfig(AsyncWebServerRequest* request, uint8_t* data, size_t len) {
+    Serial.println("[Web] → POST /api/config/serial");
+    
     JsonDocument doc;
     DeserializationError error = deserializeJson(doc, (char*)data, len);
     
     if (error) {
+        Serial.printf("[Web]   JSON error: %s\n", error.c_str());
         request->send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
         return;
     }
@@ -272,11 +281,11 @@ void WebServer::handlePostSerialConfig(AsyncWebServerRequest* request, uint8_t* 
     
     request->send(200, "application/json",
                  "{\"success\":true,\"message\":\"Serial config saved. Restart to apply.\"}");
-    
-    Serial.println("[Web] Serial config updated, restart required");
 }
 
 void WebServer::handleGetStatus(AsyncWebServerRequest* request) {
+    Serial.println("[Web] → GET /api/status");
+    
     JsonDocument doc;
     
     doc["uptime"] = millis() / 1000;
@@ -303,6 +312,16 @@ void WebServer::handleGetStatus(AsyncWebServerRequest* request) {
     wifi["ip"] = wifiManager->getIP().toString();
     wifi["clients"] = wifiManager->getConnectedClients();
     
+    // Add TCP and UART info (these would need to be passed to WebServer)
+    JsonObject tcp = doc["tcp"].to<JsonObject>();
+    tcp["clients"] = 0;  // TODO: Get from TCPServer
+    tcp["port"] = 10110;
+    
+    JsonObject uart = doc["uart"].to<JsonObject>();
+    uart["sentences_received"] = 0;  // TODO: Get from UARTHandler
+    uart["errors"] = 0;
+    uart["baud"] = 38400;  // TODO: Get from config
+    
     String response;
     serializeJson(doc, response);
     
@@ -310,12 +329,12 @@ void WebServer::handleGetStatus(AsyncWebServerRequest* request) {
 }
 
 void WebServer::handleRestart(AsyncWebServerRequest* request) {
+    Serial.println("[Web] → POST /api/restart");
+    
     request->send(200, "application/json",
                  "{\"success\":true,\"message\":\"Restarting in 2 seconds\"}");
     
-    Serial.println("[Web] Restart requested");
-    
-    // Restart after 2 seconds
+    Serial.println("[Web]   Restarting...");
     delay(2000);
     ESP.restart();
 }
@@ -325,7 +344,7 @@ void WebServer::handleRestart(AsyncWebServerRequest* request) {
 // ============================================================
 
 void WebServer::handleStartWiFiScan(AsyncWebServerRequest* request) {
-    Serial.println("[Web] WiFi scan requested");
+    Serial.println("[Web] → POST /api/wifi/scan");
     
     int16_t result = wifiManager->startScan();
     
@@ -336,13 +355,14 @@ void WebServer::handleStartWiFiScan(AsyncWebServerRequest* request) {
         request->send(500, "application/json",
                      "{\"success\":false,\"error\":\"Failed to start scan\"}");
     } else {
-        // Scan completed immediately (unlikely but possible)
         request->send(200, "application/json",
                      "{\"success\":true,\"message\":\"WiFi scan completed\"}");
     }
 }
 
 void WebServer::handleGetWiFiScanResults(AsyncWebServerRequest* request) {
+    Serial.println("[Web] → GET /api/wifi/scan");
+    
     // Check if scan is complete
     if (!wifiManager->isScanComplete()) {
         request->send(202, "application/json",
