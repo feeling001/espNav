@@ -18,6 +18,21 @@ export const api = {
     return response.json();
   },
 
+  // WiFi scanning
+  async startWiFiScan() {
+    const response = await fetch(`${API_BASE}/wifi/scan`, {
+      method: 'POST'
+    });
+    if (!response.ok) throw new Error('Failed to start WiFi scan');
+    return response.json();
+  },
+
+  async getWiFiScanResults() {
+    const response = await fetch(`${API_BASE}/wifi/scan`);
+    if (!response.ok) throw new Error('Failed to get WiFi scan results');
+    return response.json();
+  },
+
   // Serial configuration
   async getSerialConfig() {
     const response = await fetch(`${API_BASE}/config/serial`);

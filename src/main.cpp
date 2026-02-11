@@ -19,7 +19,7 @@ WiFiManager wifiManager;
 UARTHandler uartHandler;
 NMEAParser nmeaParser;
 TCPServer tcpServer;
-WebServer webServer;
+WebServer webServer(&configManager, &wifiManager);
 
 // Message queue for NMEA sentences
 QueueHandle_t nmeaQueue;
@@ -193,7 +193,7 @@ void setup() {
     
     // Initialize Web server (LittleFS already mounted)
     Serial.println("\n[Web] Initializing web server...");
-    webServer.init(&configManager, &wifiManager, &uartHandler, &tcpServer);
+    webServer.init();
     
     // Create NMEA message queue
     Serial.println("\n[NMEA] Creating message queue...");
@@ -284,3 +284,4 @@ void wifiTask(void* parameter) {
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }
+
