@@ -14,13 +14,8 @@ WebServer::WebServer(ConfigManager* cm, WiFiManager* wm)
 void WebServer::init() {
     Serial.println("[Web] Initializing Web Server");
     
-    // Initialize LittleFS
-    if (!LittleFS.begin(true)) {  // true = format on failure
-        Serial.println("[Web] ✗ LittleFS mount failed");
-        return;
-    }
-    
-    Serial.println("[Web] ✓ LittleFS mounted");
+    // LittleFS is already mounted in main.cpp - no need to mount again
+    Serial.println("[Web] Using already-mounted LittleFS");
     
     // Setup WebSocket
     wsNMEA->onEvent([this](AsyncWebSocket* server, AsyncWebSocketClient* client,

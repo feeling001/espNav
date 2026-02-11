@@ -57,7 +57,7 @@ body {
 .main-content {
   flex: 1;
   padding: 30px;
-  max-width: 1200px;
+  /* max-width: 1200px; */
 }
 
 .page {

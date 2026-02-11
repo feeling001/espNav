@@ -114,6 +114,9 @@ bool UARTHandler::readLine(char* buffer, size_t maxLen, TickType_t timeout) {
             
             // Copy to output buffer
             size_t copyLen = min(linePos - 2, maxLen - 1);
+
+            Serial.println("[UART] received  data \n");
+
             strncpy(buffer, lineBuffer, copyLen);
             buffer[copyLen] = '\0';
             

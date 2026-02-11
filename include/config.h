@@ -11,8 +11,8 @@
 
 // UART Configuration
 #define UART_NUM                 UART_NUM_1
-#define UART_RX_PIN              GPIO_NUM_16
-#define UART_TX_PIN              GPIO_NUM_17
+#define UART_RX_PIN              GPIO_NUM_7 // WAS 16 
+#define UART_TX_PIN              GPIO_NUM_8 // WAS 17
 #define UART_BUFFER_SIZE         2048
 #define UART_DEFAULT_BAUD        38400
 
