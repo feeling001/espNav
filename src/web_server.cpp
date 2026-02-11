@@ -222,6 +222,139 @@ void WebServer::broadcastNMEA(const char* sentence) {
     }
 }
 
-// REST API Handlers implementation continues here...
-// (handleGetWiFiConfig, handlePostWiFiConfig, handleGetSerialConfig, 
-//  handlePostSerialConfig, handleGetStatus, handleRestart)
+// ============================================================
+// REST API Handlers Implementation
+// ============================================================
+
+void WebServer::handleGetWiFiConfig(AsyncWebServerRequest* request) {
+    WiFiConfig config;
+    configManager->getWiFiConfig(config);
+    
+    JsonDocument doc;
+    doc["ssid"] = config.ssid;
+    doc["mode"] = config.mode;
+    doc["has_password"] = (strlen(config.password) > 0);
+    
+    String response;
+    serializeJson(doc, response);
+    
+    request->send(200, "application/json", response);
+}
+
+void WebServer::handlePostWiFiConfig(AsyncWebServerRequest* request, uint8_t* data, size_t len) {
+    JsonDocument doc;
+    DeserializationError error = deserializeJson(doc, (char*)data, len);
+    
+    if (error) {
+        request->send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
+        return;
+    }
+    
+    WiFiConfig config;
+    strncpy(config.ssid, doc["ssid"] | "", sizeof(config.ssid) - 1);
+    config.ssid[sizeof(config.ssid) - 1] = '\0';
+    
+    strncpy(config.password, doc["password"] | "", sizeof(config.password) - 1);
+    config.password[sizeof(config.password) - 1] = '\0';
+    
+    config.mode = doc["mode"] | 0;
+    
+    configManager->setWiFiConfig(config);
+    
+    request->send(200, "application/json", 
+                 "{\"success\":true,\"message\":\"WiFi config saved. Restart to apply.\"}");
+    
+    Serial.println("[Web] WiFi config updated, restart required");
+}
+
+void WebServer::handleGetSerialConfig(AsyncWebServerRequest* request) {
+    UARTConfig config;
+    configManager->getSerialConfig(config);
+    
+    JsonDocument doc;
+    doc["baudRate"] = config.baudRate;
+    doc["dataBits"] = config.dataBits;
+    doc["parity"] = config.parity;
+    doc["stopBits"] = config.stopBits;
+    
+    String response;
+    serializeJson(doc, response);
+    
+    request->send(200, "application/json", response);
+}
+
+void WebServer::handlePostSerialConfig(AsyncWebServerRequest* request, uint8_t* data, size_t len) {
+    JsonDocument doc;
+    DeserializationError error = deserializeJson(doc, (char*)data, len);
+    
+    if (error) {
+        request->send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
+        return;
+    }
+    
+    UARTConfig config;
+    config.baudRate = doc["baudRate"] | 38400;
+    config.dataBits = doc["dataBits"] | 8;
+    config.parity = doc["parity"] | 0;
+    config.stopBits = doc["stopBits"] | 1;
+    
+    configManager->setSerialConfig(config);
+    
+    request->send(200, "application/json",
+                 "{\"success\":true,\"message\":\"Serial config saved. Restart to apply.\"}");
+    
+    Serial.println("[Web] Serial config updated, restart required");
+}
+
+void WebServer::handleGetStatus(AsyncWebServerRequest* request) {
+    JsonDocument doc;
+    
+    doc["uptime"] = millis() / 1000;
+    
+    JsonObject heap = doc["heap"].to<JsonObject>();
+    heap["free"] = ESP.getFreeHeap();
+    heap["total"] = ESP.getHeapSize();
+    heap["min_free"] = ESP.getMinFreeHeap();
+    
+    JsonObject wifi = doc["wifi"].to<JsonObject>();
+    
+    const char* modeStr = "Unknown";
+    switch (wifiManager->getState()) {
+        case WIFI_DISCONNECTED: modeStr = "Disconnected"; break;
+        case WIFI_CONNECTING: modeStr = "Connecting"; break;
+        case WIFI_CONNECTED_STA: modeStr = "STA"; break;
+        case WIFI_RECONNECTING: modeStr = "Reconnecting"; break;
+        case WIFI_AP_MODE: modeStr = "AP"; break;
+    }
+    
+    wifi["mode"] = modeStr;
+    wifi["ssid"] = wifiManager->getSSID();
+    wifi["rssi"] = wifiManager->getRSSI();
+    wifi["ip"] = wifiManager->getIP().toString();
+    wifi["clients"] = wifiManager->getConnectedClients();
+    
+    JsonObject tcp = doc["tcp"].to<JsonObject>();
+    tcp["clients"] = tcpServer->getClientCount();
+    tcp["port"] = TCP_PORT;
+    
+    JsonObject uart = doc["uart"].to<JsonObject>();
+    uart["baud"] = 38400;  // TODO: Get from config
+    uart["sentences_received"] = uartHandler->getSentencesReceived();
+    uart["errors"] = uartHandler->getErrors();
+    
+    String response;
+    serializeJson(doc, response);
+    
+    request->send(200, "application/json", response);
+}
+
+void WebServer::handleRestart(AsyncWebServerRequest* request) {
+    request->send(200, "application/json",
+                 "{\"success\":true,\"message\":\"Restarting in 2 seconds\"}");
+    
+    Serial.println("[Web] Restart requested");
+    
+    // Restart after 2 seconds
+    delay(2000);
+    ESP.restart();
+}
