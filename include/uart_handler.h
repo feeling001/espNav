@@ -12,7 +12,7 @@ public:
     UARTHandler();
     ~UARTHandler();
     
-    void init(const SerialConfig& config);
+    void init(const UARTConfig& config);
     void start();
     void stop();
     bool readLine(char* buffer, size_t maxLen, TickType_t timeout);
@@ -26,7 +26,7 @@ private:
     
     StreamBufferHandle_t streamBuffer;
     TaskHandle_t taskHandle;
-    SerialConfig config;
+    UARTConfig config;
     bool initialized;
     bool running;
     

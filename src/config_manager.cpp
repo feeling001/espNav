@@ -59,7 +59,7 @@ bool ConfigManager::setWiFiConfig(const WiFiConfig& config) {
     return true;
 }
 
-bool ConfigManager::getSerialConfig(SerialConfig& config) {
+bool ConfigManager::getSerialConfig(UARTConfig& config) {
     if (!initialized) {
         Serial.println("[Config] Error: Not initialized");
         return false;
@@ -76,7 +76,7 @@ bool ConfigManager::getSerialConfig(SerialConfig& config) {
     return true;
 }
 
-bool ConfigManager::setSerialConfig(const SerialConfig& config) {
+bool ConfigManager::setSerialConfig(const UARTConfig& config) {
     if (!initialized) {
         Serial.println("[Config] Error: Not initialized");
         return false;
@@ -103,7 +103,7 @@ void ConfigManager::factoryReset() {
     
     // Set defaults
     WiFiConfig defaultWiFi;
-    SerialConfig defaultSerial;
+    UARTConfig defaultSerial;
     
     setWiFiConfig(defaultWiFi);
     setSerialConfig(defaultSerial);

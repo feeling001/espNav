@@ -18,8 +18,8 @@ public:
     bool setWiFiConfig(const WiFiConfig& config);
     
     // Serial configuration
-    bool getSerialConfig(SerialConfig& config);
-    bool setSerialConfig(const SerialConfig& config);
+    bool getSerialConfig(UARTConfig& config);
+    bool setSerialConfig(const UARTConfig& config);
     
     // Factory reset
     void factoryReset();

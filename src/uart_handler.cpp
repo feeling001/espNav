@@ -14,7 +14,7 @@ UARTHandler::~UARTHandler() {
     }
 }
 
-void UARTHandler::init(const SerialConfig& cfg) {
+void UARTHandler::init(const UARTConfig& cfg) {
     if (initialized) {
         return;
     }

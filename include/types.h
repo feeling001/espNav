@@ -16,13 +16,15 @@ struct WiFiConfig {
 };
 
 // Serial configuration structure
-struct SerialConfig {
+// NOTE: Renamed from SerialConfig to UARTConfig to avoid conflict
+// with ESP32 Arduino's enum SerialConfig in HardwareSerial.h
+struct UARTConfig {
     uint32_t baudRate;
     uint8_t dataBits;  // 5-8
     uint8_t parity;    // 0=None, 1=Even, 2=Odd
     uint8_t stopBits;  // 1-2
     
-    SerialConfig() : baudRate(38400), dataBits(8), parity(0), stopBits(1) {}
+    UARTConfig() : baudRate(38400), dataBits(8), parity(0), stopBits(1) {}
 };
 
 // NMEA sentence structure

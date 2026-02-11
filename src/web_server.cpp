@@ -168,7 +168,7 @@ void WebServer::handlePostWiFiConfig(AsyncWebServerRequest* request, uint8_t* da
 }
 
 void WebServer::handleGetSerialConfig(AsyncWebServerRequest* request) {
-    SerialConfig config;
+    UARTConfig config;
     configManager->getSerialConfig(config);
     
     JsonDocument doc;
@@ -192,7 +192,7 @@ void WebServer::handlePostSerialConfig(AsyncWebServerRequest* request, uint8_t* 
         return;
     }
     
-    SerialConfig config;
+    UARTConfig config;
     config.baudRate = doc["baudRate"] | 38400;
     config.dataBits = doc["dataBits"] | 8;
     config.parity = doc["parity"] | 0;
@@ -288,4 +288,3 @@ void WebServer::broadcastNMEA(const char* sentence) {
         wsNMEA->textAll(sentence);
     }
 }
-
