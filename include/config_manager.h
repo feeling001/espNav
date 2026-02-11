@@ -1,15 +1,12 @@
 #ifndef CONFIG_MANAGER_H
 #define CONFIG_MANAGER_H
 
-#include <Arduino.h>
 #include <Preferences.h>
 #include "types.h"
-#include "config.h"
 
 class ConfigManager {
 public:
     ConfigManager();
-    ~ConfigManager();
     
     void init();
     
@@ -25,8 +22,7 @@ public:
     void factoryReset();
     
 private:
-    Preferences preferences;
-    bool initialized;
+    Preferences nvs;
 };
 
 #endif // CONFIG_MANAGER_H

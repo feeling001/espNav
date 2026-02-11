@@ -1,10 +1,9 @@
 #ifndef WIFI_MANAGER_H
 #define WIFI_MANAGER_H
 
-#include <Arduino.h>
 #include <WiFi.h>
 #include "types.h"
-#include "config.h"
+#include <vector>
 
 class WiFiManager {
 public:
@@ -12,6 +11,7 @@ public:
     
     void init(const WiFiConfig& config);
     void start();
+    void update();
     void reconnect();
     
     WiFiState getState() const { return currentState; }
@@ -20,20 +20,24 @@ public:
     size_t getConnectedClients() const;
     String getSSID() const;
     
-    void update();  // Called periodically to monitor connection
+    // WiFi scan functionality
+    int16_t startScan();  // Returns number of networks found, -1 on error
+    bool isScanComplete();
+    std::vector<WiFiScanResult> getScanResults();
+    void clearScanResults();
     
 private:
     void attemptSTAConnection();
     void checkSTAConnection();
+    void fallbackToAP();
     void monitorSTAConnection();
     void handleReconnection();
-    void fallbackToAP();
     
     WiFiConfig config;
     WiFiState currentState;
-    uint32_t connectStartTime;
     uint8_t reconnectAttempts;
-    bool initialized;
+    unsigned long connectStartTime;
+    bool scanInProgress;
 };
 
 #endif // WIFI_MANAGER_H

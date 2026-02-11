@@ -3,111 +3,58 @@
 #include "wifi_manager.h"
 #include "uart_handler.h"
 #include "tcp_server.h"
+#include <ArduinoJson.h>
 
-WebServer::WebServer() 
-    : server(NULL), wsNMEA(NULL), configManager(NULL), wifiManager(NULL),
-      uartHandler(NULL), tcpServer(NULL), initialized(false), running(false) {}
-
-WebServer::~WebServer() {
-    stop();
-    
-    if (wsNMEA) {
-        delete wsNMEA;
-    }
-    
-    if (server) {
-        delete server;
-    }
+WebServer::WebServer(ConfigManager* cm, WiFiManager* wm) 
+    : configManager(cm), wifiManager(wm), running(false) {
+    server = new AsyncWebServer(WEB_SERVER_PORT);
+    wsNMEA = new AsyncWebSocket("/ws/nmea");
 }
 
-void WebServer::init(ConfigManager* configMgr, WiFiManager* wifiMgr, 
-                     UARTHandler* uart, TCPServer* tcp) {
-    if (initialized) {
-        Serial.println("[Web] Already initialized, skipping");
+void WebServer::init() {
+    Serial.println("[Web] Initializing Web Server");
+    
+    // Initialize LittleFS
+    if (!LittleFS.begin(true)) {  // true = format on failure
+        Serial.println("[Web] ✗ LittleFS mount failed");
         return;
     }
     
-    configManager = configMgr;
-    wifiManager = wifiMgr;
-    uartHandler = uart;
-    tcpServer = tcp;
+    Serial.println("[Web] ✓ LittleFS mounted");
     
-    // ============================================================
-    // LittleFS is now mounted in main.cpp BEFORE this init() call
-    // We just verify it's accessible
-    // ============================================================
-    Serial.println("[Web] Verifying LittleFS access...");
-    
-    // Check if LittleFS is mounted by trying to access it
-    File root = LittleFS.open("/");
-    if (!root) {
-        Serial.println("[Web] ❌ LittleFS not accessible!");
-        Serial.println("[Web] ERROR: LittleFS must be mounted before WebServer::init()");
-        Serial.println("[Web] API will work but web interface will NOT be served");
-    } else {
-        Serial.println("[Web] ✓ LittleFS accessible");
-        root.close();
-        
-        // Verify web files exist
-        if (LittleFS.exists("/www/index.html") || LittleFS.exists("/index.html")) {
-            Serial.println("[Web] ✓ Web files found");
-        } else {
-            Serial.println("[Web] ⚠ WARNING: Web files not found in LittleFS");
-            Serial.println("[Web]   Expected: /www/index.html or /index.html");
-            Serial.println("[Web]   Did you run: pio run -t uploadfs ?");
-        }
-    }
-    
-    // Create the async web server
-    Serial.printf("[Web] Creating AsyncWebServer on port %d...\n", WEB_SERVER_PORT);
-    server = new AsyncWebServer(WEB_SERVER_PORT);
-    
-    // Create WebSocket for NMEA streaming
-    Serial.println("[Web] Creating WebSocket endpoint: /ws/nmea");
-    wsNMEA = new AsyncWebSocket("/ws/nmea");
-    
-    // Set up WebSocket event handler
-    wsNMEA->onEvent([this](AsyncWebSocket* srv, AsyncWebSocketClient* client,
+    // Setup WebSocket
+    wsNMEA->onEvent([this](AsyncWebSocket* server, AsyncWebSocketClient* client,
                            AwsEventType type, void* arg, uint8_t* data, size_t len) {
-        this->onWSEvent(srv, client, type, arg, data, len);
+        this->handleWebSocketEvent(server, client, type, arg, data, len);
     });
     
     server->addHandler(wsNMEA);
-    Serial.println("[Web] ✓ WebSocket handler registered");
     
-    // Register all HTTP routes (API + static files)
-    Serial.println("[Web] Registering HTTP routes...");
+    // Register routes
     registerRoutes();
-    
-    initialized = true;
-    
-    Serial.println("[Web] ✓ Server initialized successfully");
 }
 
 void WebServer::start() {
-    if (!initialized) {
-        Serial.println("[Web] ❌ Cannot start: not initialized");
-        return;
-    }
-    
     if (running) {
-        Serial.println("[Web] Already running, skipping start");
         return;
     }
     
     server->begin();
     running = true;
     
-    Serial.printf("[Web] ✓ Server started on port %d\n", WEB_SERVER_PORT);
-    Serial.println("[Web] Endpoints available:");
-    Serial.println("[Web]   - GET  /                    (Web Interface)");
-    Serial.println("[Web]   - GET  /api/status          (System Status)");
-    Serial.println("[Web]   - GET  /api/config/wifi     (WiFi Config)");
-    Serial.println("[Web]   - POST /api/config/wifi     (Set WiFi Config)");
-    Serial.println("[Web]   - GET  /api/config/serial   (Serial Config)");
-    Serial.println("[Web]   - POST /api/config/serial   (Set Serial Config)");
-    Serial.println("[Web]   - POST /api/restart         (Restart Device)");
-    Serial.println("[Web]   - WS   /ws/nmea             (NMEA Stream)");
+    Serial.println("[Web] ═══════════════════════════════════════");
+    Serial.println("[Web] Server started on port 80");
+    Serial.println("[Web] Available endpoints:");
+    Serial.println("[Web]   - GET  /api/config/wifi      (Get WiFi Config)");
+    Serial.println("[Web]   - POST /api/config/wifi      (Set WiFi Config)");
+    Serial.println("[Web]   - GET  /api/config/serial    (Get Serial Config)");
+    Serial.println("[Web]   - POST /api/config/serial    (Set Serial Config)");
+    Serial.println("[Web]   - GET  /api/status           (System Status)");
+    Serial.println("[Web]   - POST /api/restart          (Restart Device)");
+    Serial.println("[Web]   - POST /api/wifi/scan        (Start WiFi Scan)");
+    Serial.println("[Web]   - GET  /api/wifi/scan        (Get Scan Results)");
+    Serial.println("[Web]   - WS   /ws/nmea              (NMEA Stream)");
+    Serial.println("[Web] ═══════════════════════════════════════");
 }
 
 void WebServer::stop() {
@@ -178,6 +125,15 @@ void WebServer::registerRoutes() {
         this->handleRestart(request);
     });
     
+    // WiFi Scan endpoints
+    server->on("/api/wifi/scan", HTTP_POST, [this](AsyncWebServerRequest* request) {
+        this->handleStartWiFiScan(request);
+    });
+    
+    server->on("/api/wifi/scan", HTTP_GET, [this](AsyncWebServerRequest* request) {
+        this->handleGetWiFiScanResults(request);
+    });
+    
     // 404 Handler
     server->onNotFound([](AsyncWebServerRequest* request) {
         Serial.printf("[Web] 404 Not Found: %s\n", request->url().c_str());
@@ -188,8 +144,8 @@ void WebServer::registerRoutes() {
 }
 
 // WebSocket event handler
-void WebServer::onWSEvent(AsyncWebSocket* server, AsyncWebSocketClient* client,
-                          AwsEventType type, void* arg, uint8_t* data, size_t len) {
+void WebServer::handleWebSocketEvent(AsyncWebSocket* server, AsyncWebSocketClient* client,
+                                      AwsEventType type, void* arg, uint8_t* data, size_t len) {
     switch (type) {
         case WS_EVT_CONNECT:
             Serial.printf("[WebSocket] Client #%u connected from %s\n", 
@@ -235,6 +191,10 @@ void WebServer::handleGetWiFiConfig(AsyncWebServerRequest* request) {
     doc["mode"] = config.mode;
     doc["has_password"] = (strlen(config.password) > 0);
     
+    // Include AP configuration
+    doc["ap_ssid"] = config.ap_ssid;
+    doc["ap_has_password"] = (strlen(config.ap_password) >= 8);
+    
     String response;
     serializeJson(doc, response);
     
@@ -251,6 +211,8 @@ void WebServer::handlePostWiFiConfig(AsyncWebServerRequest* request, uint8_t* da
     }
     
     WiFiConfig config;
+    
+    // STA configuration
     strncpy(config.ssid, doc["ssid"] | "", sizeof(config.ssid) - 1);
     config.ssid[sizeof(config.ssid) - 1] = '\0';
     
@@ -259,6 +221,14 @@ void WebServer::handlePostWiFiConfig(AsyncWebServerRequest* request, uint8_t* da
     
     config.mode = doc["mode"] | 0;
     
+    // AP configuration
+    strncpy(config.ap_ssid, doc["ap_ssid"] | "", sizeof(config.ap_ssid) - 1);
+    config.ap_ssid[sizeof(config.ap_ssid) - 1] = '\0';
+    
+    strncpy(config.ap_password, doc["ap_password"] | "", sizeof(config.ap_password) - 1);
+    config.ap_password[sizeof(config.ap_password) - 1] = '\0';
+    
+    // Save to NVS
     configManager->setWiFiConfig(config);
     
     request->send(200, "application/json", 
@@ -333,15 +303,6 @@ void WebServer::handleGetStatus(AsyncWebServerRequest* request) {
     wifi["ip"] = wifiManager->getIP().toString();
     wifi["clients"] = wifiManager->getConnectedClients();
     
-    JsonObject tcp = doc["tcp"].to<JsonObject>();
-    tcp["clients"] = tcpServer->getClientCount();
-    tcp["port"] = TCP_PORT;
-    
-    JsonObject uart = doc["uart"].to<JsonObject>();
-    uart["baud"] = 38400;  // TODO: Get from config
-    uart["sentences_received"] = uartHandler->getSentencesReceived();
-    uart["errors"] = uartHandler->getErrors();
-    
     String response;
     serializeJson(doc, response);
     
@@ -357,4 +318,89 @@ void WebServer::handleRestart(AsyncWebServerRequest* request) {
     // Restart after 2 seconds
     delay(2000);
     ESP.restart();
+}
+
+// ============================================================
+// WiFi Scan Handlers
+// ============================================================
+
+void WebServer::handleStartWiFiScan(AsyncWebServerRequest* request) {
+    Serial.println("[Web] WiFi scan requested");
+    
+    int16_t result = wifiManager->startScan();
+    
+    if (result == WIFI_SCAN_RUNNING) {
+        request->send(200, "application/json",
+                     "{\"success\":true,\"message\":\"WiFi scan started\"}");
+    } else if (result == -1) {
+        request->send(500, "application/json",
+                     "{\"success\":false,\"error\":\"Failed to start scan\"}");
+    } else {
+        // Scan completed immediately (unlikely but possible)
+        request->send(200, "application/json",
+                     "{\"success\":true,\"message\":\"WiFi scan completed\"}");
+    }
+}
+
+void WebServer::handleGetWiFiScanResults(AsyncWebServerRequest* request) {
+    // Check if scan is complete
+    if (!wifiManager->isScanComplete()) {
+        request->send(202, "application/json",
+                     "{\"scanning\":true,\"networks\":[]}");
+        return;
+    }
+    
+    // Get scan results
+    std::vector<WiFiScanResult> results = wifiManager->getScanResults();
+    
+    JsonDocument doc;
+    doc["scanning"] = false;
+    
+    JsonArray networks = doc["networks"].to<JsonArray>();
+    
+    for (const auto& result : results) {
+        JsonObject network = networks.add<JsonObject>();
+        network["ssid"] = result.ssid;
+        network["rssi"] = result.rssi;
+        network["channel"] = result.channel;
+        network["encryption"] = result.encryption;
+        
+        // Calculate signal quality percentage (0-100)
+        int quality = 0;
+        if (result.rssi >= -50) {
+            quality = 100;
+        } else if (result.rssi >= -60) {
+            quality = 90;
+        } else if (result.rssi >= -70) {
+            quality = 75;
+        } else if (result.rssi >= -80) {
+            quality = 50;
+        } else if (result.rssi >= -90) {
+            quality = 25;
+        } else {
+            quality = 10;
+        }
+        network["quality"] = quality;
+        
+        // Encryption type string
+        const char* encStr = "Unknown";
+        switch (result.encryption) {
+            case 0: encStr = "Open"; break;
+            case 1: encStr = "WEP"; break;
+            case 2: encStr = "WPA"; break;
+            case 3: encStr = "WPA2"; break;
+            case 4: encStr = "WPA/WPA2"; break;
+            case 5: encStr = "WPA2-Enterprise"; break;
+            case 6: encStr = "WPA3"; break;
+        }
+        network["encryption_type"] = encStr;
+    }
+    
+    String response;
+    serializeJson(doc, response);
+    
+    request->send(200, "application/json", response);
+    
+    // Clear scan results after sending
+    wifiManager->clearScanResults();
 }

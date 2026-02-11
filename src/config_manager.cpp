@@ -1,112 +1,128 @@
 #include "config_manager.h"
+#include <Arduino.h>
 
-ConfigManager::ConfigManager() : initialized(false) {}
-
-ConfigManager::~ConfigManager() {
-    if (initialized) {
-        preferences.end();
-    }
+ConfigManager::ConfigManager() {
 }
 
 void ConfigManager::init() {
-    if (initialized) {
+    Serial.println("[Config] Initializing Config Manager");
+    
+    // Open NVS namespace in read-write mode
+    if (!nvs.begin("marine_gw", false)) {
+        Serial.println("[Config] ✗ Failed to open NVS");
         return;
     }
     
-    preferences.begin(NVS_NAMESPACE, false);
-    initialized = true;
-    
-    Serial.println("[Config] Configuration manager initialized");
+    Serial.println("[Config] ✓ NVS initialized");
 }
 
 bool ConfigManager::getWiFiConfig(WiFiConfig& config) {
-    if (!initialized) {
-        Serial.println("[Config] Error: Not initialized");
-        return false;
-    }
-    
-    String ssid = preferences.getString("wifi_ssid", "");
-    String pass = preferences.getString("wifi_pass", "");
-    uint8_t mode = preferences.getUChar("wifi_mode", 0);
+    // Load STA configuration
+    String ssid = nvs.getString("wifi_ssid", "");
+    String password = nvs.getString("wifi_pass", "");
+    uint8_t mode = nvs.getUChar("wifi_mode", 0);
     
     strncpy(config.ssid, ssid.c_str(), sizeof(config.ssid) - 1);
     config.ssid[sizeof(config.ssid) - 1] = '\0';
     
-    strncpy(config.password, pass.c_str(), sizeof(config.password) - 1);
+    strncpy(config.password, password.c_str(), sizeof(config.password) - 1);
     config.password[sizeof(config.password) - 1] = '\0';
     
     config.mode = mode;
     
-    Serial.printf("[Config] Loaded WiFi config: SSID='%s', Mode=%d\n", 
-                  config.ssid, config.mode);
+    // Load AP configuration
+    String apSSID = nvs.getString("wifi_ap_ssid", "");
+    String apPassword = nvs.getString("wifi_ap_pass", "");
+    
+    strncpy(config.ap_ssid, apSSID.c_str(), sizeof(config.ap_ssid) - 1);
+    config.ap_ssid[sizeof(config.ap_ssid) - 1] = '\0';
+    
+    strncpy(config.ap_password, apPassword.c_str(), sizeof(config.ap_password) - 1);
+    config.ap_password[sizeof(config.ap_password) - 1] = '\0';
+    
+    Serial.println("[Config] WiFi config loaded from NVS");
+    Serial.printf("[Config]   Mode: %s\n", mode == 0 ? "STA" : "AP");
+    if (mode == 0 && strlen(config.ssid) > 0) {
+        Serial.printf("[Config]   STA SSID: %s\n", config.ssid);
+    }
+    if (strlen(config.ap_ssid) > 0) {
+        Serial.printf("[Config]   AP SSID: %s\n", config.ap_ssid);
+    }
     
     return true;
 }
 
 bool ConfigManager::setWiFiConfig(const WiFiConfig& config) {
-    if (!initialized) {
-        Serial.println("[Config] Error: Not initialized");
-        return false;
+    Serial.println("[Config] Saving WiFi config to NVS");
+    
+    // Save STA configuration
+    nvs.putString("wifi_ssid", config.ssid);
+    nvs.putString("wifi_pass", config.password);
+    nvs.putUChar("wifi_mode", config.mode);
+    
+    // Save AP configuration
+    nvs.putString("wifi_ap_ssid", config.ap_ssid);
+    nvs.putString("wifi_ap_pass", config.ap_password);
+    
+    Serial.printf("[Config]   Mode: %s\n", config.mode == 0 ? "STA" : "AP");
+    if (config.mode == 0 && strlen(config.ssid) > 0) {
+        Serial.printf("[Config]   STA SSID: %s\n", config.ssid);
+    }
+    if (strlen(config.ap_ssid) > 0) {
+        Serial.printf("[Config]   AP SSID: %s\n", config.ap_ssid);
+    }
+    if (strlen(config.ap_password) > 0) {
+        Serial.printf("[Config]   AP Password: %s\n", 
+                     strlen(config.ap_password) >= 8 ? "***" : "[too short, will use default]");
     }
     
-    preferences.putString("wifi_ssid", config.ssid);
-    preferences.putString("wifi_pass", config.password);
-    preferences.putUChar("wifi_mode", config.mode);
-    
-    Serial.printf("[Config] Saved WiFi config: SSID='%s', Mode=%d\n", 
-                  config.ssid, config.mode);
-    
+    Serial.println("[Config] ✓ WiFi config saved");
     return true;
 }
 
 bool ConfigManager::getSerialConfig(UARTConfig& config) {
-    if (!initialized) {
-        Serial.println("[Config] Error: Not initialized");
-        return false;
-    }
+    config.baudRate = nvs.getUInt("serial_baud", 38400);
+    config.dataBits = nvs.getUChar("serial_data", 8);
+    config.parity = nvs.getUChar("serial_parity", 0);
+    config.stopBits = nvs.getUChar("serial_stop", 1);
     
-    config.baudRate = preferences.getUInt("serial_baud", 38400);
-    config.dataBits = preferences.getUChar("serial_data", 8);
-    config.parity = preferences.getUChar("serial_parity", 0);
-    config.stopBits = preferences.getUChar("serial_stop", 1);
-    
-    Serial.printf("[Config] Loaded Serial config: Baud=%u, Data=%u, Parity=%u, Stop=%u\n",
-                  config.baudRate, config.dataBits, config.parity, config.stopBits);
+    Serial.println("[Config] Serial config loaded from NVS");
+    Serial.printf("[Config]   Baud: %u\n", config.baudRate);
+    Serial.printf("[Config]   Data: %u\n", config.dataBits);
+    Serial.printf("[Config]   Parity: %u\n", config.parity);
+    Serial.printf("[Config]   Stop: %u\n", config.stopBits);
     
     return true;
 }
 
 bool ConfigManager::setSerialConfig(const UARTConfig& config) {
-    if (!initialized) {
-        Serial.println("[Config] Error: Not initialized");
-        return false;
-    }
+    Serial.println("[Config] Saving Serial config to NVS");
     
-    preferences.putUInt("serial_baud", config.baudRate);
-    preferences.putUChar("serial_data", config.dataBits);
-    preferences.putUChar("serial_parity", config.parity);
-    preferences.putUChar("serial_stop", config.stopBits);
+    nvs.putUInt("serial_baud", config.baudRate);
+    nvs.putUChar("serial_data", config.dataBits);
+    nvs.putUChar("serial_parity", config.parity);
+    nvs.putUChar("serial_stop", config.stopBits);
     
-    Serial.printf("[Config] Saved Serial config: Baud=%u, Data=%u, Parity=%u, Stop=%u\n",
-                  config.baudRate, config.dataBits, config.parity, config.stopBits);
+    Serial.printf("[Config]   Baud: %u\n", config.baudRate);
+    Serial.printf("[Config]   Data: %u\n", config.dataBits);
+    Serial.printf("[Config]   Parity: %u\n", config.parity);
+    Serial.printf("[Config]   Stop: %u\n", config.stopBits);
     
+    Serial.println("[Config] ✓ Serial config saved");
     return true;
 }
 
 void ConfigManager::factoryReset() {
-    if (!initialized) {
-        Serial.println("[Config] Error: Not initialized");
-        return;
-    }
+    Serial.println("[Config] Performing factory reset...");
     
-    preferences.clear();
+    nvs.clear();
     
-    // Set defaults
+    // Set default values
     WiFiConfig defaultWiFi;
     UARTConfig defaultSerial;
     
     setWiFiConfig(defaultWiFi);
     setSerialConfig(defaultSerial);
     
-    Serial.println("[Config] Factory reset complete");
+    Serial.println("[Config] ✓ Factory reset complete");
 }

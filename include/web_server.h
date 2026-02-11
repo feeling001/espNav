@@ -1,32 +1,24 @@
 #ifndef WEB_SERVER_H
 #define WEB_SERVER_H
 
-#include <Arduino.h>
 #include <ESPAsyncWebServer.h>
+#include <AsyncWebSocket.h>
 #include <LittleFS.h>
-#include <ArduinoJson.h>
-#include "config.h"
-#include "types.h"
-
-// Forward declarations
-class ConfigManager;
-class WiFiManager;
-class UARTHandler;
-class TCPServer;
+#include "config_manager.h"
+#include "wifi_manager.h"
 
 class WebServer {
 public:
-    WebServer();
-    ~WebServer();
+    WebServer(ConfigManager* cm, WiFiManager* wm);
     
-    void init(ConfigManager* configMgr, WiFiManager* wifiMgr, 
-              UARTHandler* uartHandler, TCPServer* tcpServer);
+    void init();
     void start();
     void stop();
-    
     void broadcastNMEA(const char* sentence);
     
 private:
+    void registerRoutes();
+    
     // REST API handlers
     void handleGetWiFiConfig(AsyncWebServerRequest* request);
     void handlePostWiFiConfig(AsyncWebServerRequest* request, uint8_t* data, size_t len);
@@ -35,21 +27,18 @@ private:
     void handleGetStatus(AsyncWebServerRequest* request);
     void handleRestart(AsyncWebServerRequest* request);
     
-    // WebSocket handlers
-    void onWSEvent(AsyncWebSocket* server, AsyncWebSocketClient* client,
-                   AwsEventType type, void* arg, uint8_t* data, size_t len);
+    // WiFi scan handlers
+    void handleStartWiFiScan(AsyncWebServerRequest* request);
+    void handleGetWiFiScanResults(AsyncWebServerRequest* request);
     
-    void registerRoutes();
+    // WebSocket handlers
+    void handleWebSocketEvent(AsyncWebSocket* server, AsyncWebSocketClient* client,
+                             AwsEventType type, void* arg, uint8_t* data, size_t len);
     
     AsyncWebServer* server;
     AsyncWebSocket* wsNMEA;
-    
     ConfigManager* configManager;
     WiFiManager* wifiManager;
-    UARTHandler* uartHandler;
-    TCPServer* tcpServer;
-    
-    bool initialized;
     bool running;
 };
 
