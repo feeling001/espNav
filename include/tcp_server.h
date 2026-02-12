@@ -16,16 +16,21 @@ public:
     void init(uint16_t port);
     void start();
     void stop();
-    void broadcast(const char* data, size_t len);
+    
+    // Broadcast methods
+    void broadcast(const char* data);  // Null-terminated string
+    void broadcast(const char* data, size_t len);  // Binary data with length
+    
     size_t getClientCount();
     
 private:
-    static void handleNewClient(void* arg, AsyncClient* client);
+    // Client event handlers
     void onConnect(AsyncClient* client);
     void onDisconnect(AsyncClient* client);
     void onData(AsyncClient* client, void* data, size_t len);
     void onError(AsyncClient* client, int8_t error);
     
+    // Client management
     void addClient(AsyncClient* client);
     void removeClient(AsyncClient* client);
     

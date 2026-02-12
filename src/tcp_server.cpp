@@ -2,7 +2,8 @@
 
 TCPServer::TCPServer() 
     : server(NULL), clientsMutex(NULL), port(0), 
-      initialized(false), running(false) {}
+      initialized(false), running(false) {
+}
 
 TCPServer::~TCPServer() {
     stop();
@@ -24,9 +25,14 @@ void TCPServer::init(uint16_t p) {
     port = p;
     clientsMutex = xSemaphoreCreateMutex();
     
+    if (clientsMutex == NULL) {
+        Serial.println("[TCP] ❌ Failed to create mutex!");
+        return;
+    }
+    
     initialized = true;
     
-    Serial.printf("[TCP] Server initialized on port %u\n", port);
+    Serial.printf("[TCP] Initialized on port %u\n", port);
 }
 
 void TCPServer::start() {
@@ -36,6 +42,12 @@ void TCPServer::start() {
     
     server = new AsyncServer(port);
     
+    if (server == NULL) {
+        Serial.println("[TCP] ❌ Failed to create server!");
+        return;
+    }
+    
+    // Set up new client handler
     server->onClient([](void* arg, AsyncClient* client) {
         TCPServer* srv = static_cast<TCPServer*>(arg);
         srv->onConnect(client);
@@ -44,7 +56,7 @@ void TCPServer::start() {
     server->begin();
     running = true;
     
-    Serial.printf("[TCP] Server started on port %u\n", port);
+    Serial.printf("[TCP] ✓ Server started on port %u\n", port);
 }
 
 void TCPServer::stop() {
@@ -61,7 +73,9 @@ void TCPServer::stop() {
     // Close all clients
     xSemaphoreTake(clientsMutex, portMAX_DELAY);
     for (auto client : clients) {
-        client->close();
+        if (client && client->connected()) {
+            client->close();
+        }
     }
     clients.clear();
     xSemaphoreGive(clientsMutex);
@@ -70,9 +84,15 @@ void TCPServer::stop() {
 }
 
 void TCPServer::onConnect(AsyncClient* client) {
-    Serial.printf("[TCP] Client connected: %s\n", client->remoteIP().toString().c_str());
+    if (!client) {
+        return;
+    }
     
-    // Set up callbacks
+    Serial.printf("[TCP] New client connected: %s:%u\n", 
+                  client->remoteIP().toString().c_str(),
+                  client->remotePort());
+    
+    // Set up client callbacks
     client->onDisconnect([](void* arg, AsyncClient* c) {
         TCPServer* srv = static_cast<TCPServer*>(arg);
         srv->onDisconnect(c);
@@ -88,32 +108,69 @@ void TCPServer::onConnect(AsyncClient* client) {
         srv->onError(c, error);
     }, this);
     
+    client->onTimeout([](void* arg, AsyncClient* c, uint32_t time) {
+        Serial.printf("[TCP] Client timeout: %s (time: %u ms)\n", 
+                     c->remoteIP().toString().c_str(), time);
+    }, this);
+    
     addClient(client);
+    
+    // Send welcome message
+    const char* welcome = "$PMAR,Marine Gateway Connected*00\r\n";
+    if (client->canSend()) {
+        client->write(welcome, strlen(welcome));
+    }
 }
 
 void TCPServer::onDisconnect(AsyncClient* client) {
-    Serial.printf("[TCP] Client disconnected: %s\n", client->remoteIP().toString().c_str());
+    if (!client) {
+        return;
+    }
+    
+    Serial.printf("[TCP] Client disconnected: %s:%u\n", 
+                  client->remoteIP().toString().c_str(),
+                  client->remotePort());
     removeClient(client);
 }
 
 void TCPServer::onData(AsyncClient* client, void* data, size_t len) {
-    // TCP server is receive-only for NMEA, ignore incoming data
-    // Could be used for future bidirectional communication
+    // TCP server is transmit-only for NMEA data
+    // Ignore any incoming data (could log it if needed)
+    Serial.printf("[TCP] Received %u bytes from %s (ignored)\n", 
+                  len, client->remoteIP().toString().c_str());
 }
 
 void TCPServer::onError(AsyncClient* client, int8_t error) {
-    Serial.printf("[TCP] Client error: %s, error=%d\n", 
+    if (!client) {
+        return;
+    }
+    
+    Serial.printf("[TCP] Client error: %s, error code: %d\n", 
                   client->remoteIP().toString().c_str(), error);
+    removeClient(client);
 }
 
 void TCPServer::addClient(AsyncClient* client) {
+    if (!client) {
+        return;
+    }
+    
     xSemaphoreTake(clientsMutex, portMAX_DELAY);
     
     if (clients.size() < TCP_MAX_CLIENTS) {
         clients.push_back(client);
-        Serial.printf("[TCP] Client added, total: %d\n", clients.size());
+        Serial.printf("[TCP] Client added, total clients: %d/%d\n", 
+                     clients.size(), TCP_MAX_CLIENTS);
     } else {
-        Serial.printf("[TCP] Max clients reached (%d), rejecting connection\n", TCP_MAX_CLIENTS);
+        Serial.printf("[TCP] ⚠️  Max clients reached (%d), rejecting connection from %s\n", 
+                     TCP_MAX_CLIENTS, client->remoteIP().toString().c_str());
+        
+        // Send rejection message before closing
+        const char* msg = "$PMAR,Server Full*00\r\n";
+        if (client->canSend()) {
+            client->write(msg, strlen(msg));
+        }
+        
         client->close();
     }
     
@@ -121,56 +178,114 @@ void TCPServer::addClient(AsyncClient* client) {
 }
 
 void TCPServer::removeClient(AsyncClient* client) {
-    xSemaphoreTake(clientsMutex, portMAX_DELAY);
-    
-    auto it = std::find(clients.begin(), clients.end(), client);
-    if (it != clients.end()) {
-        clients.erase(it);
-        Serial.printf("[TCP] Client removed, total: %d\n", clients.size());
-    }
-    
-    xSemaphoreGive(clientsMutex);
-}
-
-void TCPServer::broadcast(const char* data, size_t len) {
-    if (!running) {
+    if (!client) {
         return;
     }
     
     xSemaphoreTake(clientsMutex, portMAX_DELAY);
     
-    // Prepare data with CRLF if not already present
-    char buffer[256];
-    size_t dataLen = len;
+    auto it = std::find(clients.begin(), clients.end(), client);
+    if (it != clients.end()) {
+        clients.erase(it);
+        Serial.printf("[TCP] Client removed, remaining clients: %d\n", clients.size());
+    }
     
-    if (len < sizeof(buffer) - 3) {
+    xSemaphoreGive(clientsMutex);
+}
+
+void TCPServer::broadcast(const char* data) {
+    if (!data) {
+        return;
+    }
+    broadcast(data, strlen(data));
+}
+
+void TCPServer::broadcast(const char* data, size_t len) {
+    if (!running || !data || len == 0) {
+        return;
+    }
+    
+    xSemaphoreTake(clientsMutex, portMAX_DELAY);
+    
+    if (clients.empty()) {
+        xSemaphoreGive(clientsMutex);
+        return;
+    }
+    
+    // Prepare data with CRLF if not already present
+    char buffer[NMEA_MAX_LENGTH + 3];  // +3 for \r\n\0
+    size_t sendLen = len;
+    
+    // Check if data already has CRLF
+    bool hasCRLF = (len >= 2 && data[len-2] == '\r' && data[len-1] == '\n');
+    
+    if (len < sizeof(buffer) - 2) {
         memcpy(buffer, data, len);
-        if (len < 2 || buffer[len-2] != '\r' || buffer[len-1] != '\n') {
+        
+        if (!hasCRLF) {
             buffer[len++] = '\r';
             buffer[len++] = '\n';
         }
-        dataLen = len;
+        buffer[len] = '\0';
+        sendLen = len;
+    } else {
+        // Data too long, just use as-is
+        memcpy(buffer, data, sizeof(buffer) - 1);
+        buffer[sizeof(buffer) - 1] = '\0';
+        sendLen = sizeof(buffer) - 1;
     }
     
     // Send to all connected clients
+    size_t sentCount = 0;
+    size_t errorCount = 0;
+    
     for (auto it = clients.begin(); it != clients.end(); ) {
         AsyncClient* client = *it;
         
-        if (!client->connected()) {
+        // Check if client is still connected
+        if (!client || !client->connected()) {
+            Serial.printf("[TCP] Removing disconnected client during broadcast\n");
             it = clients.erase(it);
             continue;
         }
         
+        // Check if client can send
         if (!client->canSend()) {
-            Serial.printf("[TCP] Client %s buffer full, dropping\n", 
+            Serial.printf("[TCP] ⚠️  Client %s buffer full, closing connection\n", 
                          client->remoteIP().toString().c_str());
             client->close();
             it = clients.erase(it);
+            errorCount++;
             continue;
         }
         
-        client->write(buffer, dataLen);
+        // Send data
+        size_t written = client->write(buffer, sendLen);
+        if (written == sendLen) {
+            sentCount++;
+        } else {
+            Serial.printf("[TCP] ⚠️  Partial write to %s (%u/%u bytes)\n", 
+                         client->remoteIP().toString().c_str(), written, sendLen);
+            errorCount++;
+        }
+        
         ++it;
+    }
+    
+    // Debug output (can be disabled for production)
+    if (sentCount > 0) {
+        // Only log occasionally to avoid spam
+        static uint32_t lastLog = 0;
+        static uint32_t broadcastCount = 0;
+        
+        broadcastCount++;
+        
+        if (millis() - lastLog > 5000) {  // Log every 5 seconds
+            Serial.printf("[TCP] Broadcast stats: %u messages sent to %d clients (errors: %u)\n", 
+                         broadcastCount, sentCount, errorCount);
+            lastLog = millis();
+            broadcastCount = 0;
+        }
     }
     
     xSemaphoreGive(clientsMutex);

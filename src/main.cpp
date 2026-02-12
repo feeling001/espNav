@@ -13,7 +13,9 @@
 #include "tcp_server.h"
 #include "web_server.h"
 
+// ============================================================
 // Global instances
+// ============================================================
 ConfigManager configManager;
 WiFiManager wifiManager;
 UARTHandler uartHandler;
@@ -28,11 +30,15 @@ QueueHandle_t nmeaQueue;
 TaskHandle_t nmeaTaskHandle;
 TaskHandle_t wifiTaskHandle;
 
+// ============================================================
 // Forward declarations
+// ============================================================
 void nmeaTask(void* parameter);
 void wifiTask(void* parameter);
 
-// Function to list files in LittleFS
+// ============================================================
+// Utility function to list LittleFS files
+// ============================================================
 void listLittleFSFiles(const char* dirname, uint8_t levels) {
     Serial.printf("[LittleFS] Listing directory: %s\n", dirname);
     
@@ -67,6 +73,9 @@ void listLittleFSFiles(const char* dirname, uint8_t levels) {
     Serial.printf("[LittleFS] Total: %d files, %zu bytes\n", fileCount, totalSize);
 }
 
+// ============================================================
+// Setup
+// ============================================================
 void setup() {
     // Initialize Serial for debugging
     Serial.begin(115200);
@@ -82,72 +91,36 @@ void setup() {
     // ============================================================
     Serial.println("[LittleFS] Initializing filesystem...");
     
-    // Try to mount LittleFS with format on failure
-//    if (!LittleFS.begin(true)) {
-     if (!LittleFS.begin(false, "/littlefs", 10, "littlefs")) {
+    // Try to mount LittleFS
+    if (!LittleFS.begin(false, "/littlefs", 10, "littlefs")) {
         Serial.println("[LittleFS] ❌ MOUNT FAILED!");
         Serial.println("[LittleFS] Possible reasons:");
         Serial.println("  1. Filesystem not formatted");
         Serial.println("  2. Partition table incorrect");
         Serial.println("  3. Flash memory issue");
-        Serial.println("  4. Filesystem not uploaded (run: pio run -t uploadfs)");
-        Serial.println("[LittleFS] Attempting to format...");
+        Serial.println("  4. Files not uploaded");
+        Serial.println("");
+        Serial.println("[LittleFS] Attempting to format and mount...");
         
-        if (!LittleFS.format()) {
-            Serial.println("[LittleFS] ❌ FORMAT FAILED!");
-            Serial.println("[LittleFS] Web server will not serve files!");
+        // Try to format and mount
+        if (LittleFS.begin(true, "/littlefs", 10, "littlefs")) {
+            Serial.println("[LittleFS] ✓ Formatted and mounted successfully");
         } else {
-            Serial.println("[LittleFS] ✓ Format successful, retrying mount...");
-            if (LittleFS.begin(true)) {
-                Serial.println("[LittleFS] ✓ Mount successful after format");
-            } else {
-                Serial.println("[LittleFS] ❌ Mount still failed after format");
-            }
+            Serial.println("[LittleFS] ❌ Format and mount FAILED!");
+            Serial.println("[LittleFS] System will continue but web interface will not work");
         }
     } else {
         Serial.println("[LittleFS] ✓ Mounted successfully");
     }
     
-    // Get filesystem info
-    size_t totalBytes = LittleFS.totalBytes();
-    size_t usedBytes = LittleFS.usedBytes();
-    Serial.printf("[LittleFS] Total space: %zu bytes (%.2f KB)\n", 
-                  totalBytes, totalBytes / 1024.0);
-    Serial.printf("[LittleFS] Used space: %zu bytes (%.2f KB)\n", 
-                  usedBytes, usedBytes / 1024.0);
-    Serial.printf("[LittleFS] Free space: %zu bytes (%.2f KB)\n", 
-                  totalBytes - usedBytes, (totalBytes - usedBytes) / 1024.0);
-    Serial.printf("[LittleFS] Usage: %.1f%%\n", 
-                  (usedBytes * 100.0) / totalBytes);
-    
-    // List all files in the filesystem
-    Serial.println("[LittleFS] Contents:");
+    // List LittleFS contents
+    Serial.println("\n[LittleFS] Contents:");
     listLittleFSFiles("/", 2);
     
-    // Check specifically for web files
-    Serial.println("\n[LittleFS] Checking for web dashboard files...");
-    const char* webFiles[] = {"/www/index.html", "/www/assets", "/index.html"};
-    bool foundWebFiles = false;
-    
-    for (int i = 0; i < 3; i++) {
-        if (LittleFS.exists(webFiles[i])) {
-            Serial.printf("[LittleFS] ✓ Found: %s\n", webFiles[i]);
-            foundWebFiles = true;
-            
-            if (String(webFiles[i]).endsWith(".html")) {
-                File f = LittleFS.open(webFiles[i], "r");
-                if (f) {
-                    Serial.printf("[LittleFS]   Size: %zu bytes\n", f.size());
-                    f.close();
-                }
-            }
-        } else {
-            Serial.printf("[LittleFS] ✗ Not found: %s\n", webFiles[i]);
-        }
-    }
-    
-    if (!foundWebFiles) {
-        Serial.println("[LittleFS] ⚠ WARNING: No web dashboard files found!");
+    // Check for web dashboard files
+    Serial.println("\n[LittleFS] Checking for web dashboard...");
+    if (!LittleFS.exists("/www/index.html")) {
+        Serial.println("[LittleFS] ⚠️  Web dashboard not found!");
         Serial.println("[LittleFS] Web interface will not work.");
         Serial.println("[LittleFS] To fix: ");
         Serial.println("[LittleFS]   1. cd web-dashboard && npm run build");
@@ -159,7 +132,7 @@ void setup() {
     Serial.println("\n======================================\n");
     
     // ============================================================
-    // Now initialize other components
+    // Initialize all components
     // ============================================================
     
     // Initialize configuration manager
@@ -204,8 +177,9 @@ void setup() {
         Serial.println("[NMEA] ✓ Queue created successfully");
     }
     
-    // Create tasks
+    // Create FreeRTOS tasks
     Serial.println("\n[Tasks] Creating FreeRTOS tasks...");
+    
     BaseType_t nmeaTaskResult = xTaskCreate(
         nmeaTask, 
         "NMEA", 
@@ -236,7 +210,7 @@ void setup() {
         Serial.println("[Tasks] ❌ WiFi task creation failed!");
     }
     
-    // Wait a bit for WiFi to connect
+    // Wait for WiFi to connect
     Serial.println("\n[WiFi] Waiting for connection...");
     delay(5000);
     
@@ -261,27 +235,110 @@ void setup() {
         Serial.printf("TCP Server: %s:%d\n", WiFi.localIP().toString().c_str(), TCP_PORT);
     } else {
         Serial.println("WiFi: Not connected (check AP mode)");
+        if (wifiManager.getState() == WIFI_AP_MODE) {
+            Serial.printf("AP Mode SSID: %s\n", wifiManager.getSSID().c_str());
+            Serial.printf("AP IP Address: %s\n", wifiManager.getIP().toString().c_str());
+            Serial.printf("Web Interface: http://%s/\n", wifiManager.getIP().toString().c_str());
+        }
     }
     Serial.println("----------------------\n");
 }
 
+// ============================================================
+// Main loop (empty - tasks handle everything)
+// ============================================================
 void loop() {
     // Main loop can be empty (tasks handle everything)
     vTaskDelay(pdMS_TO_TICKS(1000));
 }
 
-// Task implementations would follow here...
+// ============================================================
+// NMEA Task Implementation
+// ============================================================
 void nmeaTask(void* parameter) {
-    // Implementation from original file
+    char lineBuffer[NMEA_MAX_LENGTH];
+    NMEASentence sentence;
+    
+    Serial.println("[NMEA Task] Started and ready to read UART");
+    Serial.printf("[NMEA Task] Waiting for data on UART%d (RX: GPIO%d, TX: GPIO%d)...\n", 
+                  UART_NUM, UART_RX_PIN, UART_TX_PIN);
+    
+    uint32_t lastStatsTime = millis();
+    
     while (true) {
+        // Try to read a line from UART with 1 second timeout
+        if (uartHandler.readLine(lineBuffer, sizeof(lineBuffer), pdMS_TO_TICKS(1000))) {
+            Serial.printf("[NMEA Task] Received: %s\n", lineBuffer);
+            
+            // Parse the NMEA sentence
+            if (nmeaParser.parseLine(lineBuffer, sentence)) {
+                Serial.printf("[NMEA Task] ✓ Valid %s sentence\n", sentence.type);
+                
+                // Send to queue for potential future use
+                if (nmeaQueue != NULL) {
+                    if (xQueueSend(nmeaQueue, &sentence, 0) != pdTRUE) {
+                        Serial.println("[NMEA Task] ⚠️  Queue full, sentence dropped");
+                    }
+                }
+                
+                // Broadcast via TCP server
+                tcpServer.broadcast(sentence.raw);
+                
+                // Broadcast via WebSocket
+                webServer.broadcastNMEA(sentence.raw);
+                
+            } else {
+                Serial.printf("[NMEA Task] ❌ Invalid sentence: %s\n", lineBuffer);
+            }
+        }
+        
+        // Print statistics every 10 seconds
+        if (millis() - lastStatsTime > 10000) {
+            Serial.println("\n[NMEA Task] === Statistics ===");
+            Serial.printf("[NMEA Task] UART received: %u sentences\n", uartHandler.getSentencesReceived());
+            Serial.printf("[NMEA Task] UART errors: %u\n", uartHandler.getErrors());
+            Serial.printf("[NMEA Task] Valid sentences: %u\n", nmeaParser.getValidSentences());
+            Serial.printf("[NMEA Task] Invalid sentences: %u\n", nmeaParser.getInvalidSentences());
+            Serial.printf("[NMEA Task] TCP clients: %u\n", tcpServer.getClientCount());
+            Serial.println("[NMEA Task] ==================\n");
+            lastStatsTime = millis();
+        }
+        
+        // Small delay to prevent CPU hogging
         vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
 
+// ============================================================
+// WiFi Task Implementation
+// ============================================================
 void wifiTask(void* parameter) {
-    // Implementation from original file
+    Serial.println("[WiFi Task] Started");
+    
     while (true) {
+        // WiFi manager handles reconnection automatically
+        // This task can be used for monitoring or periodic checks
+        
+        // Check WiFi status periodically
+        static WiFiState lastState = WIFI_DISCONNECTED;
+        WiFiState currentState = wifiManager.getState();
+        
+        if (currentState != lastState) {
+            Serial.printf("[WiFi Task] State changed: %d -> %d\n", lastState, currentState);
+            
+            if (currentState == WIFI_CONNECTED_STA) {
+                Serial.printf("[WiFi Task] ✓ Connected to %s\n", wifiManager.getSSID().c_str());
+                Serial.printf("[WiFi Task] IP: %s\n", wifiManager.getIP().toString().c_str());
+                Serial.printf("[WiFi Task] RSSI: %d dBm\n", wifiManager.getRSSI());
+            } else if (currentState == WIFI_AP_MODE) {
+                Serial.printf("[WiFi Task] ✓ AP Mode: %s\n", wifiManager.getSSID().c_str());
+                Serial.printf("[WiFi Task] IP: %s\n", wifiManager.getIP().toString().c_str());
+            }
+            
+            lastState = currentState;
+        }
+        
+        // Sleep for 1 second
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }
-

@@ -109,7 +109,7 @@ bool UARTHandler::readLine(char* buffer, size_t maxLen, TickType_t timeout) {
         // Add to line buffer
         if (linePos < sizeof(lineBuffer) - 1) {
             lineBuffer[linePos++] = byte;
-            Serial.printf("[%c]",byte);              //DEBUG
+            // Serial.printf("[%c]",byte);              //DEBUG
         }
         
         // Check for line ending
