@@ -21,6 +21,8 @@ void UARTHandler::init(const UARTConfig& cfg) {
     
     config = cfg;
     
+    gpio_set_pull_mode(UART_RX_PIN,GPIO_PULLUP_ONLY);
+
     // Configure UART
     uart_config_t uart_config = {
         .baud_rate = (int)config.baudRate,
@@ -41,8 +43,8 @@ void UARTHandler::init(const UARTConfig& cfg) {
     
     initialized = true;
     
-    Serial.printf("[UART] Initialized: Baud=%u, Data=%u, Parity=%u, Stop=%u\n",
-                  config.baudRate, config.dataBits, config.parity, config.stopBits);
+    Serial.printf("[UART] Initialized: Baud=%u, Data=%u, Parity=%u, Stop=%u on GPIO rx %u - tx %u \n",
+                  config.baudRate, config.dataBits, config.parity, config.stopBits, UART_RX_PIN, UART_TX_PIN);
 }
 
 void UARTHandler::start() {
@@ -91,9 +93,11 @@ bool UARTHandler::readLine(char* buffer, size_t maxLen, TickType_t timeout) {
     if (!initialized || !streamBuffer) {
         return false;
     }
+
+    Serial.println("[UART] readline");              //DEBUG
     
     uint32_t startTime = millis();
-    
+   
     while (millis() - startTime < pdTICKS_TO_MS(timeout)) {
         uint8_t byte;
         size_t received = xStreamBufferReceive(streamBuffer, &byte, 1, pdMS_TO_TICKS(10));
@@ -105,6 +109,7 @@ bool UARTHandler::readLine(char* buffer, size_t maxLen, TickType_t timeout) {
         // Add to line buffer
         if (linePos < sizeof(lineBuffer) - 1) {
             lineBuffer[linePos++] = byte;
+            Serial.printf("[%c]",byte);              //DEBUG
         }
         
         // Check for line ending
