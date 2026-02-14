@@ -3,10 +3,11 @@
 #include "wifi_manager.h"
 #include "uart_handler.h"
 #include "tcp_server.h"
+#include "nmea_parser.h"
 #include <ArduinoJson.h>
 
-WebServer::WebServer(ConfigManager* cm, WiFiManager* wm) 
-    : configManager(cm), wifiManager(wm), running(false) {
+WebServer::WebServer(ConfigManager* cm, WiFiManager* wm, TCPServer* tcp, UARTHandler* uart, NMEAParser* nmea) 
+    : configManager(cm), wifiManager(wm), tcpServer(tcp), uartHandler(uart), nmeaParser(nmea), running(false) {
     server = new AsyncWebServer(WEB_SERVER_PORT);
     wsNMEA = new AsyncWebSocket("/ws/nmea");
 }
@@ -131,13 +132,21 @@ void WebServer::registerRoutes() {
     Serial.println("[Web]   ✓ Static file handler registered");
     
     // ============================================================
-    // 404 Handler (LAST!) - Simple version without complex logic
+    // 404 Handler (LAST!) - Serve index.html for client-side routing
     // ============================================================
     server->onNotFound([](AsyncWebServerRequest* request) {
-        Serial.printf("[Web] 404: %s %s\n", 
-                     request->methodToString(), 
-                     request->url().c_str());
-        request->send(404, "text/plain", "Not Found");
+        // If it's an API request, return 404
+        if (request->url().startsWith("/api/") || request->url().startsWith("/ws/")) {
+            Serial.printf("[Web] 404 API: %s %s\n", 
+                         request->methodToString(), 
+                         request->url().c_str());
+            request->send(404, "text/plain", "Not Found");
+            return;
+        }
+        
+        // For all other routes, serve index.html to support client-side routing
+        Serial.printf("[Web] SPA Fallback: %s → index.html\n", request->url().c_str());
+        request->send(LittleFS, "/www/index.html", "text/html");
     });
     
     Serial.println("[Web]   ✓ All routes registered");
@@ -292,30 +301,56 @@ void WebServer::handleGetStatus(AsyncWebServerRequest* request) {
     
     JsonObject wifi = doc["wifi"].to<JsonObject>();
     
+    // Get WiFi state - but also check direct WiFi status as fallback
+    WiFiState state = wifiManager->getState();
+    wl_status_t wifiStatus = WiFi.status();
+    
     const char* modeStr = "Unknown";
-    switch (wifiManager->getState()) {
-        case WIFI_DISCONNECTED: modeStr = "Disconnected"; break;
-        case WIFI_CONNECTING: modeStr = "Connecting"; break;
-        case WIFI_CONNECTED_STA: modeStr = "STA"; break;
-        case WIFI_RECONNECTING: modeStr = "Reconnecting"; break;
-        case WIFI_AP_MODE: modeStr = "AP"; break;
+    String ssid = "";
+    int8_t rssi = 0;
+    IPAddress ip(0, 0, 0, 0);
+    size_t clients = 0;
+    
+    // Determine actual mode and get info
+    if (wifiStatus == WL_CONNECTED || state == WIFI_CONNECTED_STA) {
+        modeStr = "STA";
+        ssid = WiFi.SSID();
+        rssi = WiFi.RSSI();
+        ip = WiFi.localIP();
+    } else if (WiFi.getMode() == WIFI_AP || state == WIFI_AP_MODE) {
+        modeStr = "AP";
+        ssid = wifiManager->getSSID();
+        ip = WiFi.softAPIP();
+        clients = WiFi.softAPgetStationNum();
+    } else {
+        switch (state) {
+            case WIFI_DISCONNECTED: modeStr = "Disconnected"; break;
+            case WIFI_CONNECTING: modeStr = "Connecting"; break;
+            case WIFI_RECONNECTING: modeStr = "Reconnecting"; break;
+            default: modeStr = "Unknown"; break;
+        }
     }
     
     wifi["mode"] = modeStr;
-    wifi["ssid"] = wifiManager->getSSID();
-    wifi["rssi"] = wifiManager->getRSSI();
-    wifi["ip"] = wifiManager->getIP().toString();
-    wifi["clients"] = wifiManager->getConnectedClients();
+    wifi["ssid"] = ssid;
+    wifi["rssi"] = rssi;
+    wifi["ip"] = ip.toString();
+    wifi["clients"] = clients;
     
-    // Add TCP and UART info (these would need to be passed to WebServer)
+    // TCP info - NOW with real data from tcpServer
     JsonObject tcp = doc["tcp"].to<JsonObject>();
-    tcp["clients"] = 0;  // TODO: Get from TCPServer
-    tcp["port"] = 10110;
+    tcp["clients"] = tcpServer->getClientCount();
+    tcp["port"] = TCP_PORT;
     
+    // UART info - NOW with real data from uartHandler and nmeaParser
     JsonObject uart = doc["uart"].to<JsonObject>();
-    uart["sentences_received"] = 0;  // TODO: Get from UARTHandler
-    uart["errors"] = 0;
-    uart["baud"] = 38400;  // TODO: Get from config
+    uart["sentences_received"] = uartHandler->getSentencesReceived();
+    uart["errors"] = nmeaParser->getInvalidSentences();
+    
+    // Get serial config for baud rate
+    UARTConfig serialConfig;
+    configManager->getSerialConfig(serialConfig);
+    uart["baud"] = serialConfig.baudRate;
     
     String response;
     serializeJson(doc, response);
@@ -379,43 +414,10 @@ void WebServer::handleGetWiFiScanResults(AsyncWebServerRequest* request) {
         network["rssi"] = result.rssi;
         network["channel"] = result.channel;
         network["encryption"] = result.encryption;
-        
-        // Calculate signal quality percentage (0-100)
-        int quality = 0;
-        if (result.rssi >= -50) {
-            quality = 100;
-        } else if (result.rssi >= -60) {
-            quality = 90;
-        } else if (result.rssi >= -70) {
-            quality = 75;
-        } else if (result.rssi >= -80) {
-            quality = 50;
-        } else if (result.rssi >= -90) {
-            quality = 25;
-        } else {
-            quality = 10;
-        }
-        network["quality"] = quality;
-        
-        // Encryption type string
-        const char* encStr = "Unknown";
-        switch (result.encryption) {
-            case 0: encStr = "Open"; break;
-            case 1: encStr = "WEP"; break;
-            case 2: encStr = "WPA"; break;
-            case 3: encStr = "WPA2"; break;
-            case 4: encStr = "WPA/WPA2"; break;
-            case 5: encStr = "WPA2-Enterprise"; break;
-            case 6: encStr = "WPA3"; break;
-        }
-        network["encryption_type"] = encStr;
     }
     
     String response;
     serializeJson(doc, response);
     
     request->send(200, "application/json", response);
-    
-    // Clear scan results after sending
-    wifiManager->clearScanResults();
 }

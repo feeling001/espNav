@@ -19,7 +19,8 @@ WiFiManager wifiManager;
 UARTHandler uartHandler;
 NMEAParser nmeaParser;
 TCPServer tcpServer;
-WebServer webServer(&configManager, &wifiManager);
+// OLD // WebServer webServer(&configManager, &wifiManager);
+WebServer webServer(&configManager, &wifiManager, &tcpServer, &uartHandler, &nmeaParser);
 
 // Message queue for NMEA sentences
 QueueHandle_t nmeaQueue;

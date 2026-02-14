@@ -7,9 +7,14 @@
 #include "config_manager.h"
 #include "wifi_manager.h"
 
+// Forward declarations
+class TCPServer;
+class UARTHandler;
+class NMEAParser;
+
 class WebServer {
 public:
-    WebServer(ConfigManager* cm, WiFiManager* wm);
+    WebServer(ConfigManager* cm, WiFiManager* wm, TCPServer* tcp, UARTHandler* uart, NMEAParser* nmea);
     
     void init();
     void start();
@@ -39,6 +44,9 @@ private:
     AsyncWebSocket* wsNMEA;
     ConfigManager* configManager;
     WiFiManager* wifiManager;
+    TCPServer* tcpServer;
+    UARTHandler* uartHandler;
+    NMEAParser* nmeaParser;
     bool running;
 };
 
