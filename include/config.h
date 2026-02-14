@@ -3,6 +3,9 @@
 
 #include <Arduino.h>
 
+// Version
+#define VERSION "1.0.0"
+
 // WiFi Configuration
 #define WIFI_CONNECT_TIMEOUT_MS  30000
 #define WIFI_AP_SSID_PREFIX      "MarineGateway"
@@ -10,9 +13,9 @@
 #define WIFI_MAX_RECONNECT       3
 
 // UART Configuration
-#define UART_NUM                 1
-#define UART_RX_PIN              GPIO_NUM_6 // WAS 16 
-#define UART_TX_PIN              GPIO_NUM_5 // WAS 17
+#define UART_NUM                 UART_NUM_1
+#define UART_RX_PIN              GPIO_NUM_6
+#define UART_TX_PIN              GPIO_NUM_5
 #define UART_BUFFER_SIZE         2048
 #define UART_DEFAULT_BAUD        38400
 
@@ -25,7 +28,7 @@
 
 // NMEA
 #define NMEA_MAX_LENGTH          128
-#define NMEA_QUEUE_SIZE          50
+#define NMEA_QUEUE_SIZE          200  // Augmenté de 50 à 200 pour éviter les "queue full"
 
 // NVS
 #define NVS_NAMESPACE            "marine_gw"

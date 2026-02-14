@@ -21,7 +21,8 @@ void UARTHandler::init(const UARTConfig& cfg) {
     
     config = cfg;
     
-    gpio_set_pull_mode(UART_RX_PIN,GPIO_PULLUP_ONLY);
+    // Configure GPIO with pull-up
+    gpio_set_pull_mode(UART_RX_PIN, GPIO_PULLUP_ONLY);
 
     // Configure UART
     uart_config_t uart_config = {
@@ -38,13 +39,17 @@ void UARTHandler::init(const UARTConfig& cfg) {
     uart_set_pin(UART_NUM, UART_TX_PIN, UART_RX_PIN, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
     uart_driver_install(UART_NUM, UART_BUFFER_SIZE, 0, 0, NULL, 0);
     
+    // Flush any existing data in UART buffer
+    uart_flush(UART_NUM);
+    
     // Create stream buffer
     streamBuffer = xStreamBufferCreate(UART_BUFFER_SIZE, 1);
     
     initialized = true;
     
-    Serial.printf("[UART] Initialized: Baud=%u, Data=%u, Parity=%u, Stop=%u on GPIO rx %u - tx %u \n",
-                  config.baudRate, config.dataBits, config.parity, config.stopBits, UART_RX_PIN, UART_TX_PIN);
+    Serial.printf("[UART] Initialized: Baud=%u, Data=%u, Parity=%u, Stop=%u, RX=GPIO%u, TX=GPIO%u\n",
+                  config.baudRate, config.dataBits, config.parity, config.stopBits, 
+                  UART_RX_PIN, UART_TX_PIN);
 }
 
 void UARTHandler::start() {
@@ -53,7 +58,7 @@ void UARTHandler::start() {
     }
     
     running = true;
-    xTaskCreate(uartTask, "UART", TASK_STACK_UART, this, TASK_PRIORITY_UART, &taskHandle);
+    xTaskCreate(uartTask, "UART_RX", TASK_STACK_UART, this, TASK_PRIORITY_UART, &taskHandle);
     
     Serial.println("[UART] Started");
 }
@@ -82,6 +87,7 @@ void UARTHandler::uartTask(void* parameter) {
         int len = uart_read_bytes(UART_NUM, data, sizeof(data), pdMS_TO_TICKS(100));
         
         if (len > 0) {
+            // Send to stream buffer
             xStreamBufferSend(handler->streamBuffer, data, len, 0);
         }
     }
@@ -93,12 +99,11 @@ bool UARTHandler::readLine(char* buffer, size_t maxLen, TickType_t timeout) {
     if (!initialized || !streamBuffer) {
         return false;
     }
-
-    Serial.println("[UART] readline");              //DEBUG
     
     uint32_t startTime = millis();
-   
-    while (millis() - startTime < pdTICKS_TO_MS(timeout)) {
+    uint32_t timeoutMs = pdTICKS_TO_MS(timeout);
+    
+    while (millis() - startTime < timeoutMs) {
         uint8_t byte;
         size_t received = xStreamBufferReceive(streamBuffer, &byte, 1, pdMS_TO_TICKS(10));
         
@@ -109,32 +114,34 @@ bool UARTHandler::readLine(char* buffer, size_t maxLen, TickType_t timeout) {
         // Add to line buffer
         if (linePos < sizeof(lineBuffer) - 1) {
             lineBuffer[linePos++] = byte;
-            // Serial.printf("[%c]",byte);              //DEBUG
+        } else {
+            // Buffer overflow
+            linePos = 0;
+            errors++;
+            continue;
         }
         
-        // Check for line ending
-        if (byte == '\n' && linePos > 1 && lineBuffer[linePos - 2] == '\r') {
-            // Complete line received
-            lineBuffer[linePos - 2] = '\0';  // Remove \r\n
-            
-            // Copy to output buffer
-            size_t copyLen = min(linePos - 2, maxLen - 1);
-
-            Serial.println("[UART] received  data \n");
-
-            strncpy(buffer, lineBuffer, copyLen);
-            buffer[copyLen] = '\0';
+        // Check for line ending (CRLF or just LF)
+        if (byte == '\n') {
+            // Remove line ending
+            if (linePos > 1 && lineBuffer[linePos - 2] == '\r') {
+                // CRLF ending
+                lineBuffer[linePos - 2] = '\0';
+                size_t copyLen = min(linePos - 2, maxLen - 1);
+                strncpy(buffer, lineBuffer, copyLen);
+                buffer[copyLen] = '\0';
+            } else {
+                // LF only ending
+                lineBuffer[linePos - 1] = '\0';
+                size_t copyLen = min(linePos - 1, maxLen - 1);
+                strncpy(buffer, lineBuffer, copyLen);
+                buffer[copyLen] = '\0';
+            }
             
             linePos = 0;
             sentencesReceived++;
             
             return true;
-        }
-        
-        // Prevent buffer overflow
-        if (linePos >= sizeof(lineBuffer)) {
-            linePos = 0;
-            errors++;
         }
     }
     
