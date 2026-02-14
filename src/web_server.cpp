@@ -628,7 +628,8 @@ void WebServer::handleGetNavigation(AsyncWebServerRequest* request) {
  * - True Wind Angle (TWA) - calculated
  * - True Wind Direction (TWD) - calculated
  */
-void WebServer::handleGetWind(AsyncWebServerRequest* request) {
+
+ void WebServer::handleGetWind(AsyncWebServerRequest* request) {
     Serial.println("[Web] → GET /api/boat/wind");
     
     if (!boatState) {
@@ -637,70 +638,68 @@ void WebServer::handleGetWind(AsyncWebServerRequest* request) {
     }
     
     JsonDocument doc;
-    
-    // Get wind data from BoatState
     WindData wind = boatState->getWind();
     
-    // Apparent Wind Speed
+    // AWS
     if (wind.aws.valid && !wind.aws.isStale()) {
-        doc["apparent"]["speed"]["value"] = wind.aws.value;
-        doc["apparent"]["speed"]["unit"] = wind.aws.unit;
-        doc["apparent"]["speed"]["age"] = (millis() - wind.aws.timestamp) / 1000.0;
+        doc["aws"]["value"] = wind.aws.value;
+        doc["aws"]["unit"] = wind.aws.unit;
+        doc["aws"]["age"] = (millis() - wind.aws.timestamp) / 1000.0;
     } else {
-        doc["apparent"]["speed"]["value"] = nullptr;
-        doc["apparent"]["speed"]["unit"] = "kn";
-        doc["apparent"]["speed"]["age"] = nullptr;
+        doc["aws"]["value"] = nullptr;
+        doc["aws"]["unit"] = "kn";
+        doc["aws"]["age"] = nullptr;
     }
     
-    // Apparent Wind Angle
+    // AWA
     if (wind.awa.valid && !wind.awa.isStale()) {
-        doc["apparent"]["angle"]["value"] = wind.awa.value;
-        doc["apparent"]["angle"]["unit"] = wind.awa.unit;
-        doc["apparent"]["angle"]["age"] = (millis() - wind.awa.timestamp) / 1000.0;
+        doc["awa"]["value"] = wind.awa.value;
+        doc["awa"]["unit"] = wind.awa.unit;
+        doc["awa"]["age"] = (millis() - wind.awa.timestamp) / 1000.0;
     } else {
-        doc["apparent"]["angle"]["value"] = nullptr;
-        doc["apparent"]["angle"]["unit"] = "deg";
-        doc["apparent"]["angle"]["age"] = nullptr;
+        doc["awa"]["value"] = nullptr;
+        doc["awa"]["unit"] = "deg";
+        doc["awa"]["age"] = nullptr;
     }
     
-    // True Wind Speed
+    // TWS
     if (wind.tws.valid && !wind.tws.isStale()) {
-        doc["true"]["speed"]["value"] = wind.tws.value;
-        doc["true"]["speed"]["unit"] = wind.tws.unit;
-        doc["true"]["speed"]["age"] = (millis() - wind.tws.timestamp) / 1000.0;
+        doc["tws"]["value"] = wind.tws.value;
+        doc["tws"]["unit"] = wind.tws.unit;
+        doc["tws"]["age"] = (millis() - wind.tws.timestamp) / 1000.0;
     } else {
-        doc["true"]["speed"]["value"] = nullptr;
-        doc["true"]["speed"]["unit"] = "kn";
-        doc["true"]["speed"]["age"] = nullptr;
+        doc["tws"]["value"] = nullptr;
+        doc["tws"]["unit"] = "kn";
+        doc["tws"]["age"] = nullptr;
     }
     
-    // True Wind Angle
+    // TWA
     if (wind.twa.valid && !wind.twa.isStale()) {
-        doc["true"]["angle"]["value"] = wind.twa.value;
-        doc["true"]["angle"]["unit"] = wind.twa.unit;
-        doc["true"]["angle"]["age"] = (millis() - wind.twa.timestamp) / 1000.0;
+        doc["twa"]["value"] = wind.twa.value;
+        doc["twa"]["unit"] = wind.twa.unit;
+        doc["twa"]["age"] = (millis() - wind.twa.timestamp) / 1000.0;
     } else {
-        doc["true"]["angle"]["value"] = nullptr;
-        doc["true"]["angle"]["unit"] = "deg";
-        doc["true"]["angle"]["age"] = nullptr;
+        doc["twa"]["value"] = nullptr;
+        doc["twa"]["unit"] = "deg";
+        doc["twa"]["age"] = nullptr;
     }
     
-    // True Wind Direction
+    // TWD
     if (wind.twd.valid && !wind.twd.isStale()) {
-        doc["true"]["direction"]["value"] = wind.twd.value;
-        doc["true"]["direction"]["unit"] = wind.twd.unit;
-        doc["true"]["direction"]["age"] = (millis() - wind.twd.timestamp) / 1000.0;
+        doc["twd"]["value"] = wind.twd.value;
+        doc["twd"]["unit"] = wind.twd.unit;
+        doc["twd"]["age"] = (millis() - wind.twd.timestamp) / 1000.0;
     } else {
-        doc["true"]["direction"]["value"] = nullptr;
-        doc["true"]["direction"]["unit"] = "deg";
-        doc["true"]["direction"]["age"] = nullptr;
+        doc["twd"]["value"] = nullptr;
+        doc["twd"]["unit"] = "deg";
+        doc["twd"]["age"] = nullptr;
     }
     
     String response;
     serializeJson(doc, response);
-    
     request->send(200, "application/json", response);
 }
+
 
 /**
  * GET /api/boat/ais

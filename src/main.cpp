@@ -20,9 +20,9 @@ ConfigManager configManager;
 BoatState boatState;
 WiFiManager wifiManager;
 UARTHandler uartHandler;
-NMEAParser nmeaParser;
 TCPServer tcpServer;
 BLEManager bleManager;
+NMEAParser nmeaParser(&boatState);
 WebServer webServer(&configManager, &wifiManager, &tcpServer, &uartHandler, &nmeaParser, &boatState, &bleManager);
 
 // Message queue for NMEA sentences
