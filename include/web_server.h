@@ -6,16 +6,18 @@
 #include <LittleFS.h>
 #include "config_manager.h"
 #include "wifi_manager.h"
+#include "ble_manager.h"  // Include complet au lieu de forward declaration
 
 // Forward declarations
 class TCPServer;
 class UARTHandler;
 class NMEAParser;
-class BLEManager;
+class BoatState;
 
 class WebServer {
 public:
-    WebServer(ConfigManager* cm, WiFiManager* wm, TCPServer* tcp, UARTHandler* uart, NMEAParser* nmea, BLEManager* ble);
+    // CONSTRUCTEUR AVEC BOATSTATE
+    WebServer(ConfigManager* cm, WiFiManager* wm, TCPServer* tcp, UARTHandler* uart, NMEAParser* nmea, BoatState* bs, BLEManager* ble);
     
     void init();
     void start();
@@ -25,7 +27,7 @@ public:
 private:
     void registerRoutes();
     
-    // REST API handlers
+    // REST API handlers - Configuration
     void handleGetWiFiConfig(AsyncWebServerRequest* request);
     void handlePostWiFiConfig(AsyncWebServerRequest* request, uint8_t* data, size_t len);
     void handleGetSerialConfig(AsyncWebServerRequest* request);
@@ -37,6 +39,12 @@ private:
     void handleGetBLEConfig(AsyncWebServerRequest* request);
     void handlePostBLEConfig(AsyncWebServerRequest* request, uint8_t* data, size_t len);
     
+    // Boat data handlers - AJOUTÉ
+    void handleGetNavigation(AsyncWebServerRequest* request);
+    void handleGetWind(AsyncWebServerRequest* request);
+    void handleGetAIS(AsyncWebServerRequest* request);
+    void handleGetBoatState(AsyncWebServerRequest* request);
+    
     // WiFi scan handlers
     void handleStartWiFiScan(AsyncWebServerRequest* request);
     void handleGetWiFiScanResults(AsyncWebServerRequest* request);
@@ -45,6 +53,7 @@ private:
     void handleWebSocketEvent(AsyncWebSocket* server, AsyncWebSocketClient* client,
                              AwsEventType type, void* arg, uint8_t* data, size_t len);
     
+    // Membres privés
     AsyncWebServer* server;
     AsyncWebSocket* wsNMEA;
     ConfigManager* configManager;
@@ -52,6 +61,7 @@ private:
     TCPServer* tcpServer;
     UARTHandler* uartHandler;
     NMEAParser* nmeaParser;
+    BoatState* boatState;  // AJOUTÉ
     BLEManager* bleManager;
     bool running;
 };

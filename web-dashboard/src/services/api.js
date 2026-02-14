@@ -62,5 +62,41 @@ export const api = {
     const response = await fetch(`${API_BASE}/restart`, { method: 'POST' });
     if (!response.ok) throw new Error('Failed to restart');
     return response.json();
+  },
+
+  // BLE configuration
+  async getBLEConfig() {
+    const response = await fetch(`${API_BASE}/config/ble`);
+    if (!response.ok) throw new Error('Failed to get BLE config');
+    return response.json();
+  },
+
+  async setBLEConfig(config) {
+    const response = await fetch(`${API_BASE}/config/ble`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config)
+    });
+    if (!response.ok) throw new Error('Failed to set BLE config');
+    return response.json();
+  },
+
+  // Boat data endpoints
+  async getBoatNavigation() {
+    const response = await fetch(`${API_BASE}/boat/navigation`);
+    if (!response.ok) throw new Error('Failed to get navigation data');
+    return response.json();
+  },
+
+  async getBoatWind() {
+    const response = await fetch(`${API_BASE}/boat/wind`);
+    if (!response.ok) throw new Error('Failed to get wind data');
+    return response.json();
+  },
+
+  async getBoatAIS() {
+    const response = await fetch(`${API_BASE}/boat/ais`);
+    if (!response.ok) throw new Error('Failed to get AIS data');
+    return response.json();
   }
 };

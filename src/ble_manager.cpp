@@ -5,14 +5,14 @@
 // BLE Server Callbacks Implementation
 // ============================================================
 
-BLEServerCallbacks::BLEServerCallbacks(BLEManager* manager) : bleManager(manager) {}
+CustomBLEServerCallbacks::CustomBLEServerCallbacks(BLEManager* manager) : bleManager(manager) {}
 
-void BLEServerCallbacks::onConnect(BLEServer* pServer) {
+void CustomBLEServerCallbacks::onConnect(BLEServer* pServer) {
     bleManager->connectedDevices++;
     Serial.printf("[BLE] Device connected (total: %u)\n", bleManager->connectedDevices);
 }
 
-void BLEServerCallbacks::onDisconnect(BLEServer* pServer) {
+void CustomBLEServerCallbacks::onDisconnect(BLEServer* pServer) {
     if (bleManager->connectedDevices > 0) {
         bleManager->connectedDevices--;
     }
@@ -83,28 +83,28 @@ void AutopilotCommandCallbacks::onWrite(BLECharacteristic* pCharacteristic) {
 // BLE Security Callbacks Implementation
 // ============================================================
 
-BLESecurityCallbacks::BLESecurityCallbacks(BLEManager* manager) : bleManager(manager) {}
+CustomBLESecurityCallbacks::CustomBLESecurityCallbacks(BLEManager* manager) : bleManager(manager) {}
 
-uint32_t BLESecurityCallbacks::onPassKeyRequest() {
+uint32_t CustomBLESecurityCallbacks::onPassKeyRequest() {
     Serial.println("[BLE] PassKey request");
     return atoi(bleManager->config.pin_code);
 }
 
-void BLESecurityCallbacks::onPassKeyNotify(uint32_t pass_key) {
+void CustomBLESecurityCallbacks::onPassKeyNotify(uint32_t pass_key) {
     Serial.printf("[BLE] PassKey notify: %06u\n", pass_key);
 }
 
-bool BLESecurityCallbacks::onConfirmPIN(uint32_t pass_key) {
+bool CustomBLESecurityCallbacks::onConfirmPIN(uint32_t pass_key) {
     Serial.printf("[BLE] Confirm PIN: %06u\n", pass_key);
     return true;
 }
 
-bool BLESecurityCallbacks::onSecurityRequest() {
+bool CustomBLESecurityCallbacks::onSecurityRequest() {
     Serial.println("[BLE] Security request");
     return true;
 }
 
-void BLESecurityCallbacks::onAuthenticationComplete(esp_ble_auth_cmpl_t auth_cmpl) {
+void CustomBLESecurityCallbacks::onAuthenticationComplete(esp_ble_auth_cmpl_t auth_cmpl) {
     if (auth_cmpl.success) {
         Serial.println("[BLE] ✓ Authentication successful");
     } else {
@@ -158,7 +158,7 @@ void BLEManager::init(const BLEConfig& cfg, BoatState* state) {
     
     // Create BLE Server
     pServer = BLEDevice::createServer();
-    serverCallbacks = new BLEServerCallbacks(this);
+    serverCallbacks = new CustomBLEServerCallbacks(this);
     pServer->setCallbacks(serverCallbacks);
     
     // Setup security
@@ -180,7 +180,7 @@ void BLEManager::setupSecurity() {
     Serial.println("[BLE] Setting up security...");
     
     // Set security callbacks
-    securityCallbacks = new BLESecurityCallbacks(this);
+    securityCallbacks = new CustomBLESecurityCallbacks(this);
     BLEDevice::setSecurityCallbacks(securityCallbacks);
     
     // Configure security parameters
@@ -244,6 +244,7 @@ void BLEManager::setupServices() {
         BLE_CHAR_AUTOPILOT_CMD_UUID,
         BLECharacteristic::PROPERTY_WRITE
     );
+    
     autopilotCmdCallbacks = new AutopilotCommandCallbacks(this);
     pAutopilotCmdChar->setCallbacks(autopilotCmdCallbacks);
     
@@ -254,60 +255,69 @@ void BLEManager::setupServices() {
 }
 
 void BLEManager::start() {
-    if (!initialized || !config.enabled) {
+    if (!initialized) {
+        Serial.println("[BLE] ✗ Cannot start - not initialized");
         return;
     }
     
-    Serial.println("[BLE] Starting BLE Manager...");
+    if (!config.enabled) {
+        Serial.println("[BLE] Not starting - disabled in config");
+        return;
+    }
+    
+    Serial.println("[BLE] Starting BLE services...");
     
     // Start advertising
     startAdvertising();
     
-    // Start update task
-    xTaskCreate(updateTask, "BLE_Update", BLE_TASK_STACK_SIZE, this, BLE_TASK_PRIORITY, &updateTaskHandle);
+    // Create update task
+    xTaskCreatePinnedToCore(
+        updateTask,
+        "BLE_Update",
+        4096,
+        this,
+        1,
+        &updateTaskHandle,
+        0
+    );
     
-    Serial.println("[BLE] ✓ BLE Manager started");
+    Serial.println("[BLE] ✓ Started");
 }
 
 void BLEManager::stop() {
-    if (!initialized) {
-        return;
-    }
-    
-    Serial.println("[BLE] Stopping BLE Manager...");
-    
-    // Stop update task
     if (updateTaskHandle) {
         vTaskDelete(updateTaskHandle);
         updateTaskHandle = nullptr;
     }
     
-    // Stop advertising
     stopAdvertising();
     
-    Serial.println("[BLE] ✓ BLE Manager stopped");
+    Serial.println("[BLE] Stopped");
 }
 
 void BLEManager::startAdvertising() {
+    if (!initialized || !config.enabled) {
+        return;
+    }
+    
     if (advertising) {
         return;
     }
     
-    pAdvertising = BLEDevice::getAdvertising();
+    Serial.println("[BLE] Starting advertising...");
     
-    // Add services to advertising
+    pAdvertising = BLEDevice::getAdvertising();
     pAdvertising->addServiceUUID(BLE_SERVICE_NAVIGATION_UUID);
     pAdvertising->addServiceUUID(BLE_SERVICE_WIND_UUID);
     pAdvertising->addServiceUUID(BLE_SERVICE_AUTOPILOT_UUID);
-    
     pAdvertising->setScanResponse(true);
     pAdvertising->setMinPreferred(0x06);
-    pAdvertising->setMaxPreferred(0x12);
+    pAdvertising->setMinPreferred(0x12);
     
     BLEDevice::startAdvertising();
-    advertising = true;
     
-    Serial.println("[BLE] ✓ Advertising started");
+    advertising = true;
+    Serial.println("[BLE] ✓ Advertising");
 }
 
 void BLEManager::stopAdvertising() {
@@ -324,7 +334,7 @@ void BLEManager::stopAdvertising() {
 void BLEManager::setEnabled(bool enabled) {
     config.enabled = enabled;
     
-    if (enabled) {
+    if (enabled && initialized) {
         start();
     } else {
         stop();
@@ -335,11 +345,11 @@ void BLEManager::setDeviceName(const char* name) {
     strncpy(config.device_name, name, sizeof(config.device_name) - 1);
     config.device_name[sizeof(config.device_name) - 1] = '\0';
     
-    // Restart BLE if already running
-    if (config.enabled) {
+    // Restart if running to apply new name
+    if (initialized && advertising) {
         stop();
-        BLEDevice::deinit(true);
-        delay(500);
+        BLEDevice::deinit(false);
+        initialized = false;
         init(config, boatState);
         start();
     }
@@ -350,24 +360,48 @@ void BLEManager::setPinCode(const char* pin) {
     config.pin_code[sizeof(config.pin_code) - 1] = '\0';
 }
 
+bool BLEManager::hasAutopilotCommand() {
+    bool hasCommand = false;
+    
+    xSemaphoreTake(commandMutex, portMAX_DELAY);
+    hasCommand = (pendingCommand.type != AutopilotCommand::NONE);
+    xSemaphoreGive(commandMutex);
+    
+    return hasCommand;
+}
+
+AutopilotCommand BLEManager::getAutopilotCommand() {
+    AutopilotCommand cmd;
+    
+    xSemaphoreTake(commandMutex, portMAX_DELAY);
+    cmd = pendingCommand;
+    pendingCommand.type = AutopilotCommand::NONE;
+    xSemaphoreGive(commandMutex);
+    
+    return cmd;
+}
+
+void BLEManager::update() {
+    if (!initialized || !config.enabled || connectedDevices == 0) {
+        return;
+    }
+    
+    updateNavigationData();
+    updateWindData();
+    updateAutopilotData();
+}
+
 void BLEManager::updateTask(void* parameter) {
     BLEManager* manager = static_cast<BLEManager*>(parameter);
     
-    Serial.println("[BLE Task] Started");
-    
     while (true) {
-        if (manager->connectedDevices > 0) {
-            manager->updateNavigationData();
-            manager->updateWindData();
-            manager->updateAutopilotData();
-        }
-        
+        manager->update();
         vTaskDelay(pdMS_TO_TICKS(BLE_UPDATE_INTERVAL_MS));
     }
 }
 
 void BLEManager::updateNavigationData() {
-    if (!pNavDataChar || !boatState) {
+    if (!pNavDataChar) {
         return;
     }
     
@@ -377,7 +411,7 @@ void BLEManager::updateNavigationData() {
 }
 
 void BLEManager::updateWindData() {
-    if (!pWindDataChar || !boatState) {
+    if (!pWindDataChar) {
         return;
     }
     
@@ -387,7 +421,7 @@ void BLEManager::updateWindData() {
 }
 
 void BLEManager::updateAutopilotData() {
-    if (!pAutopilotDataChar || !boatState) {
+    if (!pAutopilotDataChar) {
         return;
     }
     
@@ -404,39 +438,14 @@ String BLEManager::buildNavigationJSON() {
     HeadingData heading = boatState->getHeading();
     DepthData depth = boatState->getDepth();
     
-    // Position
-    if (gps.position.lat.valid && !gps.position.lat.isStale()) {
-        doc["lat"] = gps.position.lat.value;
-        doc["lon"] = gps.position.lon.value;
-    }
-    
-    // Speed
-    if (gps.sog.valid && !gps.sog.isStale()) {
-        doc["sog"] = gps.sog.value;
-    }
-    if (speed.stw.valid && !speed.stw.isStale()) {
-        doc["stw"] = speed.stw.value;
-    }
-    
-    // Course
-    if (gps.cog.valid && !gps.cog.isStale()) {
-        doc["cog"] = gps.cog.value;
-    }
-    
-    // Heading
-    if (heading.magnetic.valid && !heading.magnetic.isStale()) {
-        doc["hdg"] = heading.magnetic.value;
-    }
-    
-    // Depth
-    if (depth.below_transducer.valid && !depth.below_transducer.isStale()) {
-        doc["depth"] = depth.below_transducer.value;
-    }
-    
-    // GPS quality
-    if (gps.satellites.valid && !gps.satellites.isStale()) {
-        doc["sats"] = (int)gps.satellites.value;
-    }
+    doc["lat"] = gps.position.lat.value;
+    doc["lon"] = gps.position.lon.value;
+    doc["sog"] = gps.sog.value;
+    doc["cog"] = gps.cog.value;
+    doc["stw"] = speed.stw.value;
+    doc["hdg_mag"] = heading.magnetic.value;
+    doc["hdg_true"] = heading.true_heading.value;
+    doc["depth"] = depth.below_transducer.value;
     
     String output;
     serializeJson(doc, output);
@@ -448,21 +457,11 @@ String BLEManager::buildWindJSON() {
     
     WindData wind = boatState->getWind();
     
-    if (wind.aws.valid && !wind.aws.isStale()) {
-        doc["aws"] = wind.aws.value;
-    }
-    if (wind.awa.valid && !wind.awa.isStale()) {
-        doc["awa"] = wind.awa.value;
-    }
-    if (wind.tws.valid && !wind.tws.isStale()) {
-        doc["tws"] = wind.tws.value;
-    }
-    if (wind.twa.valid && !wind.twa.isStale()) {
-        doc["twa"] = wind.twa.value;
-    }
-    if (wind.twd.valid && !wind.twd.isStale()) {
-        doc["twd"] = wind.twd.value;
-    }
+    doc["aws"] = wind.aws.value;
+    doc["awa"] = wind.awa.value;
+    doc["tws"] = wind.tws.value;
+    doc["twa"] = wind.twa.value;
+    doc["twd"] = wind.twd.value;
     
     String output;
     serializeJson(doc, output);
@@ -472,41 +471,16 @@ String BLEManager::buildWindJSON() {
 String BLEManager::buildAutopilotJSON() {
     JsonDocument doc;
     
-    AutopilotData autopilot = boatState->getAutopilot();
+    AutopilotData ap = boatState->getAutopilot();
     
-    if (autopilot.valid && !autopilot.isStale()) {
-        doc["mode"] = autopilot.mode;
-        doc["status"] = autopilot.status;
-        
-        if (autopilot.heading_target.valid) {
-            doc["target"] = autopilot.heading_target.value;
-        }
-        if (autopilot.rudder_angle.valid) {
-            doc["rudder"] = autopilot.rudder_angle.value;
-        }
-    }
+    doc["mode"] = ap.mode;
+    doc["status"] = ap.status;
+    doc["heading_target"] = ap.heading_target.value;
+    doc["wind_target"] = ap.wind_angle_target.value;
+    doc["rudder"] = ap.rudder_angle.value;
+    doc["locked_heading"] = ap.locked_heading.value;
     
     String output;
     serializeJson(doc, output);
     return output;
-}
-
-bool BLEManager::hasAutopilotCommand() {
-    xSemaphoreTake(commandMutex, portMAX_DELAY);
-    bool hasCmd = (pendingCommand.type != AutopilotCommand::NONE);
-    xSemaphoreGive(commandMutex);
-    return hasCmd;
-}
-
-AutopilotCommand BLEManager::getAutopilotCommand() {
-    xSemaphoreTake(commandMutex, portMAX_DELAY);
-    AutopilotCommand cmd = pendingCommand;
-    pendingCommand.type = AutopilotCommand::NONE;  // Clear after reading
-    xSemaphoreGive(commandMutex);
-    return cmd;
-}
-
-void BLEManager::update() {
-    // Called periodically from main loop if needed
-    // Currently all updates are handled by the update task
 }

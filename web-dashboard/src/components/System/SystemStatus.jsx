@@ -128,6 +128,13 @@ export function SystemStatus() {
           <div className="value">{status.uart.baud}</div>
           <div className="label">baud</div>
         </div>
+        <div className="status-card">
+          <h3>Bluetooth BLE</h3>
+          <div className="value">{status.ble.enabled ? '🟢 Enabled' : '⚫ Disabled'}</div>
+            <div className="label">Advertising: {status.ble.advertising ? 'Yes' : 'No'}</div>
+            <div className="label">Clients: {status.ble.connected_devices || 0}</div>
+            <div className="label">Device: {status.ble.device_name || 'N/A'}</div>
+          </div>
       </div>
     </div>
   );

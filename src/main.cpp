@@ -23,7 +23,7 @@ UARTHandler uartHandler;
 NMEAParser nmeaParser;
 TCPServer tcpServer;
 BLEManager bleManager;
-WebServer webServer(&configManager, &wifiManager, &tcpServer, &uartHandler, &nmeaParser, &bleManager);
+WebServer webServer(&configManager, &wifiManager, &tcpServer, &uartHandler, &nmeaParser, &boatState, &bleManager);
 
 // Message queue for NMEA sentences
 QueueHandle_t nmeaQueue;

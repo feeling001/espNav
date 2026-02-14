@@ -44,31 +44,34 @@ struct AutopilotCommand {
     AutopilotCommand() : type(NONE), timestamp(0) {}
 };
 
-// BLE Server callbacks
-class BLEServerCallbacks : public BLEServerCallbacks {
+// Forward declaration
+class BLEManager;
+
+// Custom BLE Server callbacks (renamed to avoid conflict with library class)
+class CustomBLEServerCallbacks : public BLEServerCallbacks {
 public:
-    BLEServerCallbacks(class BLEManager* manager);
+    CustomBLEServerCallbacks(BLEManager* manager);
     void onConnect(BLEServer* pServer) override;
     void onDisconnect(BLEServer* pServer) override;
     
 private:
-    class BLEManager* bleManager;
+    BLEManager* bleManager;
 };
 
 // Autopilot command characteristic callback
 class AutopilotCommandCallbacks : public BLECharacteristicCallbacks {
 public:
-    AutopilotCommandCallbacks(class BLEManager* manager);
+    AutopilotCommandCallbacks(BLEManager* manager);
     void onWrite(BLECharacteristic* pCharacteristic) override;
     
 private:
-    class BLEManager* bleManager;
+    BLEManager* bleManager;
 };
 
-// BLE Security callbacks
-class BLESecurityCallbacks : public BLESecurityCallbacks {
+// Custom BLE Security callbacks (renamed to avoid conflict with library class)
+class CustomBLESecurityCallbacks : public BLESecurityCallbacks {
 public:
-    BLESecurityCallbacks(class BLEManager* manager);
+    CustomBLESecurityCallbacks(BLEManager* manager);
     
     uint32_t onPassKeyRequest() override;
     void onPassKeyNotify(uint32_t pass_key) override;
@@ -77,7 +80,7 @@ public:
     void onAuthenticationComplete(esp_ble_auth_cmpl_t auth_cmpl) override;
     
 private:
-    class BLEManager* bleManager;
+    BLEManager* bleManager;
 };
 
 class BLEManager {
@@ -106,9 +109,9 @@ public:
     AutopilotCommand getAutopilotCommand();
     
     // Friend classes
-    friend class BLEServerCallbacks;
+    friend class CustomBLEServerCallbacks;
     friend class AutopilotCommandCallbacks;
-    friend class BLESecurityCallbacks;
+    friend class CustomBLESecurityCallbacks;
     
 private:
     // Core BLE objects
@@ -126,10 +129,10 @@ private:
     BLECharacteristic* pAutopilotDataChar;
     BLECharacteristic* pAutopilotCmdChar;
     
-    // Callbacks
-    BLEServerCallbacks* serverCallbacks;
+    // Callbacks (using renamed classes)
+    CustomBLEServerCallbacks* serverCallbacks;
     AutopilotCommandCallbacks* autopilotCmdCallbacks;
-    BLESecurityCallbacks* securityCallbacks;
+    CustomBLESecurityCallbacks* securityCallbacks;
     
     // State
     BLEConfig config;
