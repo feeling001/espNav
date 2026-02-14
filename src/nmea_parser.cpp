@@ -4,7 +4,8 @@
 NMEAParser::NMEAParser(BoatState* bs) : validSentences(0), invalidSentences(0), boatState(bs) {}
 
 bool NMEAParser::parseLine(const char* line, NMEASentence& out) {
-    if (!line || line[0] != '$') {
+    // CORRECTION: Accepter les messages commençant par '$' (NMEA standard) ou '!' (AIS)
+    if (!line || (line[0] != '$' && line[0] != '!')) {
         invalidSentences++;
         return false;
     }
@@ -52,6 +53,9 @@ bool NMEAParser::parseLine(const char* line, NMEASentence& out) {
                 parseVHW(line);
             } else if (strstr(out.type, "VLW")) {
                 parseVLW(line);
+            } else if (strstr(out.type, "AIVDM") || strstr(out.type, "AIVDO")) {
+                // Messages AIS - décoder
+                parseAIVDM(line);
             }
         }
     } else {
@@ -91,7 +95,7 @@ uint8_t NMEAParser::calculateChecksum(const char* data, size_t len) {
 }
 
 void NMEAParser::extractSentenceType(const char* line, char* type, size_t maxLen) {
-    // Skip '$'
+    // Skip '$' or '!' 
     const char* ptr = line + 1;
     
     // Extract until ',' or end
@@ -215,16 +219,13 @@ void NMEAParser::parseGGA(const char* line) {
     parseField(line, 8, buffer, sizeof(buffer));
     float hdop = atof(buffer);
     
-    // Update BoatState
-    if (strlen(lat) > 0 && strlen(lon) > 0) {
+    if (fixQuality > 0 && strlen(lat) > 0 && strlen(lon) > 0) {
         float latitude = parseLatitude(lat, ns);
         float longitude = parseLongitude(lon, ew);
+        
         boatState->setGPSPosition(latitude, longitude);
-    }
-    
-    boatState->setGPSFixQuality(fixQuality);
-    boatState->setGPSSatellites(satellites);
-    if (hdop > 0) {
+        boatState->setGPSSatellites(satellites);
+        boatState->setGPSFixQuality(fixQuality);
         boatState->setGPSHDOP(hdop);
     }
 }
@@ -250,15 +251,14 @@ void NMEAParser::parseRMC(const char* line) {
     parseField(line, 5, lon, sizeof(lon));
     parseField(line, 6, ew, sizeof(ew));
     
-    // Field 7: Speed (knots)
+    // Field 7: Speed over ground (knots)
     parseField(line, 7, buffer, sizeof(buffer));
     float sog = parseKnots(buffer);
     
-    // Field 8: Course (degrees)
+    // Field 8: Course over ground (degrees)
     parseField(line, 8, buffer, sizeof(buffer));
     float cog = parseDegrees(buffer);
     
-    // Update BoatState
     if (strlen(lat) > 0 && strlen(lon) > 0) {
         float latitude = parseLatitude(lat, ns);
         float longitude = parseLongitude(lon, ew);
@@ -279,6 +279,12 @@ void NMEAParser::parseRMC(const char* line) {
 void NMEAParser::parseGLL(const char* line) {
     char buffer[32];
     
+    // Field 6: Status (A=valid, V=invalid)
+    parseField(line, 6, buffer, sizeof(buffer));
+    if (buffer[0] != 'A') {
+        return;
+    }
+    
     // Field 1,2: Latitude
     char lat[16], ns[2];
     parseField(line, 1, lat, sizeof(lat));
@@ -289,13 +295,6 @@ void NMEAParser::parseGLL(const char* line) {
     parseField(line, 3, lon, sizeof(lon));
     parseField(line, 4, ew, sizeof(ew));
     
-    // Field 6: Status (A=valid, V=invalid)
-    parseField(line, 6, buffer, sizeof(buffer));
-    if (buffer[0] != 'A') {
-        return;
-    }
-    
-    // Update BoatState
     if (strlen(lat) > 0 && strlen(lon) > 0) {
         float latitude = parseLatitude(lat, ns);
         float longitude = parseLongitude(lon, ew);
@@ -308,21 +307,20 @@ void NMEAParser::parseGLL(const char* line) {
 void NMEAParser::parseVTG(const char* line) {
     char buffer[32];
     
-    // Field 1: True track (degrees)
+    // Field 1: Course (degrees true)
     parseField(line, 1, buffer, sizeof(buffer));
-    float trueCourse = parseDegrees(buffer);
+    float cog = parseDegrees(buffer);
     
-    // Field 5: Speed in knots
+    // Field 5: Speed (knots)
     parseField(line, 5, buffer, sizeof(buffer));
     float sog = parseKnots(buffer);
     
-    // Update BoatState
-    if (sog >= 0) {
-        boatState->setGPSSOG(sog);
+    if (cog >= 0 && cog < 360) {
+        boatState->setGPSCOG(cog);
     }
     
-    if (trueCourse >= 0 && trueCourse < 360) {
-        boatState->setGPSCOG(trueCourse);
+    if (sog >= 0) {
+        boatState->setGPSSOG(sog);
     }
 }
 
@@ -407,15 +405,9 @@ void NMEAParser::parseMWV(const char* line) {
     parseField(line, 3, buffer, sizeof(buffer));
     float speed = atof(buffer);
     
-    // Field 4: Speed units (N=knots, M=m/s, K=km/h)
+    // Field 4: Units (N=knots, M=m/s, K=km/h)
     parseField(line, 4, buffer, sizeof(buffer));
-    
-    // Convert to knots if needed
-    if (buffer[0] == 'M') {
-        speed = speed * 1.94384;  // m/s to knots
-    } else if (buffer[0] == 'K') {
-        speed = speed * 0.539957; // km/h to knots
-    }
+    char unit = buffer[0];
     
     // Field 5: Status (A=valid)
     parseField(line, 5, buffer, sizeof(buffer));
@@ -423,17 +415,19 @@ void NMEAParser::parseMWV(const char* line) {
         return;
     }
     
-    // Update BoatState
+    // Convert speed to knots if needed
+    if (unit == 'M') {
+        speed = speed * 1.94384;  // m/s to knots
+    } else if (unit == 'K') {
+        speed = speed * 0.539957;  // km/h to knots
+    }
+    
     if (isRelative) {
-        // Apparent wind angle: convert to -180 to +180 range
-        if (angle > 180) {
-            angle = angle - 360;
-        }
         boatState->setApparentWind(speed, angle);
     } else {
-        // True wind - we need to calculate TWA from TWD and heading
-        // For now, just store TWD
-        // Note: This is simplified - proper implementation needs heading
+        // Pour le vent vrai, on utilise l'angle comme direction aussi
+        // car MWV ne donne pas séparément l'angle et la direction
+        boatState->setTrueWind(speed, angle, angle);
     }
 }
 
@@ -442,19 +436,19 @@ void NMEAParser::parseMWV(const char* line) {
 void NMEAParser::parseMWD(const char* line) {
     char buffer[32];
     
-    // Field 1: True wind direction
+    // Field 1: Wind direction (degrees true)
     parseField(line, 1, buffer, sizeof(buffer));
-    float twd = parseDegrees(buffer);
+    float direction = parseDegrees(buffer);
     
-    // Field 5: Wind speed in knots
+    // Field 5: Wind speed (knots)
     parseField(line, 5, buffer, sizeof(buffer));
-    float tws = parseKnots(buffer);
+    float speed = parseKnots(buffer);
     
-    // We have TWD and TWS, but need heading to calculate TWA
-    // For now, store what we have
-    // Note: This is simplified - proper implementation needs heading
-    if (twd >= 0 && twd < 360 && tws >= 0) {
-        boatState->setTrueWind(tws, 0, twd);  // TWA will be calculated if we have heading
+    if (direction >= 0 && direction < 360 && speed >= 0) {
+        // MWD donne la direction du vent, pas l'angle relatif
+        // On calcule l'angle relatif si on a un cap (heading)
+        // Pour l'instant on met 0 pour l'angle
+        boatState->setTrueWind(speed, 0, direction);
     }
 }
 
@@ -463,15 +457,20 @@ void NMEAParser::parseMWD(const char* line) {
 void NMEAParser::parseMTW(const char* line) {
     char buffer[32];
     
-    // Field 1: Temperature
+    // Field 1: Water temperature (degrees)
     parseField(line, 1, buffer, sizeof(buffer));
     float temp = atof(buffer);
     
-    // Field 2: Unit (C=Celsius)
+    // Field 2: Units (C/F)
     parseField(line, 2, buffer, sizeof(buffer));
+    char unit = buffer[0];
     
-    // Convert to Celsius if needed (usually already in C)
-    if (buffer[0] == 'C' && temp > -50 && temp < 50) {
+    // Convert to Celsius if needed
+    if (unit == 'F') {
+        temp = (temp - 32.0) * 5.0 / 9.0;
+    }
+    
+    if (temp > -10 && temp < 50) {  // Sanity check
         boatState->setWaterTemp(temp);
     }
 }
@@ -481,11 +480,11 @@ void NMEAParser::parseMTW(const char* line) {
 void NMEAParser::parseVHW(const char* line) {
     char buffer[32];
     
-    // Field 1: True heading
+    // Field 1: Heading (degrees true)
     parseField(line, 1, buffer, sizeof(buffer));
     float trueHeading = parseDegrees(buffer);
     
-    // Field 3: Magnetic heading
+    // Field 3: Heading (degrees magnetic)
     parseField(line, 3, buffer, sizeof(buffer));
     float magHeading = parseDegrees(buffer);
     
@@ -493,7 +492,6 @@ void NMEAParser::parseVHW(const char* line) {
     parseField(line, 5, buffer, sizeof(buffer));
     float stw = parseKnots(buffer);
     
-    // Update BoatState
     if (trueHeading >= 0 && trueHeading < 360) {
         boatState->setTrueHeading(trueHeading);
     }
@@ -520,7 +518,6 @@ void NMEAParser::parseVLW(const char* line) {
     parseField(line, 3, buffer, sizeof(buffer));
     float trip = atof(buffer);
     
-    // Update BoatState
     if (total >= 0) {
         boatState->setTotal(total);
     }
@@ -528,4 +525,418 @@ void NMEAParser::parseVLW(const char* line) {
     if (trip >= 0) {
         boatState->setTrip(trip);
     }
+}
+
+// ============================================================
+// AIS Decoder
+// ============================================================
+
+// Convertit un caractère AIS 6-bit ASCII en valeur binaire
+uint8_t NMEAParser::aisCharTo6Bit(char c) {
+    if (c >= '0' && c <= 'W') {
+        return c - 48;
+    } else if (c >= '`' && c <= 'w') {
+        return c - 56;
+    }
+    return 0;
+}
+
+// Extrait des bits d'un payload AIS
+uint32_t NMEAParser::extractBits(const uint8_t* payload, int start, int length) {
+    uint32_t result = 0;
+    
+    for (int i = 0; i < length; i++) {
+        int bitIndex = start + i;
+        int byteIndex = bitIndex / 8;
+        int bitInByte = 7 - (bitIndex % 8);
+        
+        if (payload[byteIndex] & (1 << bitInByte)) {
+            result |= (1 << (length - 1 - i));
+        }
+    }
+    
+    return result;
+}
+
+// !AIVDM - AIS VHF Data-link Message
+// Format: !AIVDM,x,x,x,a,payload,x*hh
+void NMEAParser::parseAIVDM(const char* line) {
+    char buffer[128];
+    
+    // Field 1: Total number of sentences
+    parseField(line, 1, buffer, sizeof(buffer));
+    int totalSentences = atoi(buffer);
+    
+    // Field 2: Sentence number
+    parseField(line, 2, buffer, sizeof(buffer));
+    int sentenceNum = atoi(buffer);
+    
+    // Pour l'instant, on traite seulement les messages single-sentence
+    if (totalSentences > 1) {
+        // Multi-sentence messages nécessitent un buffer pour assembler
+        // TODO: Implémenter l'assemblage multi-sentence si nécessaire
+        return;
+    }
+    
+    // Field 5: Payload encapsulé
+    char payload[82];  // Max 82 caractères pour AIS
+    parseField(line, 5, payload, sizeof(payload));
+    
+    int payloadLen = strlen(payload);
+    if (payloadLen == 0) {
+        return;
+    }
+    
+    // Convertir le payload ASCII 6-bit en bytes
+    uint8_t binaryPayload[64];  // Max ~60 bytes pour AIS
+    memset(binaryPayload, 0, sizeof(binaryPayload));
+    
+    for (int i = 0; i < payloadLen; i++) {
+        uint8_t value = aisCharTo6Bit(payload[i]);
+        int bitOffset = i * 6;
+        int byteIndex = bitOffset / 8;
+        int bitInByte = bitOffset % 8;
+        
+        // Placer les 6 bits dans le bon emplacement
+        binaryPayload[byteIndex] |= (value >> bitInByte);
+        if (bitInByte > 2 && byteIndex + 1 < sizeof(binaryPayload)) {
+            binaryPayload[byteIndex + 1] |= (value << (8 - bitInByte));
+        }
+    }
+    
+    // Extraire le Message Type (bits 0-5)
+    uint8_t messageType = extractBits(binaryPayload, 0, 6);
+    
+    // Décoder selon le type de message
+    switch (messageType) {
+        case 1:
+        case 2:
+        case 3:
+            // Position Report Class A
+            decodeAISType1(binaryPayload, payloadLen);
+            break;
+            
+        case 5:
+            // Static and Voyage Related Data
+            decodeAISType5(binaryPayload, payloadLen);
+            break;
+            
+        case 18:
+            // Standard Class B Position Report
+            decodeAISType18(binaryPayload, payloadLen);
+            break;
+            
+        case 24:
+            // Static Data Report
+            decodeAISType24(binaryPayload, payloadLen);
+            break;
+            
+        default:
+            // Type non supporté pour l'instant
+            break;
+    }
+}
+
+// Décode AIS Type 1/2/3 - Position Report Class A
+void NMEAParser::decodeAISType1(const uint8_t* payload, int payloadLen) {
+    AISTarget target;
+    
+    // MMSI (bits 8-37)
+    target.mmsi = extractBits(payload, 8, 30);
+    
+    // SOG (bits 50-59) en 1/10 knots
+    uint32_t sogRaw = extractBits(payload, 50, 10);
+    if (sogRaw != 1023) {  // 1023 = not available
+        target.sog = sogRaw / 10.0;
+    }
+    
+    // Longitude (bits 61-88) en 1/10000 minutes
+    int32_t lonRaw = extractBits(payload, 61, 28);
+    if (lonRaw & 0x08000000) {  // Sign extend si négatif
+        lonRaw |= 0xF0000000;
+    }
+    if (lonRaw != 0x6791AC0) {  // 181° = not available
+        target.lon = lonRaw / 600000.0;
+    }
+    
+    // Latitude (bits 89-115) en 1/10000 minutes
+    int32_t latRaw = extractBits(payload, 89, 27);
+    if (latRaw & 0x04000000) {  // Sign extend si négatif
+        latRaw |= 0xF8000000;
+    }
+    if (latRaw != 0x3412140) {  // 91° = not available
+        target.lat = latRaw / 600000.0;
+    }
+    
+    // COG (bits 116-127) en 1/10 degrees
+    uint32_t cogRaw = extractBits(payload, 116, 12);
+    if (cogRaw != 3600) {  // 3600 = not available
+        target.cog = cogRaw / 10.0;
+    }
+    
+    // True Heading (bits 128-136)
+    uint32_t headingRaw = extractBits(payload, 128, 9);
+    if (headingRaw != 511) {  // 511 = not available
+        target.heading = headingRaw;
+    }
+    
+    target.timestamp = millis();
+    
+    // Si on a notre propre position GPS, calculer distance et bearing
+    GPSData ownGPS = boatState->getGPS();
+    if (ownGPS.position.lat.valid && ownGPS.position.lon.valid && 
+        target.lat != 0 && target.lon != 0) {
+        
+        // Calcul de distance et bearing (formule haversine simplifiée)
+        float lat1 = ownGPS.position.lat.value * PI / 180.0;
+        float lon1 = ownGPS.position.lon.value * PI / 180.0;
+        float lat2 = target.lat * PI / 180.0;
+        float lon2 = target.lon * PI / 180.0;
+        
+        float dlat = lat2 - lat1;
+        float dlon = lon2 - lon1;
+        
+        // Distance (haversine)
+        float a = sin(dlat/2) * sin(dlat/2) + 
+                  cos(lat1) * cos(lat2) * sin(dlon/2) * sin(dlon/2);
+        float c = 2 * atan2(sqrt(a), sqrt(1-a));
+        target.distance = 3440.065 * c;  // En nautical miles (rayon terre = 3440.065 nm)
+        
+        // Bearing
+        float y = sin(dlon) * cos(lat2);
+        float x = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(dlon);
+        target.bearing = atan2(y, x) * 180.0 / PI;
+        if (target.bearing < 0) target.bearing += 360;
+        
+        // CPA / TCPA calculation (simplifié)
+        if (ownGPS.sog.valid && ownGPS.cog.valid && target.sog > 0) {
+            // Vecteurs de vitesse
+            float ownVx = ownGPS.sog.value * sin(ownGPS.cog.value * PI / 180.0);
+            float ownVy = ownGPS.sog.value * cos(ownGPS.cog.value * PI / 180.0);
+            float targetVx = target.sog * sin(target.cog * PI / 180.0);
+            float targetVy = target.sog * cos(target.cog * PI / 180.0);
+            
+            // Vitesse relative
+            float relVx = targetVx - ownVx;
+            float relVy = targetVy - ownVy;
+            float relSpeed = sqrt(relVx * relVx + relVy * relVy);
+            
+            if (relSpeed > 0.1) {
+                // Position relative
+                float relX = target.distance * sin(target.bearing * PI / 180.0);
+                float relY = target.distance * cos(target.bearing * PI / 180.0);
+                
+                // TCPA
+                target.tcpa = -(relX * relVx + relY * relVy) / (relSpeed * relSpeed);
+                target.tcpa *= 60.0;  // Convertir en minutes
+                
+                if (target.tcpa > 0) {
+                    // CPA
+                    float cpaX = relX + relVx * (target.tcpa / 60.0);
+                    float cpaY = relY + relVy * (target.tcpa / 60.0);
+                    target.cpa = sqrt(cpaX * cpaX + cpaY * cpaY);
+                } else {
+                    target.cpa = target.distance;  // Déjà passé le CPA
+                }
+            }
+        }
+    }
+    
+    // Ajouter ou mettre à jour la cible
+    if (target.mmsi != 0) {
+        boatState->addOrUpdateAISTarget(target);
+    }
+}
+
+// Décode AIS Type 5 - Static and Voyage Related Data
+void NMEAParser::decodeAISType5(const uint8_t* payload, int payloadLen) {
+    // MMSI (bits 8-37)
+    uint32_t mmsi = extractBits(payload, 8, 30);
+    
+    // Call sign (bits 70-111) - 7 caractères 6-bit
+    char callsign[8] = {0};
+    for (int i = 0; i < 7; i++) {
+        uint8_t c = extractBits(payload, 70 + i * 6, 6);
+        if (c >= 1 && c <= 26) {
+            callsign[i] = 'A' + c - 1;
+        } else if (c >= 32) {
+            callsign[i] = c;
+        } else {
+            callsign[i] = ' ';
+        }
+    }
+    
+    // Ship name (bits 112-231) - 20 caractères 6-bit
+    char name[21] = {0};
+    for (int i = 0; i < 20; i++) {
+        uint8_t c = extractBits(payload, 112 + i * 6, 6);
+        if (c >= 1 && c <= 26) {
+            name[i] = 'A' + c - 1;
+        } else if (c >= 32 && c < 64) {
+            name[i] = c;
+        } else if (c == 0) {
+            name[i] = ' ';
+        } else {
+            name[i] = ' ';
+        }
+    }
+    
+    // Trim spaces
+    for (int i = 19; i >= 0; i--) {
+        if (name[i] != ' ') break;
+        name[i] = '\0';
+    }
+    
+    // Chercher la cible existante et mettre à jour le nom
+    AISData ais = boatState->getAIS();
+    for (int i = 0; i < ais.targetCount; i++) {
+        if (ais.targets[i].mmsi == mmsi) {
+            ais.targets[i].name = String(name);
+            ais.targets[i].timestamp = millis();
+            boatState->addOrUpdateAISTarget(ais.targets[i]);
+            break;
+        }
+    }
+}
+
+// Décode AIS Type 18 - Standard Class B Position Report
+void NMEAParser::decodeAISType18(const uint8_t* payload, int payloadLen) {
+    // Structure similaire au Type 1, mais format Class B
+    AISTarget target;
+    
+    // MMSI (bits 8-37)
+    target.mmsi = extractBits(payload, 8, 30);
+    
+    // SOG (bits 46-55) en 1/10 knots
+    uint32_t sogRaw = extractBits(payload, 46, 10);
+    if (sogRaw != 1023) {
+        target.sog = sogRaw / 10.0;
+    }
+    
+    // Longitude (bits 57-84) en 1/10000 minutes
+    int32_t lonRaw = extractBits(payload, 57, 28);
+    if (lonRaw & 0x08000000) {
+        lonRaw |= 0xF0000000;
+    }
+    if (lonRaw != 0x6791AC0) {
+        target.lon = lonRaw / 600000.0;
+    }
+    
+    // Latitude (bits 85-111) en 1/10000 minutes
+    int32_t latRaw = extractBits(payload, 85, 27);
+    if (latRaw & 0x04000000) {
+        latRaw |= 0xF8000000;
+    }
+    if (latRaw != 0x3412140) {
+        target.lat = latRaw / 600000.0;
+    }
+    
+    // COG (bits 112-123) en 1/10 degrees
+    uint32_t cogRaw = extractBits(payload, 112, 12);
+    if (cogRaw != 3600) {
+        target.cog = cogRaw / 10.0;
+    }
+    
+    // True Heading (bits 124-132)
+    uint32_t headingRaw = extractBits(payload, 124, 9);
+    if (headingRaw != 511) {
+        target.heading = headingRaw;
+    }
+    
+    target.timestamp = millis();
+    
+    // Calculs de distance/bearing/CPA/TCPA (même code que Type 1)
+    GPSData ownGPS = boatState->getGPS();
+    if (ownGPS.position.lat.valid && ownGPS.position.lon.valid && 
+        target.lat != 0 && target.lon != 0) {
+        
+        float lat1 = ownGPS.position.lat.value * PI / 180.0;
+        float lon1 = ownGPS.position.lon.value * PI / 180.0;
+        float lat2 = target.lat * PI / 180.0;
+        float lon2 = target.lon * PI / 180.0;
+        
+        float dlat = lat2 - lat1;
+        float dlon = lon2 - lon1;
+        
+        float a = sin(dlat/2) * sin(dlat/2) + 
+                  cos(lat1) * cos(lat2) * sin(dlon/2) * sin(dlon/2);
+        float c = 2 * atan2(sqrt(a), sqrt(1-a));
+        target.distance = 3440.065 * c;
+        
+        float y = sin(dlon) * cos(lat2);
+        float x = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(dlon);
+        target.bearing = atan2(y, x) * 180.0 / PI;
+        if (target.bearing < 0) target.bearing += 360;
+        
+        if (ownGPS.sog.valid && ownGPS.cog.valid && target.sog > 0) {
+            float ownVx = ownGPS.sog.value * sin(ownGPS.cog.value * PI / 180.0);
+            float ownVy = ownGPS.sog.value * cos(ownGPS.cog.value * PI / 180.0);
+            float targetVx = target.sog * sin(target.cog * PI / 180.0);
+            float targetVy = target.sog * cos(target.cog * PI / 180.0);
+            
+            float relVx = targetVx - ownVx;
+            float relVy = targetVy - ownVy;
+            float relSpeed = sqrt(relVx * relVx + relVy * relVy);
+            
+            if (relSpeed > 0.1) {
+                float relX = target.distance * sin(target.bearing * PI / 180.0);
+                float relY = target.distance * cos(target.bearing * PI / 180.0);
+                
+                target.tcpa = -(relX * relVx + relY * relVy) / (relSpeed * relSpeed) * 60.0;
+                
+                if (target.tcpa > 0) {
+                    float cpaX = relX + relVx * (target.tcpa / 60.0);
+                    float cpaY = relY + relVy * (target.tcpa / 60.0);
+                    target.cpa = sqrt(cpaX * cpaX + cpaY * cpaY);
+                } else {
+                    target.cpa = target.distance;
+                }
+            }
+        }
+    }
+    
+    if (target.mmsi != 0) {
+        boatState->addOrUpdateAISTarget(target);
+    }
+}
+
+// Décode AIS Type 24 - Static Data Report
+void NMEAParser::decodeAISType24(const uint8_t* payload, int payloadLen) {
+    // Part Number (bits 38-39)
+    uint8_t partNum = extractBits(payload, 38, 2);
+    
+    if (partNum == 0) {
+        // Part A - Ship Name
+        uint32_t mmsi = extractBits(payload, 8, 30);
+        
+        char name[21] = {0};
+        for (int i = 0; i < 20; i++) {
+            uint8_t c = extractBits(payload, 40 + i * 6, 6);
+            if (c >= 1 && c <= 26) {
+                name[i] = 'A' + c - 1;
+            } else if (c >= 32 && c < 64) {
+                name[i] = c;
+            } else {
+                name[i] = ' ';
+            }
+        }
+        
+        // Trim spaces
+        for (int i = 19; i >= 0; i--) {
+            if (name[i] != ' ') break;
+            name[i] = '\0';
+        }
+        
+        // Mettre à jour le nom
+        AISData ais = boatState->getAIS();
+        for (int i = 0; i < ais.targetCount; i++) {
+            if (ais.targets[i].mmsi == mmsi) {
+                ais.targets[i].name = String(name);
+                ais.targets[i].timestamp = millis();
+                boatState->addOrUpdateAISTarget(ais.targets[i]);
+                break;
+            }
+        }
+    }
+    // Part B contient call sign et dimensions - on peut l'ignorer pour l'instant
 }

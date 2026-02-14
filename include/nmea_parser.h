@@ -34,6 +34,17 @@ private:
     void parseVHW(const char* line);  // Water Speed and Heading
     void parseVLW(const char* line);  // Distance Traveled through Water
     
+    // AIS parser
+    void parseAIVDM(const char* line);  // AIS VHF Data-link Message
+    
+    // AIS helper functions
+    uint8_t aisCharTo6Bit(char c);
+    uint32_t extractBits(const uint8_t* payload, int start, int length);
+    void decodeAISType1(const uint8_t* payload, int payloadLen);  // Position Report
+    void decodeAISType5(const uint8_t* payload, int payloadLen);  // Ship Static Data
+    void decodeAISType18(const uint8_t* payload, int payloadLen); // Standard Class B Position Report
+    void decodeAISType24(const uint8_t* payload, int payloadLen); // Static Data Report
+    
     // Utility functions
     float parseLatitude(const char* lat, const char* ns);
     float parseLongitude(const char* lon, const char* ew);
