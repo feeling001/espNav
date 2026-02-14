@@ -6,8 +6,8 @@
 #include "nmea_parser.h"
 #include <ArduinoJson.h>
 
-WebServer::WebServer(ConfigManager* cm, WiFiManager* wm, TCPServer* tcp, UARTHandler* uart, NMEAParser* nmea) 
-    : configManager(cm), wifiManager(wm), tcpServer(tcp), uartHandler(uart), nmeaParser(nmea), running(false) {
+WebServer::WebServer(ConfigManager* cm, WiFiManager* wm, TCPServer* tcp, UARTHandler* uart, NMEAParser* nmea, BoatState* bs) 
+    : configManager(cm), wifiManager(wm), tcpServer(tcp), uartHandler(uart), nmeaParser(nmea), boatState(bs), running(false) {
     server = new AsyncWebServer(WEB_SERVER_PORT);
     wsNMEA = new AsyncWebSocket("/ws/nmea");
 }
@@ -41,6 +41,7 @@ void WebServer::start() {
     Serial.println("[Web] ═══════════════════════════════════════");
     Serial.println("[Web] Server started on port 80");
     Serial.println("[Web] Available endpoints:");
+    Serial.println("[Web]   Configuration:");
     Serial.println("[Web]   - GET  /api/config/wifi      (Get WiFi Config)");
     Serial.println("[Web]   - POST /api/config/wifi      (Set WiFi Config)");
     Serial.println("[Web]   - GET  /api/config/serial    (Get Serial Config)");
@@ -49,6 +50,12 @@ void WebServer::start() {
     Serial.println("[Web]   - POST /api/restart          (Restart Device)");
     Serial.println("[Web]   - POST /api/wifi/scan        (Start WiFi Scan)");
     Serial.println("[Web]   - GET  /api/wifi/scan        (Get Scan Results)");
+    Serial.println("[Web]   Boat Data:");
+    Serial.println("[Web]   - GET  /api/boat/navigation  (GPS, Speed, Depth, Heading)");
+    Serial.println("[Web]   - GET  /api/boat/wind        (Apparent & True Wind)");
+    Serial.println("[Web]   - GET  /api/boat/ais         (AIS Targets)");
+    Serial.println("[Web]   - GET  /api/boat/state       (All Boat Data)");
+    Serial.println("[Web]   WebSocket:");
     Serial.println("[Web]   - WS   /ws/nmea              (NMEA Stream)");
     Serial.println("[Web] ═══════════════════════════════════════");
 }
@@ -69,6 +76,10 @@ void WebServer::registerRoutes() {
     // REST API endpoints (MUST be registered BEFORE static files!)
     // ============================================================
     Serial.println("[Web]   Registering API endpoints...");
+    
+    // ────────────────────────────────────────────────────────────
+    // Configuration Endpoints
+    // ────────────────────────────────────────────────────────────
     
     // WiFi Configuration
     server->on("/api/config/wifi", HTTP_GET, [this](AsyncWebServerRequest* request) {
@@ -115,6 +126,26 @@ void WebServer::registerRoutes() {
     
     server->on("/api/wifi/scan", HTTP_GET, [this](AsyncWebServerRequest* request) {
         this->handleGetWiFiScanResults(request);
+    });
+    
+    // ────────────────────────────────────────────────────────────
+    // Boat State Endpoints (NEW!)
+    // ────────────────────────────────────────────────────────────
+    
+    server->on("/api/boat/navigation", HTTP_GET, [this](AsyncWebServerRequest* request) {
+        this->handleGetNavigation(request);
+    });
+    
+    server->on("/api/boat/wind", HTTP_GET, [this](AsyncWebServerRequest* request) {
+        this->handleGetWind(request);
+    });
+    
+    server->on("/api/boat/ais", HTTP_GET, [this](AsyncWebServerRequest* request) {
+        this->handleGetAIS(request);
+    });
+    
+    server->on("/api/boat/state", HTTP_GET, [this](AsyncWebServerRequest* request) {
+        this->handleGetBoatState(request);
     });
     
     Serial.println("[Web]   ✓ All API routes registered");
@@ -184,7 +215,7 @@ void WebServer::broadcastNMEA(const char* sentence) {
 }
 
 // ============================================================
-// REST API Handlers Implementation
+// Configuration API Handlers
 // ============================================================
 
 void WebServer::handleGetWiFiConfig(AsyncWebServerRequest* request) {
@@ -420,4 +451,314 @@ void WebServer::handleGetWiFiScanResults(AsyncWebServerRequest* request) {
     serializeJson(doc, response);
     
     request->send(200, "application/json", response);
+}
+
+// ════════════════════════════════════════════════════════════
+// BOAT STATE API HANDLERS (NEW!)
+// ════════════════════════════════════════════════════════════
+
+/**
+ * GET /api/boat/navigation
+ * 
+ * Returns critical navigation data:
+ * - GPS position (lat/lon)
+ * - Speed Over Ground (SOG)
+ * - Course Over Ground (COG)
+ * - Speed Through Water (STW)
+ * - True Heading
+ * - Depth
+ * - GPS quality indicators
+ */
+void WebServer::handleGetNavigation(AsyncWebServerRequest* request) {
+    Serial.println("[Web] → GET /api/boat/navigation");
+    
+    if (!boatState) {
+        request->send(500, "application/json", "{\"error\":\"BoatState not available\"}");
+        return;
+    }
+    
+    JsonDocument doc;
+    
+    // Get data from BoatState
+    GPSData gps = boatState->getGPS();
+    SpeedData speed = boatState->getSpeed();
+    HeadingData heading = boatState->getHeading();
+    DepthData depth = boatState->getDepth();
+    
+    // GPS Position
+    JsonObject position = doc["position"].to<JsonObject>();
+    if (gps.position.lat.valid && !gps.position.lat.isStale()) {
+        position["latitude"] = gps.position.lat.value;
+        position["longitude"] = gps.position.lon.value;
+        position["age"] = (millis() - gps.position.lat.timestamp) / 1000.0;
+    } else {
+        position["latitude"] = nullptr;
+        position["longitude"] = nullptr;
+        position["age"] = nullptr;
+    }
+    
+    // Speed Over Ground
+    if (gps.sog.valid && !gps.sog.isStale()) {
+        doc["sog"]["value"] = gps.sog.value;
+        doc["sog"]["unit"] = gps.sog.unit;
+        doc["sog"]["age"] = (millis() - gps.sog.timestamp) / 1000.0;
+    } else {
+        doc["sog"]["value"] = nullptr;
+        doc["sog"]["unit"] = "kn";
+        doc["sog"]["age"] = nullptr;
+    }
+    
+    // Course Over Ground
+    if (gps.cog.valid && !gps.cog.isStale()) {
+        doc["cog"]["value"] = gps.cog.value;
+        doc["cog"]["unit"] = gps.cog.unit;
+        doc["cog"]["age"] = (millis() - gps.cog.timestamp) / 1000.0;
+    } else {
+        doc["cog"]["value"] = nullptr;
+        doc["cog"]["unit"] = "deg";
+        doc["cog"]["age"] = nullptr;
+    }
+    
+    // Speed Through Water
+    if (speed.stw.valid && !speed.stw.isStale()) {
+        doc["stw"]["value"] = speed.stw.value;
+        doc["stw"]["unit"] = speed.stw.unit;
+        doc["stw"]["age"] = (millis() - speed.stw.timestamp) / 1000.0;
+    } else {
+        doc["stw"]["value"] = nullptr;
+        doc["stw"]["unit"] = "kn";
+        doc["stw"]["age"] = nullptr;
+    }
+    
+    // True Heading
+    if (heading.true_heading.valid && !heading.true_heading.isStale()) {
+        doc["heading"]["value"] = heading.true_heading.value;
+        doc["heading"]["unit"] = heading.true_heading.unit;
+        doc["heading"]["age"] = (millis() - heading.true_heading.timestamp) / 1000.0;
+    } else {
+        doc["heading"]["value"] = nullptr;
+        doc["heading"]["unit"] = "deg";
+        doc["heading"]["age"] = nullptr;
+    }
+    
+    // Depth
+    if (depth.below_transducer.valid && !depth.below_transducer.isStale()) {
+        doc["depth"]["value"] = depth.below_transducer.value;
+        doc["depth"]["unit"] = depth.below_transducer.unit;
+        doc["depth"]["age"] = (millis() - depth.below_transducer.timestamp) / 1000.0;
+    } else {
+        doc["depth"]["value"] = nullptr;
+        doc["depth"]["unit"] = "m";
+        doc["depth"]["age"] = nullptr;
+    }
+    
+    // GPS Quality
+    JsonObject quality = doc["gps_quality"].to<JsonObject>();
+    if (gps.satellites.valid && !gps.satellites.isStale()) {
+        quality["satellites"] = (int)gps.satellites.value;
+    } else {
+        quality["satellites"] = nullptr;
+    }
+    
+    if (gps.fix_quality.valid && !gps.fix_quality.isStale()) {
+        quality["fix_quality"] = (int)gps.fix_quality.value;
+    } else {
+        quality["fix_quality"] = nullptr;
+    }
+    
+    if (gps.hdop.valid && !gps.hdop.isStale()) {
+        quality["hdop"] = gps.hdop.value;
+    } else {
+        quality["hdop"] = nullptr;
+    }
+    
+    // Trip & Total distance
+    if (speed.trip.valid && !speed.trip.isStale()) {
+        doc["trip"]["value"] = speed.trip.value;
+        doc["trip"]["unit"] = speed.trip.unit;
+    } else {
+        doc["trip"]["value"] = nullptr;
+        doc["trip"]["unit"] = "nm";
+    }
+    
+    if (speed.total.valid && !speed.total.isStale()) {
+        doc["total"]["value"] = speed.total.value;
+        doc["total"]["unit"] = speed.total.unit;
+    } else {
+        doc["total"]["value"] = nullptr;
+        doc["total"]["unit"] = "nm";
+    }
+    
+    String response;
+    serializeJson(doc, response);
+    
+    request->send(200, "application/json", response);
+}
+
+/**
+ * GET /api/boat/wind
+ * 
+ * Returns wind data:
+ * - Apparent Wind Speed (AWS)
+ * - Apparent Wind Angle (AWA)
+ * - True Wind Speed (TWS) - calculated
+ * - True Wind Angle (TWA) - calculated
+ * - True Wind Direction (TWD) - calculated
+ */
+void WebServer::handleGetWind(AsyncWebServerRequest* request) {
+    Serial.println("[Web] → GET /api/boat/wind");
+    
+    if (!boatState) {
+        request->send(500, "application/json", "{\"error\":\"BoatState not available\"}");
+        return;
+    }
+    
+    JsonDocument doc;
+    
+    // Get wind data from BoatState
+    WindData wind = boatState->getWind();
+    
+    // Apparent Wind Speed
+    if (wind.aws.valid && !wind.aws.isStale()) {
+        doc["apparent"]["speed"]["value"] = wind.aws.value;
+        doc["apparent"]["speed"]["unit"] = wind.aws.unit;
+        doc["apparent"]["speed"]["age"] = (millis() - wind.aws.timestamp) / 1000.0;
+    } else {
+        doc["apparent"]["speed"]["value"] = nullptr;
+        doc["apparent"]["speed"]["unit"] = "kn";
+        doc["apparent"]["speed"]["age"] = nullptr;
+    }
+    
+    // Apparent Wind Angle
+    if (wind.awa.valid && !wind.awa.isStale()) {
+        doc["apparent"]["angle"]["value"] = wind.awa.value;
+        doc["apparent"]["angle"]["unit"] = wind.awa.unit;
+        doc["apparent"]["angle"]["age"] = (millis() - wind.awa.timestamp) / 1000.0;
+    } else {
+        doc["apparent"]["angle"]["value"] = nullptr;
+        doc["apparent"]["angle"]["unit"] = "deg";
+        doc["apparent"]["angle"]["age"] = nullptr;
+    }
+    
+    // True Wind Speed
+    if (wind.tws.valid && !wind.tws.isStale()) {
+        doc["true"]["speed"]["value"] = wind.tws.value;
+        doc["true"]["speed"]["unit"] = wind.tws.unit;
+        doc["true"]["speed"]["age"] = (millis() - wind.tws.timestamp) / 1000.0;
+    } else {
+        doc["true"]["speed"]["value"] = nullptr;
+        doc["true"]["speed"]["unit"] = "kn";
+        doc["true"]["speed"]["age"] = nullptr;
+    }
+    
+    // True Wind Angle
+    if (wind.twa.valid && !wind.twa.isStale()) {
+        doc["true"]["angle"]["value"] = wind.twa.value;
+        doc["true"]["angle"]["unit"] = wind.twa.unit;
+        doc["true"]["angle"]["age"] = (millis() - wind.twa.timestamp) / 1000.0;
+    } else {
+        doc["true"]["angle"]["value"] = nullptr;
+        doc["true"]["angle"]["unit"] = "deg";
+        doc["true"]["angle"]["age"] = nullptr;
+    }
+    
+    // True Wind Direction
+    if (wind.twd.valid && !wind.twd.isStale()) {
+        doc["true"]["direction"]["value"] = wind.twd.value;
+        doc["true"]["direction"]["unit"] = wind.twd.unit;
+        doc["true"]["direction"]["age"] = (millis() - wind.twd.timestamp) / 1000.0;
+    } else {
+        doc["true"]["direction"]["value"] = nullptr;
+        doc["true"]["direction"]["unit"] = "deg";
+        doc["true"]["direction"]["age"] = nullptr;
+    }
+    
+    String response;
+    serializeJson(doc, response);
+    
+    request->send(200, "application/json", response);
+}
+
+/**
+ * GET /api/boat/ais
+ * 
+ * Returns AIS targets data:
+ * - List of all active AIS targets
+ * - Each target contains: MMSI, name, position, COG, SOG, heading
+ * - CPA/TCPA calculations
+ */
+void WebServer::handleGetAIS(AsyncWebServerRequest* request) {
+    Serial.println("[Web] → GET /api/boat/ais");
+    
+    if (!boatState) {
+        request->send(500, "application/json", "{\"error\":\"BoatState not available\"}");
+        return;
+    }
+    
+    JsonDocument doc;
+    
+    // Get AIS data from BoatState
+    AISData ais = boatState->getAIS();
+    
+    doc["target_count"] = ais.targetCount;
+    
+    JsonArray targets = doc["targets"].to<JsonArray>();
+    
+    for (int i = 0; i < ais.targetCount; i++) {
+        AISTarget& target = ais.targets[i];
+        unsigned long age = (millis() - target.timestamp) / 1000;
+        
+        // Only include targets that are not stale (< 60 seconds old)
+        if (age <= DATA_TIMEOUT_AIS / 1000) {
+            JsonObject t = targets.add<JsonObject>();
+            
+            t["mmsi"] = target.mmsi;
+            t["name"] = target.name;
+            
+            JsonObject pos = t["position"].to<JsonObject>();
+            pos["latitude"] = target.lat;
+            pos["longitude"] = target.lon;
+            
+            t["cog"] = target.cog;
+            t["sog"] = target.sog;
+            t["heading"] = target.heading;
+            
+            JsonObject proximity = t["proximity"].to<JsonObject>();
+            proximity["distance"] = target.distance;
+            proximity["distance_unit"] = "nm";
+            proximity["bearing"] = target.bearing;
+            proximity["bearing_unit"] = "deg";
+            proximity["cpa"] = target.cpa;
+            proximity["cpa_unit"] = "nm";
+            proximity["tcpa"] = target.tcpa;
+            proximity["tcpa_unit"] = "min";
+            
+            t["age"] = age;
+        }
+    }
+    
+    String response;
+    serializeJson(doc, response);
+    
+    request->send(200, "application/json", response);
+}
+
+/**
+ * GET /api/boat/state
+ * 
+ * Returns complete boat state (all data combined)
+ * This is the comprehensive endpoint that returns everything
+ */
+void WebServer::handleGetBoatState(AsyncWebServerRequest* request) {
+    Serial.println("[Web] → GET /api/boat/state");
+    
+    if (!boatState) {
+        request->send(500, "application/json", "{\"error\":\"BoatState not available\"}");
+        return;
+    }
+    
+    // Use the built-in toJSON() method from BoatState
+    String json = boatState->toJSON();
+    
+    request->send(200, "application/json", json);
 }

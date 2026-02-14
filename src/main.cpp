@@ -14,19 +14,14 @@
 #include "tcp_server.h"
 #include "web_server.h"
 
-
-
-
-
 // Global instances
 ConfigManager configManager;
 BoatState boatState;
 WiFiManager wifiManager;
 UARTHandler uartHandler;
-NMEAParser nmeaParser;
+NMEAParser nmeaParser(&boatState);  // Pass BoatState to parser
 TCPServer tcpServer;
-// OLD // WebServer webServer(&configManager, &wifiManager);
-WebServer webServer(&configManager, &wifiManager, &tcpServer, &uartHandler, &nmeaParser);
+WebServer webServer(&configManager, &wifiManager, &tcpServer, &uartHandler, &nmeaParser, &boatState);
 
 // Message queue for NMEA sentences
 QueueHandle_t nmeaQueue;
@@ -109,6 +104,8 @@ void setup() {
     Serial.println("[Config] Initializing...");
     configManager.init();
     
+    // Initialize BoatState
+    Serial.println("[BoatState] Initializing...");
     boatState.init();
 
     WiFiConfig wifiConfig;
@@ -199,6 +196,13 @@ void setup() {
 }
 
 void loop() {
+    // Cleanup stale data periodically (every 30 seconds)
+    static uint32_t lastCleanup = 0;
+    if (millis() - lastCleanup > 30000) {
+        boatState.cleanupStaleData();
+        lastCleanup = millis();
+    }
+    
     vTaskDelay(pdMS_TO_TICKS(1000));
 }
 
@@ -216,7 +220,7 @@ void nmeaTask(void* parameter) {
         // Read line from UART (1 second timeout)
         if (uartHandler.readLine(lineBuffer, sizeof(lineBuffer), pdMS_TO_TICKS(1000))) {
             
-            // Parse NMEA sentence
+            // Parse NMEA sentence (this will also update BoatState)
             if (nmeaParser.parseLine(lineBuffer, sentence)) {
                 
                 // Try to send to queue (non-blocking)
@@ -246,6 +250,34 @@ void nmeaTask(void* parameter) {
                 Serial.printf("[NMEA] Queue full events: %u\n", queueFullCount);
                 queueFullCount = 0;  // Reset counter
             }
+            
+            // Print some BoatState data
+            GPSData gps = boatState.getGPS();
+            if (gps.position.lat.valid) {
+                Serial.printf("[BoatState] GPS: %.6f, %.6f | SOG: %.1f kn | COG: %.1f°\n",
+                             gps.position.lat.value, gps.position.lon.value,
+                             gps.sog.valid ? gps.sog.value : 0.0,
+                             gps.cog.valid ? gps.cog.value : 0.0);
+            }
+            
+            SpeedData speed = boatState.getSpeed();
+            if (speed.stw.valid) {
+                Serial.printf("[BoatState] STW: %.1f kn\n", speed.stw.value);
+            }
+            
+            DepthData depth = boatState.getDepth();
+            if (depth.below_transducer.valid) {
+                Serial.printf("[BoatState] Depth: %.1f m\n", depth.below_transducer.value);
+            }
+            
+            WindData wind = boatState.getWind();
+            if (wind.aws.valid) {
+                Serial.printf("[BoatState] Wind: AWS %.1f kn @ %.0f° | TWS %.1f kn @ %.0f°\n",
+                             wind.aws.value, wind.awa.value,
+                             wind.tws.valid ? wind.tws.value : 0.0,
+                             wind.twa.valid ? wind.twa.value : 0.0);
+            }
+            
             Serial.println("[NMEA] ==================\n");
             lastStatsTime = millis();
         }
@@ -261,6 +293,9 @@ void wifiTask(void* parameter) {
     WiFiState lastState = WIFI_DISCONNECTED;
     
     while (true) {
+        // Update WiFi manager
+        wifiManager.update();
+        
         WiFiState currentState = wifiManager.getState();
         
         if (currentState != lastState) {

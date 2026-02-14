@@ -436,7 +436,7 @@ void BoatState::calculateDerivedData() {
 // JSON Serialization
 // ============================================================
 
-void BoatState::addDataPointToJSON(JsonObject& obj, const char* key, const DataPoint& dp) {
+void BoatState::addDataPointToJSON(JsonObject obj, const char* key, const DataPoint& dp) {
     JsonObject point = obj[key].to<JsonObject>();
     if (dp.valid && !dp.isStale()) {
         point["value"] = dp.value;
@@ -559,10 +559,11 @@ String BoatState::getNavigationJSON() {
     addDataPointToJSON(position, "lat", gps.position.lat);
     addDataPointToJSON(position, "lon", gps.position.lon);
     
-    addDataPointToJSON(doc.as<JsonObject>(), "stw", speed.stw);
-    addDataPointToJSON(doc.as<JsonObject>(), "sog", gps.sog);
-    addDataPointToJSON(doc.as<JsonObject>(), "cog", gps.cog);
-    addDataPointToJSON(doc.as<JsonObject>(), "depth", depth.below_transducer);
+    JsonObject root = doc.as<JsonObject>();
+    addDataPointToJSON(root, "stw", speed.stw);
+    addDataPointToJSON(root, "sog", gps.sog);
+    addDataPointToJSON(root, "cog", gps.cog);
+    addDataPointToJSON(root, "depth", depth.below_transducer);
     
     xSemaphoreGive(mutex);
     
@@ -576,11 +577,12 @@ String BoatState::getWindJSON() {
     
     xSemaphoreTake(mutex, portMAX_DELAY);
     
-    addDataPointToJSON(doc.as<JsonObject>(), "aws", wind.aws);
-    addDataPointToJSON(doc.as<JsonObject>(), "awa", wind.awa);
-    addDataPointToJSON(doc.as<JsonObject>(), "tws", wind.tws);
-    addDataPointToJSON(doc.as<JsonObject>(), "twa", wind.twa);
-    addDataPointToJSON(doc.as<JsonObject>(), "twd", wind.twd);
+    JsonObject root = doc.as<JsonObject>();
+    addDataPointToJSON(root, "aws", wind.aws);
+    addDataPointToJSON(root, "awa", wind.awa);
+    addDataPointToJSON(root, "tws", wind.tws);
+    addDataPointToJSON(root, "twa", wind.twa);
+    addDataPointToJSON(root, "twd", wind.twd);
     
     xSemaphoreGive(mutex);
     

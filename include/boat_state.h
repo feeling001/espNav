@@ -35,7 +35,7 @@ struct DataPoint {
         valid = false;
     }
     
-    bool isStale(unsigned long timeout = DATA_TIMEOUT_DEFAULT) {
+    bool isStale(unsigned long timeout = DATA_TIMEOUT_DEFAULT) const {
         if (!valid) return true;
         return (millis() - timestamp) > timeout;
     }
@@ -138,7 +138,7 @@ struct AutopilotData {
     
     AutopilotData() : mode(""), status(""), alarm(""), timestamp(0), valid(false) {}
     
-    bool isStale(unsigned long timeout = DATA_TIMEOUT_DEFAULT) {
+    bool isStale(unsigned long timeout = DATA_TIMEOUT_DEFAULT) const {
         if (!valid) return true;
         return (millis() - timestamp) > timeout;
     }
@@ -295,7 +295,7 @@ private:
     SemaphoreHandle_t mutex;
     
     // Helper functions
-    void addDataPointToJSON(JsonObject& obj, const char* key, const DataPoint& dp);
+    void addDataPointToJSON(JsonObject obj, const char* key, const DataPoint& dp);
 };
 
 #endif // BOAT_STATE_H
