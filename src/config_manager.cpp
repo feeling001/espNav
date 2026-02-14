@@ -112,6 +112,40 @@ bool ConfigManager::setSerialConfig(const UARTConfig& config) {
     return true;
 }
 
+bool ConfigManager::getBLEConfig(BLEConfigData& config) {
+    config.enabled = nvs.getBool("ble_enabled", false);
+    
+    String deviceName = nvs.getString("ble_name", "MarineGateway");
+    strncpy(config.device_name, deviceName.c_str(), sizeof(config.device_name) - 1);
+    config.device_name[sizeof(config.device_name) - 1] = '\0';
+    
+    String pinCode = nvs.getString("ble_pin", "123456");
+    strncpy(config.pin_code, pinCode.c_str(), sizeof(config.pin_code) - 1);
+    config.pin_code[sizeof(config.pin_code) - 1] = '\0';
+    
+    Serial.println("[Config] BLE config loaded from NVS");
+    Serial.printf("[Config]   Enabled: %s\n", config.enabled ? "Yes" : "No");
+    Serial.printf("[Config]   Device Name: %s\n", config.device_name);
+    Serial.printf("[Config]   PIN Code: %s\n", config.pin_code);
+    
+    return true;
+}
+
+bool ConfigManager::setBLEConfig(const BLEConfigData& config) {
+    Serial.println("[Config] Saving BLE config to NVS");
+    
+    nvs.putBool("ble_enabled", config.enabled);
+    nvs.putString("ble_name", config.device_name);
+    nvs.putString("ble_pin", config.pin_code);
+    
+    Serial.printf("[Config]   Enabled: %s\n", config.enabled ? "Yes" : "No");
+    Serial.printf("[Config]   Device Name: %s\n", config.device_name);
+    Serial.printf("[Config]   PIN Code: %s\n", config.pin_code);
+    
+    Serial.println("[Config] ✓ BLE config saved");
+    return true;
+}
+
 void ConfigManager::factoryReset() {
     Serial.println("[Config] Performing factory reset...");
     
@@ -120,9 +154,11 @@ void ConfigManager::factoryReset() {
     // Set default values
     WiFiConfig defaultWiFi;
     UARTConfig defaultSerial;
+    BLEConfigData defaultBLE;
     
     setWiFiConfig(defaultWiFi);
     setSerialConfig(defaultSerial);
+    setBLEConfig(defaultBLE);
     
     Serial.println("[Config] ✓ Factory reset complete");
 }

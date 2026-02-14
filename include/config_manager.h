@@ -18,6 +18,10 @@ public:
     bool getSerialConfig(UARTConfig& config);
     bool setSerialConfig(const UARTConfig& config);
     
+    // BLE configuration
+    bool getBLEConfig(BLEConfigData& config);
+    bool setBLEConfig(const BLEConfigData& config);
+    
     // Factory reset
     void factoryReset();
     

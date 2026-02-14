@@ -6,11 +6,13 @@
 #include "nmea_parser.h"
 #include <ArduinoJson.h>
 
-WebServer::WebServer(ConfigManager* cm, WiFiManager* wm, TCPServer* tcp, UARTHandler* uart, NMEAParser* nmea, BoatState* bs) 
-    : configManager(cm), wifiManager(wm), tcpServer(tcp), uartHandler(uart), nmeaParser(nmea), boatState(bs), running(false) {
+
+WebServer::WebServer(ConfigManager* cm, WiFiManager* wm, TCPServer* tcp, UARTHandler* uart, NMEAParser* nmea, BoatState* bs, BLEManager* ble) 
+    : configManager(cm), wifiManager(wm), tcpServer(tcp), uartHandler(uart), nmeaParser(nmea), boatState(bs), bleManager(ble), running(false) {
     server = new AsyncWebServer(WEB_SERVER_PORT);
     wsNMEA = new AsyncWebSocket("/ws/nmea");
 }
+
 
 void WebServer::init() {
     Serial.println("[Web] Initializing Web Server");
@@ -108,7 +110,21 @@ void WebServer::registerRoutes() {
             this->handlePostSerialConfig(request, data, len);
         }
     );
+
+    // BLE Configuration
+    server->on("/api/config/ble", HTTP_GET, [this](AsyncWebServerRequest* request) {
+        this->handleGetBLEConfig(request);
+    });
     
+    server->on("/api/config/ble", HTTP_POST,
+        [](AsyncWebServerRequest* request) {},
+        NULL,
+        [this](AsyncWebServerRequest* request, uint8_t* data, size_t len,
+               size_t index, size_t total) {
+            this->handlePostBLEConfig(request, data, len);
+        }
+    );
+
     // System Status
     server->on("/api/status", HTTP_GET, [this](AsyncWebServerRequest* request) {
         this->handleGetStatus(request);
@@ -368,12 +384,12 @@ void WebServer::handleGetStatus(AsyncWebServerRequest* request) {
     wifi["ip"] = ip.toString();
     wifi["clients"] = clients;
     
-    // TCP info - NOW with real data from tcpServer
+    // TCP info
     JsonObject tcp = doc["tcp"].to<JsonObject>();
     tcp["clients"] = tcpServer->getClientCount();
     tcp["port"] = TCP_PORT;
     
-    // UART info - NOW with real data from uartHandler and nmeaParser
+    // UART info
     JsonObject uart = doc["uart"].to<JsonObject>();
     uart["sentences_received"] = uartHandler->getSentencesReceived();
     uart["errors"] = nmeaParser->getInvalidSentences();
@@ -383,11 +399,18 @@ void WebServer::handleGetStatus(AsyncWebServerRequest* request) {
     configManager->getSerialConfig(serialConfig);
     uart["baud"] = serialConfig.baudRate;
     
+    // BLE info (NEW!)
+    JsonObject ble = doc["ble"].to<JsonObject>();
+    ble["enabled"] = bleManager->isEnabled();
+    ble["advertising"] = bleManager->isAdvertising();
+    ble["connected_devices"] = bleManager->getConnectedDevices();
+    
     String response;
     serializeJson(doc, response);
     
     request->send(200, "application/json", response);
 }
+
 
 void WebServer::handleRestart(AsyncWebServerRequest* request) {
     Serial.println("[Web] → POST /api/restart");
@@ -761,4 +784,75 @@ void WebServer::handleGetBoatState(AsyncWebServerRequest* request) {
     String json = boatState->toJSON();
     
     request->send(200, "application/json", json);
+}
+
+void WebServer::handleGetBLEConfig(AsyncWebServerRequest* request) {
+    Serial.println("[Web] → GET /api/config/ble");
+    
+    BLEConfig config = bleManager->getConfig();
+    
+    JsonDocument doc;
+    doc["enabled"] = config.enabled;
+    doc["device_name"] = config.device_name;
+    doc["pin_code"] = config.pin_code;
+    doc["advertising"] = bleManager->isAdvertising();
+    doc["connected_devices"] = bleManager->getConnectedDevices();
+    
+    String response;
+    serializeJson(doc, response);
+    
+    request->send(200, "application/json", response);
+}
+
+void WebServer::handlePostBLEConfig(AsyncWebServerRequest* request, uint8_t* data, size_t len) {
+    Serial.println("[Web] → POST /api/config/ble");
+    
+    JsonDocument doc;
+    DeserializationError error = deserializeJson(doc, (char*)data, len);
+    
+    if (error) {
+        Serial.printf("[Web]   JSON error: %s\n", error.c_str());
+        request->send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
+        return;
+    }
+    
+    BLEConfig config;
+    config.enabled = doc["enabled"] | false;
+    
+    strncpy(config.device_name, doc["device_name"] | "MarineGateway", sizeof(config.device_name) - 1);
+    config.device_name[sizeof(config.device_name) - 1] = '\0';
+    
+    strncpy(config.pin_code, doc["pin_code"] | "123456", sizeof(config.pin_code) - 1);
+    config.pin_code[sizeof(config.pin_code) - 1] = '\0';
+    
+    // Validate PIN code (must be 6 digits)
+    if (strlen(config.pin_code) != 6) {
+        request->send(400, "application/json", "{\"error\":\"PIN code must be exactly 6 digits\"}");
+        return;
+    }
+    
+    for (int i = 0; i < 6; i++) {
+        if (!isdigit(config.pin_code[i])) {
+            request->send(400, "application/json", "{\"error\":\"PIN code must contain only digits\"}");
+            return;
+        }
+    }
+    
+    // Save to NVS
+    BLEConfigData bleConfigData;
+    bleConfigData.enabled = config.enabled;
+    strncpy(bleConfigData.device_name, config.device_name, sizeof(bleConfigData.device_name) - 1);
+    strncpy(bleConfigData.pin_code, config.pin_code, sizeof(bleConfigData.pin_code) - 1);
+    
+    configManager->setBLEConfig(bleConfigData);
+    
+    // Apply configuration
+    bleManager->setEnabled(config.enabled);
+    if (strcmp(bleManager->getConfig().device_name, config.device_name) != 0) {
+        bleManager->setDeviceName(config.device_name);
+    }
+    bleManager->setPinCode(config.pin_code);
+    
+    request->send(200, "application/json",
+                 "{\"success\":true,\"message\":\"BLE config saved and applied\"}");
 }

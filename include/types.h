@@ -45,6 +45,18 @@ struct UARTConfig {
     UARTConfig() : baudRate(38400), dataBits(8), parity(0), stopBits(1) {}
 };
 
+// BLE configuration structure
+struct BLEConfigData {
+    bool enabled;
+    char device_name[32];
+    char pin_code[7];  // 6 digits + null terminator
+    
+    BLEConfigData() : enabled(false) {
+        strcpy(device_name, "MarineGateway");
+        strcpy(pin_code, "123456");
+    }
+};
+
 // NMEA sentence structure
 struct NMEASentence {
     char raw[128];

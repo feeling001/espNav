@@ -13,15 +13,17 @@
 #include "nmea_parser.h"
 #include "tcp_server.h"
 #include "web_server.h"
+#include "ble_manager.h"
 
 // Global instances
 ConfigManager configManager;
 BoatState boatState;
 WiFiManager wifiManager;
 UARTHandler uartHandler;
-NMEAParser nmeaParser(&boatState);  // Pass BoatState to parser
+NMEAParser nmeaParser;
 TCPServer tcpServer;
-WebServer webServer(&configManager, &wifiManager, &tcpServer, &uartHandler, &nmeaParser, &boatState);
+BLEManager bleManager;
+WebServer webServer(&configManager, &wifiManager, &tcpServer, &uartHandler, &nmeaParser, &bleManager);
 
 // Message queue for NMEA sentences
 QueueHandle_t nmeaQueue;
@@ -98,25 +100,39 @@ void setup() {
         Serial.println("[LittleFS] ✓ Web dashboard present");
     }
     
+    if (!LittleFS.exists("/www/ble-config.html")) {
+        Serial.println("[LittleFS] ⚠️  BLE config page not found");
+    } else {
+        Serial.println("[LittleFS] ✓ BLE config page present");
+    }
+    
     Serial.println("\n======================================\n");
     
     // Initialize configuration manager
     Serial.println("[Config] Initializing...");
     configManager.init();
     
-    // Initialize BoatState
-    Serial.println("[BoatState] Initializing...");
+    // Initialize boat state
     boatState.init();
 
+    // Load WiFi config
     WiFiConfig wifiConfig;
     configManager.getWiFiConfig(wifiConfig);
     Serial.printf("[Config] WiFi: %s (%s mode)\n", 
                   wifiConfig.ssid, 
                   wifiConfig.mode == 0 ? "Station" : "AP");
     
+    // Load Serial config
     UARTConfig serialConfig;
     configManager.getSerialConfig(serialConfig);
     Serial.printf("[Config] UART: %u baud\n", serialConfig.baudRate);
+    
+    // Load BLE config
+    BLEConfigData bleConfig;
+    configManager.getBLEConfig(bleConfig);
+    Serial.printf("[Config] BLE: %s (%s)\n", 
+                  bleConfig.device_name,
+                  bleConfig.enabled ? "Enabled" : "Disabled");
     
     // Initialize WiFi
     Serial.println("\n[WiFi] Initializing...");
@@ -131,6 +147,18 @@ void setup() {
     // Initialize TCP server
     Serial.println("\n[TCP] Initializing...");
     tcpServer.init(TCP_PORT);
+    
+    // Initialize BLE Manager
+    Serial.println("\n[BLE] Initializing...");
+    BLEConfig bleManagerConfig;
+    bleManagerConfig.enabled = bleConfig.enabled;
+    strncpy(bleManagerConfig.device_name, bleConfig.device_name, sizeof(bleManagerConfig.device_name) - 1);
+    strncpy(bleManagerConfig.pin_code, bleConfig.pin_code, sizeof(bleManagerConfig.pin_code) - 1);
+    bleManager.init(bleManagerConfig, &boatState);
+    
+    if (bleConfig.enabled) {
+        bleManager.start();
+    }
     
     // Initialize Web server
     Serial.println("\n[Web] Initializing...");
@@ -192,18 +220,50 @@ void setup() {
     } else {
         Serial.println("WiFi: Not connected");
     }
+    
+    if (bleConfig.enabled) {
+        Serial.printf("BLE Device: %s\n", bleConfig.device_name);
+        Serial.printf("BLE PIN: %s\n", bleConfig.pin_code);
+    } else {
+        Serial.println("BLE: Disabled");
+    }
     Serial.println("----------------------\n");
 }
 
 void loop() {
-    // Cleanup stale data periodically (every 30 seconds)
-    static uint32_t lastCleanup = 0;
-    if (millis() - lastCleanup > 30000) {
-        boatState.cleanupStaleData();
-        lastCleanup = millis();
+    // Check for autopilot commands from BLE
+    if (bleManager.hasAutopilotCommand()) {
+        AutopilotCommand cmd = bleManager.getAutopilotCommand();
+        
+        Serial.printf("[BLE] Autopilot command received: %d\n", cmd.type);
+        
+        // TODO: Process autopilot command and send to SeaTalk1
+        // This will be implemented when SeaTalk1 integration is added
+        switch (cmd.type) {
+            case AutopilotCommand::ENABLE:
+                Serial.println("[Autopilot] Command: ENABLE");
+                break;
+            case AutopilotCommand::DISABLE:
+                Serial.println("[Autopilot] Command: DISABLE");
+                break;
+            case AutopilotCommand::ADJUST_PLUS_10:
+                Serial.println("[Autopilot] Command: +10 degrees");
+                break;
+            case AutopilotCommand::ADJUST_MINUS_10:
+                Serial.println("[Autopilot] Command: -10 degrees");
+                break;
+            case AutopilotCommand::ADJUST_PLUS_1:
+                Serial.println("[Autopilot] Command: +1 degree");
+                break;
+            case AutopilotCommand::ADJUST_MINUS_1:
+                Serial.println("[Autopilot] Command: -1 degree");
+                break;
+            default:
+                break;
+        }
     }
     
-    vTaskDelay(pdMS_TO_TICKS(1000));
+    vTaskDelay(pdMS_TO_TICKS(100));
 }
 
 // NMEA Task - Process incoming NMEA data
@@ -220,7 +280,7 @@ void nmeaTask(void* parameter) {
         // Read line from UART (1 second timeout)
         if (uartHandler.readLine(lineBuffer, sizeof(lineBuffer), pdMS_TO_TICKS(1000))) {
             
-            // Parse NMEA sentence (this will also update BoatState)
+            // Parse NMEA sentence
             if (nmeaParser.parseLine(lineBuffer, sentence)) {
                 
                 // Try to send to queue (non-blocking)
@@ -246,38 +306,13 @@ void nmeaTask(void* parameter) {
                          nmeaParser.getValidSentences(), 
                          nmeaParser.getInvalidSentences());
             Serial.printf("[NMEA] TCP clients: %u\n", tcpServer.getClientCount());
+            if (bleManager.isEnabled()) {
+                Serial.printf("[NMEA] BLE devices: %u\n", bleManager.getConnectedDevices());
+            }
             if (queueFullCount > 0) {
                 Serial.printf("[NMEA] Queue full events: %u\n", queueFullCount);
                 queueFullCount = 0;  // Reset counter
             }
-            
-            // Print some BoatState data
-            GPSData gps = boatState.getGPS();
-            if (gps.position.lat.valid) {
-                Serial.printf("[BoatState] GPS: %.6f, %.6f | SOG: %.1f kn | COG: %.1f°\n",
-                             gps.position.lat.value, gps.position.lon.value,
-                             gps.sog.valid ? gps.sog.value : 0.0,
-                             gps.cog.valid ? gps.cog.value : 0.0);
-            }
-            
-            SpeedData speed = boatState.getSpeed();
-            if (speed.stw.valid) {
-                Serial.printf("[BoatState] STW: %.1f kn\n", speed.stw.value);
-            }
-            
-            DepthData depth = boatState.getDepth();
-            if (depth.below_transducer.valid) {
-                Serial.printf("[BoatState] Depth: %.1f m\n", depth.below_transducer.value);
-            }
-            
-            WindData wind = boatState.getWind();
-            if (wind.aws.valid) {
-                Serial.printf("[BoatState] Wind: AWS %.1f kn @ %.0f° | TWS %.1f kn @ %.0f°\n",
-                             wind.aws.value, wind.awa.value,
-                             wind.tws.valid ? wind.tws.value : 0.0,
-                             wind.twa.valid ? wind.twa.value : 0.0);
-            }
-            
             Serial.println("[NMEA] ==================\n");
             lastStatsTime = millis();
         }
@@ -293,7 +328,6 @@ void wifiTask(void* parameter) {
     WiFiState lastState = WIFI_DISCONNECTED;
     
     while (true) {
-        // Update WiFi manager
         wifiManager.update();
         
         WiFiState currentState = wifiManager.getState();

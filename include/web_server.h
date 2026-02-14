@@ -6,16 +6,16 @@
 #include <LittleFS.h>
 #include "config_manager.h"
 #include "wifi_manager.h"
-#include "boat_state.h"
 
 // Forward declarations
 class TCPServer;
 class UARTHandler;
 class NMEAParser;
+class BLEManager;
 
 class WebServer {
 public:
-    WebServer(ConfigManager* cm, WiFiManager* wm, TCPServer* tcp, UARTHandler* uart, NMEAParser* nmea, BoatState* bs);
+    WebServer(ConfigManager* cm, WiFiManager* wm, TCPServer* tcp, UARTHandler* uart, NMEAParser* nmea, BLEManager* ble);
     
     void init();
     void start();
@@ -25,7 +25,7 @@ public:
 private:
     void registerRoutes();
     
-    // REST API handlers - Configuration
+    // REST API handlers
     void handleGetWiFiConfig(AsyncWebServerRequest* request);
     void handlePostWiFiConfig(AsyncWebServerRequest* request, uint8_t* data, size_t len);
     void handleGetSerialConfig(AsyncWebServerRequest* request);
@@ -33,15 +33,13 @@ private:
     void handleGetStatus(AsyncWebServerRequest* request);
     void handleRestart(AsyncWebServerRequest* request);
     
+    // BLE handlers
+    void handleGetBLEConfig(AsyncWebServerRequest* request);
+    void handlePostBLEConfig(AsyncWebServerRequest* request, uint8_t* data, size_t len);
+    
     // WiFi scan handlers
     void handleStartWiFiScan(AsyncWebServerRequest* request);
     void handleGetWiFiScanResults(AsyncWebServerRequest* request);
-    
-    // REST API handlers - BoatState (NEW!)
-    void handleGetNavigation(AsyncWebServerRequest* request);
-    void handleGetWind(AsyncWebServerRequest* request);
-    void handleGetAIS(AsyncWebServerRequest* request);
-    void handleGetBoatState(AsyncWebServerRequest* request);  // All data
     
     // WebSocket handlers
     void handleWebSocketEvent(AsyncWebSocket* server, AsyncWebSocketClient* client,
@@ -54,7 +52,7 @@ private:
     TCPServer* tcpServer;
     UARTHandler* uartHandler;
     NMEAParser* nmeaParser;
-    BoatState* boatState;
+    BLEManager* bleManager;
     bool running;
 };
 
