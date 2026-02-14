@@ -6,6 +6,7 @@
 
 #include "config.h"
 #include "types.h"
+#include "boat_state.h"
 #include "config_manager.h"
 #include "wifi_manager.h"
 #include "uart_handler.h"
@@ -13,8 +14,13 @@
 #include "tcp_server.h"
 #include "web_server.h"
 
+
+
+
+
 // Global instances
 ConfigManager configManager;
+BoatState boatState;
 WiFiManager wifiManager;
 UARTHandler uartHandler;
 NMEAParser nmeaParser;
@@ -103,6 +109,8 @@ void setup() {
     Serial.println("[Config] Initializing...");
     configManager.init();
     
+    boatState.init();
+
     WiFiConfig wifiConfig;
     configManager.getWiFiConfig(wifiConfig);
     Serial.printf("[Config] WiFi: %s (%s mode)\n", 
