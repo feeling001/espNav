@@ -15,6 +15,8 @@
 #include "web_server.h"
 #include "ble_manager.h"
 
+#define configUSE_TRACE_FACILITY 1
+
 // Global instances
 ConfigManager configManager;
 BoatState boatState;

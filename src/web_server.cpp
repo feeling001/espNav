@@ -413,27 +413,77 @@ void WebServer::handleGetStatus(AsyncWebServerRequest* request) {
     nmeaBuffer["has_overflow"] = (g_nmeaQueueFullEvents > 0);
     
     // CPU Load info 
-    JsonObject cpu = doc["cpu"].to<JsonObject>();
+
+// Dans web_server.cpp - handleGetStatus()
+JsonObject cpu = doc["cpu"].to<JsonObject>();
+
+// Méthode robuste compatible Arduino
+static uint32_t lastCheckTime = 0;
+static uint32_t lastSentenceCount = 0;
+static uint32_t lastHeapFree = 0;
+
+uint32_t now = millis();
+uint32_t currentSentences = uartHandler->getSentencesReceived();
+uint32_t currentHeapFree = ESP.getFreeHeap();
+
+if (lastCheckTime > 0 && (now - lastCheckTime) >= 5000) {
+    // Mesure sur 5 secondes
+    uint32_t deltaTime = now - lastCheckTime;
+    uint32_t deltaSentences = currentSentences - lastSentenceCount;
     
-    uint32_t freeHeap = ESP.getFreeHeap();
-    uint32_t totalHeap = ESP.getHeapSize();
-    uint32_t usedHeap = totalHeap - freeHeap;
+    // Calcul des phrases par seconde
+    float sentencesPerSec = (float)(deltaSentences * 1000) / deltaTime;
     
-    uint8_t cpuEstimate = 0;
-    if (totalHeap > 0) {
-        uint8_t heapUsagePercent = (usedHeap * 100) / totalHeap;
-        
-        if (heapUsagePercent > 60) {
-            cpuEstimate = ((heapUsagePercent - 60) * 2);
-            if (cpuEstimate > 100) cpuEstimate = 100;
-        } else {
-            cpuEstimate = heapUsagePercent / 2;
-        }
+    // Calcul de la variation de heap (activité mémoire)
+    int32_t heapChange = currentHeapFree - lastHeapFree;
+    uint32_t heapChurn = abs(heapChange);
+    
+    // Estimation CPU basée sur plusieurs facteurs
+    uint32_t cpuEstimate = 0;
+    
+    // Facteur 1: Débit de phrases (principal indicateur)
+    if (sentencesPerSec < 2.0f) {
+        cpuEstimate = (uint32_t)(sentencesPerSec * 8);  // 0-16%
+    } else if (sentencesPerSec < 5.0f) {
+        cpuEstimate = 16 + (uint32_t)((sentencesPerSec - 2.0f) * 8);  // 16-40%
+    } else if (sentencesPerSec < 10.0f) {
+        cpuEstimate = 40 + (uint32_t)((sentencesPerSec - 5.0f) * 6);  // 40-70%
+    } else {
+        cpuEstimate = 70 + (uint32_t)(min((sentencesPerSec - 10.0f) * 3, 30.0f));  // 70-100%
     }
     
+    // Facteur 2: Nombre de clients TCP/WebSocket (overhead réseau)
+    uint32_t totalClients = tcpServer->getClientCount();
+    cpuEstimate += totalClients * 2;  // +2% par client
+    
+    // Facteur 3: BLE actif
+    if (bleManager->isEnabled() && bleManager->getConnectedDevices() > 0) {
+        cpuEstimate += 5;  // +5% pour BLE
+    }
+    
+    // Plafonner à 100%
+    cpuEstimate = min(cpuEstimate, (uint32_t)100);
+    
     cpu["usage_percent"] = cpuEstimate;
-    cpu["method"] = "heap_estimation";
-    cpu["heap_usage_percent"] = (usedHeap * 100) / totalHeap;
+    cpu["sentences_per_sec"] = (uint32_t)(sentencesPerSec * 10) / 10.0f;  // 1 décimale
+    cpu["tcp_clients"] = totalClients;
+    cpu["method"] = "composite";
+    
+    lastSentenceCount = currentSentences;
+    lastHeapFree = currentHeapFree;
+    lastCheckTime = now;
+} else {
+    // Initialisation
+    if (lastCheckTime == 0) {
+        lastCheckTime = now;
+        lastSentenceCount = currentSentences;
+        lastHeapFree = currentHeapFree;
+    }
+    cpu["usage_percent"] = 0;
+    cpu["sentences_per_sec"] = 0;
+    cpu["method"] = "initializing";
+}
+
 
     // BLE info
     JsonObject ble = doc["ble"].to<JsonObject>();
