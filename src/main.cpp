@@ -40,6 +40,9 @@ void wifiTask(void* parameter);
 volatile uint32_t g_nmeaQueueOverflows = 0;
 volatile uint32_t g_nmeaQueueFullEvents = 0;
 
+// Performance monitoring
+volatile uint32_t g_broadcastSkipped = 0;  // NOUVEAU
+
 
 void listLittleFSFiles(const char* dirname, uint8_t levels) {
     Serial.printf("[LittleFS] Listing directory: %s\n", dirname);
@@ -272,6 +275,7 @@ void loop() {
 }
 
 // NMEA Task - Process incoming NMEA data
+/*
 void nmeaTask(void* parameter) {
     char lineBuffer[NMEA_MAX_LENGTH];
     NMEASentence sentence;
@@ -329,6 +333,289 @@ void nmeaTask(void* parameter) {
         vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
+*/
+/*
+void nmeaTask(void* parameter) {
+    char lineBuffer[NMEA_MAX_LENGTH];
+    NMEASentence sentence;
+    
+    Serial.println("[NMEA Task] Started");
+    
+    uint32_t lastStatsTime = millis();
+    uint32_t queueFullCount = 0;
+    uint32_t broadcastSkipped = 0;
+    
+    while (true) {
+        // Read line from UART (1 second timeout)
+        if (uartHandler.readLine(lineBuffer, sizeof(lineBuffer), pdMS_TO_TICKS(1000))) {
+            
+            // Parse NMEA sentence
+            if (nmeaParser.parseLine(lineBuffer, sentence)) {
+                
+                // ═══════════════════════════════════════════════════
+                // OPTIMISATION 1 : Queue non-bloquante
+                // ═══════════════════════════════════════════════════
+                if (nmeaQueue != NULL) {
+                    if (xQueueSend(nmeaQueue, &sentence, 0) != pdTRUE) {
+                        queueFullCount++;
+                        g_nmeaQueueOverflows++;
+                    }
+                }
+                
+                // ═══════════════════════════════════════════════════
+                // OPTIMISATION 2 : Broadcasting avec vérification
+                // Évite de bloquer si les clients sont lents
+                // ═══════════════════════════════════════════════════
+                
+                // Broadcast TCP - seulement s'il y a des clients
+                if (tcpServer.getClientCount() > 0) {
+                    tcpServer.broadcast(sentence.raw);
+                }
+                
+                // Broadcast WebSocket - seulement si connectés
+                // Note: webServer.broadcastNMEA est déjà non-bloquant
+                webServer.broadcastNMEA(sentence.raw);
+                
+                // ═══════════════════════════════════════════════════
+                // OPTIMISATION 3 : Yield plus fréquent
+                // ═══════════════════════════════════════════════════
+                // Laisse d'autres tasks s'exécuter tous les 10 messages
+                static uint8_t yieldCounter = 0;
+                if (++yieldCounter >= 10) {
+                    yieldCounter = 0;
+                    taskYIELD();  // Permet aux autres tasks de tourner
+                }
+            }
+        }
+        
+        // Print statistics every 30 seconds
+        if (millis() - lastStatsTime > 30000) {
+            Serial.println("\n[NMEA] === Statistics ===");
+            Serial.printf("[NMEA] Sentences received: %u\n", uartHandler.getSentencesReceived());
+            Serial.printf("[NMEA] Valid: %u, Invalid: %u\n", 
+                         nmeaParser.getValidSentences(), 
+                         nmeaParser.getInvalidSentences());
+            Serial.printf("[NMEA] TCP clients: %u\n", tcpServer.getClientCount());
+            if (bleManager.isEnabled()) {
+                Serial.printf("[NMEA] BLE devices: %u\n", bleManager.getConnectedDevices());
+            }
+            
+            // ═══════════════════════════════════════════════════
+            // STATS OVERFLOW
+            // ═══════════════════════════════════════════════════
+            if (queueFullCount > 0) {
+                Serial.printf("[NMEA] ⚠️  Queue full events: %u (OVERFLOW!)\n", queueFullCount);
+                g_nmeaQueueFullEvents = queueFullCount;
+                queueFullCount = 0;
+            } else {
+                g_nmeaQueueFullEvents = 0;
+            }
+            
+            if (broadcastSkipped > 0) {
+                Serial.printf("[NMEA] ⚠️  Broadcast skipped: %u\n", broadcastSkipped);
+                g_broadcastSkipped = broadcastSkipped;
+                broadcastSkipped = 0;
+            }
+            
+            Serial.println("[NMEA] ==================\n");
+            lastStatsTime = millis();
+        }
+        
+        vTaskDelay(pdMS_TO_TICKS(5));  // Réduit de 10ms à 5ms
+    }
+}
+*/
+
+void nmeaTask(void* parameter) {
+    char lineBuffer[NMEA_MAX_LENGTH];
+    NMEASentence sentence;
+    
+    Serial.println("[NMEA Task] Started with adaptive backpressure");
+    
+    // Statistics
+    uint32_t lastStatsTime = millis();
+    uint32_t queueFullCount = 0;
+    uint32_t totalDropped = 0;
+    uint32_t messagesProcessed = 0;
+    
+    // ═══════════════════════════════════════════════════════════════
+    // NOUVEAU: Système de backpressure adaptatif
+    // ═══════════════════════════════════════════════════════════════
+    uint32_t consecutiveQueueFails = 0;
+    uint32_t maxConsecutiveFails = 0;
+    
+    while (true) {
+        // ═══════════════════════════════════════════════════════════════
+        // BACKPRESSURE LEVEL 1: Pause si surcharge critique
+        // ═══════════════════════════════════════════════════════════════
+        if (consecutiveQueueFails > 20) {
+            Serial.printf("[NMEA] 🔴 CRITICAL OVERLOAD - Pausing 500ms (fails: %u)\n", 
+                         consecutiveQueueFails);
+            vTaskDelay(pdMS_TO_TICKS(500));
+            consecutiveQueueFails = 0;
+            g_nmeaQueueOverflows += 20;  // Log overload event
+            continue;
+        }
+        
+        // ═══════════════════════════════════════════════════════════════
+        // BACKPRESSURE LEVEL 2: Pause si surcharge modérée
+        // ═══════════════════════════════════════════════════════════════
+        if (consecutiveQueueFails > 10) {
+            Serial.printf("[NMEA] 🟡 MODERATE OVERLOAD - Pausing 100ms (fails: %u)\n", 
+                         consecutiveQueueFails);
+            vTaskDelay(pdMS_TO_TICKS(100));
+            consecutiveQueueFails = max(0, (int)(consecutiveQueueFails - 5));
+        }
+        
+        // ═══════════════════════════════════════════════════════════════
+        // Timeout adaptatif pour readLine()
+        // Plus de temps si le système est surchargé
+        // ═══════════════════════════════════════════════════════════════
+        TickType_t readTimeout;
+        if (consecutiveQueueFails > 5) {
+            readTimeout = pdMS_TO_TICKS(50);   // Mode dégradé: timeout court
+        } else {
+            readTimeout = pdMS_TO_TICKS(200);  // Mode normal: timeout long
+        }
+        
+        // ═══════════════════════════════════════════════════════════════
+        // Lecture UART
+        // ═══════════════════════════════════════════════════════════════
+        if (uartHandler.readLine(lineBuffer, sizeof(lineBuffer), readTimeout)) {
+            
+            // Parse NMEA sentence
+            if (nmeaParser.parseLine(lineBuffer, sentence)) {
+                messagesProcessed++;
+                
+                // ═══════════════════════════════════════════════════════════════
+                // Queue avec timeout court et gestion d'échec
+                // ═══════════════════════════════════════════════════════════════
+                if (nmeaQueue != NULL) {
+                    // Timeout de 5ms pour ne pas bloquer
+                    if (xQueueSend(nmeaQueue, &sentence, pdMS_TO_TICKS(5)) != pdTRUE) {
+                        queueFullCount++;
+                        consecutiveQueueFails++;
+                        totalDropped++;
+                        g_nmeaQueueOverflows++;
+                        
+                        // Tracker le max pour debugging
+                        if (consecutiveQueueFails > maxConsecutiveFails) {
+                            maxConsecutiveFails = consecutiveQueueFails;
+                        }
+                    } else {
+                        // Succès - reset compteur d'échecs consécutifs
+                        consecutiveQueueFails = 0;
+                    }
+                }
+                
+                // ═══════════════════════════════════════════════════════════════
+                // Broadcast TCP: uniquement si pas trop surchargé
+                // Évite de saturer le réseau quand la queue est déjà pleine
+                // ═══════════════════════════════════════════════════════════════
+                if (tcpServer.getClientCount() > 0 && consecutiveQueueFails < 10) {
+                    tcpServer.broadcast(sentence.raw);
+                } else if (consecutiveQueueFails >= 10) {
+                    // Skip TCP broadcast en mode overload
+                    g_broadcastSkipped++;
+                }
+                
+                // ═══════════════════════════════════════════════════════════════
+                // Broadcast WebSocket (déjà non-bloquant par design)
+                // ═══════════════════════════════════════════════════════════════
+                webServer.broadcastNMEA(sentence.raw);
+                
+                // ═══════════════════════════════════════════════════════════════
+                // Yield périodique pour laisser d'autres tasks s'exécuter
+                // Fréquence augmentée en cas de surcharge
+                // ═══════════════════════════════════════════════════════════════
+                static uint8_t yieldCounter = 0;
+                uint8_t yieldThreshold = (consecutiveQueueFails > 5) ? 3 : 5;
+                
+                if (++yieldCounter >= yieldThreshold) {
+                    yieldCounter = 0;
+                    taskYIELD();
+                }
+            }
+        }
+        
+        // ═══════════════════════════════════════════════════════════════
+        // Print statistics every 30 seconds
+        // ═══════════════════════════════════════════════════════════════
+        if (millis() - lastStatsTime > 30000) {
+            Serial.println("\n[NMEA] ══════════ Statistics ══════════");
+            Serial.printf("[NMEA] Sentences received: %u\n", uartHandler.getSentencesReceived());
+            Serial.printf("[NMEA] Messages processed: %u\n", messagesProcessed);
+            Serial.printf("[NMEA] Messages dropped: %u\n", totalDropped);
+            Serial.printf("[NMEA] Valid: %u, Invalid: %u\n", 
+                         nmeaParser.getValidSentences(), 
+                         nmeaParser.getInvalidSentences());
+            Serial.printf("[NMEA] TCP clients: %u\n", tcpServer.getClientCount());
+            
+            if (bleManager.isEnabled()) {
+                Serial.printf("[NMEA] BLE devices: %u\n", bleManager.getConnectedDevices());
+            }
+            
+            // ═══════════════════════════════════════════════════════════════
+            // Affichage des métriques de surcharge
+            // ═══════════════════════════════════════════════════════════════
+            if (queueFullCount > 0) {
+                float dropRate = (float)queueFullCount / messagesProcessed * 100.0f;
+                Serial.printf("[NMEA] ⚠️  Queue overflows: %u (%.1f%% drop rate)\n", 
+                             queueFullCount, dropRate);
+                g_nmeaQueueFullEvents = queueFullCount;
+            } else {
+                g_nmeaQueueFullEvents = 0;
+            }
+            
+            if (maxConsecutiveFails > 0) {
+                Serial.printf("[NMEA] ⚠️  Max consecutive fails: %u\n", maxConsecutiveFails);
+            }
+            
+            if (consecutiveQueueFails > 0) {
+                Serial.printf("[NMEA] 🟡 Current overload level: %u\n", consecutiveQueueFails);
+            }
+            
+            if (g_broadcastSkipped > 0) {
+                Serial.printf("[NMEA] ⚠️  TCP broadcasts skipped: %u\n", g_broadcastSkipped);
+            }
+            
+            // Health indicator
+            if (queueFullCount == 0 && maxConsecutiveFails < 5) {
+                Serial.println("[NMEA] ✅ System healthy");
+            } else if (maxConsecutiveFails < 10) {
+                Serial.println("[NMEA] 🟡 System under moderate load");
+            } else {
+                Serial.println("[NMEA] 🔴 System under heavy load");
+            }
+            
+            Serial.println("[NMEA] ════════════════════════════════\n");
+            
+            // Reset counters
+            lastStatsTime = millis();
+            queueFullCount = 0;
+            totalDropped = 0;
+            messagesProcessed = 0;
+            maxConsecutiveFails = 0;
+            g_broadcastSkipped = 0;
+        }
+        
+        // ═══════════════════════════════════════════════════════════════
+        // Délai adaptatif basé sur la charge système
+        // ═══════════════════════════════════════════════════════════════
+        uint32_t taskDelay;
+        
+        if (consecutiveQueueFails > 10) {
+            taskDelay = 50;   // Ralentir significativement si surchargé
+        } else if (consecutiveQueueFails > 5) {
+            taskDelay = 20;   // Ralentir modérément
+        } else {
+            taskDelay = 5;    // Mode normal
+        }
+        
+        vTaskDelay(pdMS_TO_TICKS(taskDelay));
+    }
+}
+
 
 // WiFi Task - Monitor WiFi connection
 void wifiTask(void* parameter) {

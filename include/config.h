@@ -16,7 +16,7 @@
 #define UART_NUM                 UART_NUM_1
 #define UART_RX_PIN              GPIO_NUM_6
 #define UART_TX_PIN              GPIO_NUM_5
-#define UART_BUFFER_SIZE         2048
+#define UART_BUFFER_SIZE         4096      // ⬆️ Doublé (était 2048)
 #define UART_DEFAULT_BAUD        38400
 
 // TCP Server
@@ -26,23 +26,23 @@
 // Web Server
 #define WEB_SERVER_PORT          80
 
-// NMEA
+// NMEA - OPTIMISÉ POUR ÉVITER OVERFLOWS
 #define NMEA_MAX_LENGTH          128
-#define NMEA_QUEUE_SIZE          200  // Augmenté de 50 à 200 pour éviter les "queue full"
+#define NMEA_QUEUE_SIZE          500       // ⬆️ Augmenté de 200 à 500
 
 // NVS
 #define NVS_NAMESPACE            "marine_gw"
 
 // Task Priorities (higher number = higher priority)
-#define TASK_PRIORITY_UART       5
-#define TASK_PRIORITY_NMEA       4
+#define TASK_PRIORITY_UART       6         // ⬆️ Augmenté (était 5)
+#define TASK_PRIORITY_NMEA       5         // ⬆️ Augmenté (était 4)
 #define TASK_PRIORITY_TCP        3
-#define TASK_PRIORITY_WEB        3
+#define TASK_PRIORITY_WEB        2         // ⬇️ Réduit (était 3)
 #define TASK_PRIORITY_WIFI       2
 
-// Task Stack Sizes
+// Task Stack Sizes - AUGMENTÉS
 #define TASK_STACK_UART          4096
-#define TASK_STACK_NMEA          4096
+#define TASK_STACK_NMEA          6144      // ⬆️ Augmenté (était 4096)
 #define TASK_STACK_TCP           8192
 #define TASK_STACK_WEB           8192
 #define TASK_STACK_WIFI          4096

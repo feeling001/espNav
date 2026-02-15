@@ -42,7 +42,7 @@ void UARTHandler::init(const UARTConfig& cfg) {
     // Flush any existing data in UART buffer
     uart_flush(UART_NUM);
     
-    // Create stream buffer
+    // Create stream buffer (AUGMENTÉ: 4096 au lieu de 1024)
     streamBuffer = xStreamBufferCreate(UART_BUFFER_SIZE, 1);
     
     initialized = true;
@@ -50,6 +50,7 @@ void UARTHandler::init(const UARTConfig& cfg) {
     Serial.printf("[UART] Initialized: Baud=%u, Data=%u, Parity=%u, Stop=%u, RX=GPIO%u, TX=GPIO%u\n",
                   config.baudRate, config.dataBits, config.parity, config.stopBits, 
                   UART_RX_PIN, UART_TX_PIN);
+    Serial.printf("[UART] Stream buffer size: %u bytes\n", UART_BUFFER_SIZE);
 }
 
 void UARTHandler::start() {
@@ -111,17 +112,40 @@ bool UARTHandler::readLine(char* buffer, size_t maxLen, TickType_t timeout) {
             continue;
         }
         
-        // Add to line buffer
-        if (linePos < sizeof(lineBuffer) - 1) {
-            lineBuffer[linePos++] = byte;
-        } else {
-            // Buffer overflow
+        // ═══════════════════════════════════════════════════════════════
+        // CORRECTION 1: Détection de début de message NMEA/AIS
+        // ═══════════════════════════════════════════════════════════════
+        if (byte == '$' || byte == '!') {
+            // Nouveau message détecté - reset buffer
             linePos = 0;
-            errors++;
+            lineBuffer[linePos++] = byte;
             continue;
         }
         
-        // Check for line ending (CRLF or just LF)
+        // ═══════════════════════════════════════════════════════════════
+        // CORRECTION 2: Protection améliorée contre buffer overflow
+        // ═══════════════════════════════════════════════════════════════
+        if (linePos < sizeof(lineBuffer) - 1) {
+            // Espace disponible - ajouter le caractère
+            lineBuffer[linePos++] = byte;
+        } else {
+            // Buffer plein - comportement selon le caractère
+            if (byte == '\n' || byte == '\r') {
+                // Fin de ligne sur un message trop long
+                // On reset et on compte comme erreur
+                linePos = 0;
+                errors++;
+                Serial.println("[UART] ⚠️  Line too long, dropped");
+                continue;
+            }
+            // Sinon, ignorer le caractère et continuer
+            // (attendre le prochain $ ou fin de ligne)
+            continue;
+        }
+        
+        // ═══════════════════════════════════════════════════════════════
+        // Détection de fin de ligne
+        // ═══════════════════════════════════════════════════════════════
         if (byte == '\n') {
             // Remove line ending
             if (linePos > 1 && lineBuffer[linePos - 2] == '\r') {
@@ -139,9 +163,21 @@ bool UARTHandler::readLine(char* buffer, size_t maxLen, TickType_t timeout) {
             }
             
             linePos = 0;
-            sentencesReceived++;
             
-            return true;
+            // ═══════════════════════════════════════════════════════════════
+            // CORRECTION 3: Validation basique avant de retourner
+            // Vérifier que le message commence bien par $ ou !
+            // ═══════════════════════════════════════════════════════════════
+            if (buffer[0] == '$' || buffer[0] == '!') {
+                sentencesReceived++;
+                return true;
+            } else {
+                // Message invalide (ne commence pas par $ ou !)
+                // Probablement dû à une synchronisation perdue
+                errors++;
+                Serial.printf("[UART] ⚠️  Invalid message start: '%c' (expected $ or !)\n", buffer[0]);
+                continue;
+            }
         }
     }
     
