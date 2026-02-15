@@ -6,6 +6,10 @@
 #include "nmea_parser.h"
 #include <ArduinoJson.h>
 
+// External variables from main.cpp for monitoring
+extern volatile uint32_t g_nmeaQueueOverflows;
+extern volatile uint32_t g_nmeaQueueFullEvents;
+
 
 WebServer::WebServer(ConfigManager* cm, WiFiManager* wm, TCPServer* tcp, UARTHandler* uart, NMEAParser* nmea, BoatState* bs, BLEManager* ble) 
     : configManager(cm), wifiManager(wm), tcpServer(tcp), uartHandler(uart), nmeaParser(nmea), boatState(bs), bleManager(ble), running(false) {
@@ -398,8 +402,40 @@ void WebServer::handleGetStatus(AsyncWebServerRequest* request) {
     UARTConfig serialConfig;
     configManager->getSerialConfig(serialConfig);
     uart["baud"] = serialConfig.baudRate;
+
     
-    // BLE info (NEW!)
+
+    // NMEA Buffer info (NOUVEAU!)
+    JsonObject nmeaBuffer = doc["nmea_buffer"].to<JsonObject>();
+    nmeaBuffer["queue_size"] = NMEA_QUEUE_SIZE;
+    nmeaBuffer["overflow_total"] = g_nmeaQueueOverflows;
+    nmeaBuffer["full_events_recent"] = g_nmeaQueueFullEvents;
+    nmeaBuffer["has_overflow"] = (g_nmeaQueueFullEvents > 0);
+    
+    // CPU Load info 
+    JsonObject cpu = doc["cpu"].to<JsonObject>();
+    
+    uint32_t freeHeap = ESP.getFreeHeap();
+    uint32_t totalHeap = ESP.getHeapSize();
+    uint32_t usedHeap = totalHeap - freeHeap;
+    
+    uint8_t cpuEstimate = 0;
+    if (totalHeap > 0) {
+        uint8_t heapUsagePercent = (usedHeap * 100) / totalHeap;
+        
+        if (heapUsagePercent > 60) {
+            cpuEstimate = ((heapUsagePercent - 60) * 2);
+            if (cpuEstimate > 100) cpuEstimate = 100;
+        } else {
+            cpuEstimate = heapUsagePercent / 2;
+        }
+    }
+    
+    cpu["usage_percent"] = cpuEstimate;
+    cpu["method"] = "heap_estimation";
+    cpu["heap_usage_percent"] = (usedHeap * 100) / totalHeap;
+
+    // BLE info
     JsonObject ble = doc["ble"].to<JsonObject>();
     ble["enabled"] = bleManager->isEnabled();
     ble["advertising"] = bleManager->isAdvertising();

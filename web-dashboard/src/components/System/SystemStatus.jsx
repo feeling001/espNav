@@ -57,6 +57,18 @@ export function SystemStatus() {
     return (bytes / 1048576).toFixed(1) + ' MB';
   };
 
+  // Fonction pour déterminer la couleur du CPU selon la charge
+  const getCpuColor = (usage) => {
+    if (usage < 50) return '#27ae60'; // Vert
+    if (usage < 75) return '#f39c12'; // Orange
+    return '#e74c3c'; // Rouge
+  };
+
+  // Fonction pour déterminer la couleur du buffer NMEA
+  const getBufferColor = (hasOverflow) => {
+    return hasOverflow ? '#e74c3c' : '#27ae60';
+  };
+
   if (loading || !status) {
     return <div className="page">Loading...</div>;
   }
@@ -97,6 +109,33 @@ export function SystemStatus() {
           <div className="value">{formatBytes(status.heap.min_free)}</div>
         </div>
 
+        {/* NOUVEAU: CPU Load */}
+        <div className="status-card" style={{ borderLeftColor: getCpuColor(status.cpu?.usage_percent || 0) }}>
+          <h3>CPU Load</h3>
+          <div className="value" style={{ color: getCpuColor(status.cpu?.usage_percent || 0) }}>
+            {status.cpu?.usage_percent >= 0 ? `${status.cpu.usage_percent}%` : 'N/A'}
+          </div>
+          <div className="label">
+            {status.cpu?.usage_percent < 50 && '✓ Normal'}
+            {status.cpu?.usage_percent >= 50 && status.cpu?.usage_percent < 75 && '⚠️ Moderate'}
+            {status.cpu?.usage_percent >= 75 && '⚠️ High'}
+          </div>
+        </div>
+
+        {/* NOUVEAU: NMEA Buffer Status */}
+        <div className="status-card" style={{ borderLeftColor: getBufferColor(status.nmea_buffer?.has_overflow) }}>
+          <h3>NMEA Buffer</h3>
+          <div className="value" style={{ color: getBufferColor(status.nmea_buffer?.has_overflow) }}>
+            {status.nmea_buffer?.has_overflow ? '⚠️ Overflow' : '✓ OK'}
+          </div>
+          <div className="label">
+            Recent: {status.nmea_buffer?.full_events_recent || 0} events
+          </div>
+          <div className="label" style={{ fontSize: '10px', marginTop: '3px' }}>
+            Total overflows: {status.nmea_buffer?.overflow_total || 0}
+          </div>
+        </div>
+
         <div className="status-card">
           <h3>WiFi Mode</h3>
           <div className="value">{status.wifi.mode}</div>
@@ -128,13 +167,14 @@ export function SystemStatus() {
           <div className="value">{status.uart.baud}</div>
           <div className="label">baud</div>
         </div>
+
         <div className="status-card">
           <h3>Bluetooth BLE</h3>
           <div className="value">{status.ble.enabled ? '🟢 Enabled' : '⚫ Disabled'}</div>
-            <div className="label">Advertising: {status.ble.advertising ? 'Yes' : 'No'}</div>
-            <div className="label">Clients: {status.ble.connected_devices || 0}</div>
-            <div className="label">Device: {status.ble.device_name || 'N/A'}</div>
-          </div>
+          <div className="label">Advertising: {status.ble.advertising ? 'Yes' : 'No'}</div>
+          <div className="label">Clients: {status.ble.connected_devices || 0}</div>
+          <div className="label">Device: {status.ble.device_name || 'N/A'}</div>
+        </div>
       </div>
     </div>
   );

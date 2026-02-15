@@ -36,6 +36,11 @@ TaskHandle_t wifiTaskHandle;
 void nmeaTask(void* parameter);
 void wifiTask(void* parameter);
 
+// Global variables for system monitoring
+volatile uint32_t g_nmeaQueueOverflows = 0;
+volatile uint32_t g_nmeaQueueFullEvents = 0;
+
+
 void listLittleFSFiles(const char* dirname, uint8_t levels) {
     Serial.printf("[LittleFS] Listing directory: %s\n", dirname);
     
@@ -287,6 +292,7 @@ void nmeaTask(void* parameter) {
                 if (nmeaQueue != NULL) {
                     if (xQueueSend(nmeaQueue, &sentence, 0) != pdTRUE) {
                         queueFullCount++;
+                        g_nmeaQueueOverflows++;  // <-- AJOUT
                     }
                 }
                 
@@ -311,7 +317,10 @@ void nmeaTask(void* parameter) {
             }
             if (queueFullCount > 0) {
                 Serial.printf("[NMEA] Queue full events: %u\n", queueFullCount);
+                g_nmeaQueueFullEvents = queueFullCount;  // <-- AJOUT
                 queueFullCount = 0;  // Reset counter
+            } else {
+                g_nmeaQueueFullEvents = 0;  // <-- AJOUT
             }
             Serial.println("[NMEA] ==================\n");
             lastStatsTime = millis();
