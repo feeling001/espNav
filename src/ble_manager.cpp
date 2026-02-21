@@ -23,6 +23,10 @@ void MarineServerCallbacks::onConnect(NimBLEServer* pServer, NimBLEConnInfo& con
                   connInfo.getAddress().toString().c_str(),
                   manager->connectedDevices);
 
+    // Demander des paramètres de connexion tolérants aux coupures brèves
+    // supervision timeout = 6 secondes (60 * 10ms), latency = 0
+    pServer->updateConnParams(connInfo.getConnHandle(), 0x18, 0x30, 0, 600);
+
     if (manager->connectedDevices >= BLE_MAX_CONNECTIONS) {
         manager->stopAdvertising();
     }
