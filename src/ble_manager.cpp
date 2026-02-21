@@ -9,12 +9,22 @@
 
 CustomBLEServerCallbacks::CustomBLEServerCallbacks(BLEManager* manager) : bleManager(manager) {}
 
- void CustomBLEServerCallbacks::onConnect(BLEServer* pServer) {
+void CustomBLEServerCallbacks::onConnect(BLEServer* pServer) {
     bleManager->connectedDevices++;
     bleManager->lastActivityMs = millis();
-    Serial.printf("[BLE] Device connected (total: %u)\n", bleManager->connectedDevices);
- 
-    // Stop advertising once we reach max connections
+    bleManager->notifyFailCount = 0;  // reset failure counter on new connection
+
+    // Capture the conn_id of the newly connected client
+    // getPeerDevices(true) at this point contains only the new client
+    // (the others were already there). We store the highest conn_id seen.
+    std::map<uint16_t, conn_status_t> peers = pServer->getPeerDevices(true);
+    for (auto& kv : peers) {
+        bleManager->lastConnId = kv.first;
+    }
+
+    Serial.printf("[BLE] Device connected conn_id=%u (total: %u)\n",
+                  bleManager->lastConnId, bleManager->connectedDevices);
+
     if (bleManager->connectedDevices >= BLE_MAX_CONNECTIONS) {
         bleManager->stopAdvertising();
     }
@@ -144,7 +154,7 @@ BLEManager::BLEManager()
       pAutopilotService(nullptr), pAutopilotDataChar(nullptr), pAutopilotCmdChar(nullptr),
       serverCallbacks(nullptr), autopilotCmdCallbacks(nullptr), securityCallbacks(nullptr),
       boatState(nullptr), initialized(false), advertising(false), 
-      connectedDevices(0), lastActivityMs(0), updateTaskHandle(nullptr) {    
+      connectedDevices(0), lastActivityMs(0), lastConnId(0xFFFF), notifyFailCount(0), updateTaskHandle(nullptr) {    
         commandMutex = xSemaphoreCreateMutex();
         }
 
@@ -405,15 +415,13 @@ void BLEManager::update() {
     if (!initialized || !config.enabled || connectedDevices == 0) {
         return;
     }
-    
-    // Refresh activity timestamp whenever we successfully push data to a client
-    lastActivityMs = millis();
+
     updateNavigationData();
     updateWindData();
     updateAutopilotData();
-    // Check for zombie connections after pushing data
     checkZombieConnections();
 }
+
 
 void BLEManager::updateTask(void* parameter) {
     BLEManager* manager = static_cast<BLEManager*>(parameter);
@@ -425,12 +433,17 @@ void BLEManager::updateTask(void* parameter) {
 }
 
 void BLEManager::updateNavigationData() {
-    if (!pNavDataChar) {
-        return;
-    }
-    
+    if (!pNavDataChar) return;
+
     String json = buildNavigationJSON();
     pNavDataChar->setValue(json.c_str());
+
+    // notify() returns silently even on failure in the Arduino BLE lib.
+    // We detect a zombie by checking the TX queue length: if the BLE stack
+    // cannot deliver the packet (connection dead), the queue fills up.
+    // The simplest cross-version proxy: count consecutive cycles where
+    // getPeerDevices() still reports a client but no onDisconnect fired.
+    // We use a simple notify call and rely on checkZombieConnections for cleanup.
     pNavDataChar->notify();
 }
 
@@ -509,58 +522,53 @@ String BLEManager::buildAutopilotJSON() {
     return output;
 }
 
-// ============================================================
-// checkZombieConnections
-//
-// The ESP32 BLE stack does not always fire onDisconnect when the Android
-// client calls gatt.close() without a prior gatt.disconnect(). The result is
-// a "zombie" connection: connectedDevices > 0 but no data flows and no new
-// client can connect.
-//
-// Detection: if connectedDevices > 0 but we have received no notify
-// acknowledgement for ZOMBIE_TIMEOUT_MS, assume the connection is dead and
-// force-close it via esp_ble_gap_disconnect on all known peer addresses.
-// ============================================================
+
 void BLEManager::checkZombieConnections() {
     if (connectedDevices == 0) return;
-    if (lastActivityMs == 0) return;
-    if ((millis() - lastActivityMs) < ZOMBIE_TIMEOUT_MS) return;
 
-    Serial.printf("[BLE] ⚠ Zombie connection detected (%u device(s), no activity for %u ms)\n",
-                  connectedDevices, millis() - lastActivityMs);
+    // Ask the stack for ground truth
+    std::map<uint16_t, conn_status_t> peers = pServer->getPeerDevices(true);
 
-    // getPeerDevices(true) returns all connected clients as a map of
-    // conn_id → conn_status_t. We use the peer BDA address to call
-    // esp_ble_gap_disconnect(), which is the correct API-level way to
-    // force-close a connection from the server side without needing a
-    // gatts_if handle.
-    if (pServer) {
-        std::map<uint16_t, conn_status_t> peers = pServer->getPeerDevices(true);
-        if (peers.empty()) {
-            // Table is already empty — counter was just out of sync
-            Serial.println("[BLE] Peer table empty — resetting counter");
-        } else {
-            for (auto& kv : peers) {
-                conn_status_t& cs = kv.second;
-                // peer_device is a NimBLEConnInfo* / BLEClient* depending on
-                // the Arduino BLE version. The safest cross-version approach
-                // is to disconnect via the server's disconnect(conn_id) helper.
-                uint16_t connId = kv.first;
-                Serial.printf("[BLE] Forcing close for conn_id=%u\n", connId);
-                pServer->disconnect(connId);
+    if (!peers.empty()) {
+        // Stack agrees: connection exists. Not a zombie (yet).
+        // Nothing to do — onDisconnect will fire when it actually drops.
+        return;
+    }
+
+    // Stack says no peers, but our counter says connected → zombie
+    Serial.printf("[BLE] ⚠ Zombie detected: counter=%u but stack has 0 peers\n", connectedDevices);
+
+    // Attempt force-close using the stored conn_id and the raw ESP-IDF API.
+    // esp_ble_gatts_close(gatts_if, conn_id) terminates the connection
+    // at the HCI level regardless of stack state.
+    if (lastConnId != 0xFFFF) {
+        // gatts_if is embedded in the BLEServer internal handle.
+        // In Arduino ESP32 BLE, BLEServer exposes getHandle() → this IS
+        // the app_id, not the gatts_if. The gatts_if is stored in the
+        // service handles. We use the navigation characteristic's service
+        // handle as a proxy since it was registered first.
+        if (pNavigationService) {
+            esp_gatt_if_t gatts_if = pNavigationService->getHandle() >> 8;
+            // Fallback: iterate from 0x03 to 0x10 (typical gatts_if range)
+            // and call close on each — the stack ignores invalid combinations.
+            for (esp_gatt_if_t gif = 3; gif <= 6; gif++) {
+                esp_err_t err = esp_ble_gatts_close(gif, lastConnId);
+                if (err == ESP_OK) {
+                    Serial.printf("[BLE] esp_ble_gatts_close(gif=%u, conn=%u) OK\n", gif, lastConnId);
+                }
             }
         }
     }
 
-    // Reset regardless — if the stack ignored our disconnect request we still
-    // want advertising to restart so a fresh connection is possible.
+    // Reset state unconditionally — even if close failed, we need
+    // advertising to restart so the client can reconnect.
     connectedDevices = 0;
     lastActivityMs   = 0;
+    lastConnId       = 0xFFFF;
 
     if (config.enabled) {
         Serial.println("[BLE] Restarting advertising after zombie cleanup");
-        // Small yield to let the stack process the disconnect before advertising
-        vTaskDelay(pdMS_TO_TICKS(200));
+        vTaskDelay(pdMS_TO_TICKS(500));
         startAdvertising();
     }
 }

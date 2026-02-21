@@ -151,7 +151,9 @@ private:
     // GATT read, or write). If no activity for ZOMBIE_TIMEOUT_MS the connection
     // is forcibly closed so advertising can restart.
     uint32_t lastActivityMs;
-    static const uint32_t ZOMBIE_TIMEOUT_MS = 15000; // 15 s
+    uint16_t lastConnId;       // ← ADD THIS
+    uint8_t  notifyFailCount;  // ← ADD THIS
+    static const uint32_t ZOMBIE_TIMEOUT_MS = 15000;
     void checkZombieConnections();
 
     
