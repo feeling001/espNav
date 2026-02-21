@@ -36,10 +36,13 @@ void MarineServerCallbacks::onDisconnect(NimBLEServer* pServer, NimBLEConnInfo& 
                   reason,
                   manager->connectedDevices);
 
-    // Restart advertising so new clients can connect
+    // NimBLE 2.x : utiliser pServer->startAdvertising() depuis le callback
+    // évite de reconfigurer l'advertising depuis la stack BLE (risque de corruption)
     if (manager->config.enabled &&
         manager->connectedDevices < BLE_MAX_CONNECTIONS) {
-        manager->startAdvertising();
+        pServer->startAdvertising();
+        manager->advertising = true;
+        Serial.println("[BLE] Advertising restarted after disconnect");
     }
 }
 
@@ -281,26 +284,27 @@ void BLEManager::startAdvertising() {
 
     pAdvertising = NimBLEDevice::getAdvertising();
 
-    // Advertisement principal : nom + flags (tient dans 31 bytes)
     NimBLEAdvertisementData advData;
-    advData.setFlags(0x06);                  // LE General Discoverable, no BR/EDR
-    advData.setName(config.device_name);     // "MarineGateway" = 14 chars → OK
+    advData.setFlags(0x06);
+    advData.setName(config.device_name);
 
-    // Scan response : 1 seul UUID 128-bit (16 + 2 bytes header = 18 bytes → OK)
-    // Les 2 autres services sont découverts via GATT service discovery après connexion
     NimBLEAdvertisementData scanData;
     scanData.addServiceUUID(BLE_SERVICE_NAVIGATION_UUID);
 
     pAdvertising->setAdvertisementData(advData);
     pAdvertising->setScanResponseData(scanData);
-    pAdvertising->setMinInterval(0x30);  // 30 ms — plus raisonnable pour une montre
-    pAdvertising->setMaxInterval(0x60);  // 60 ms
+    pAdvertising->setMinInterval(0x30);
+    pAdvertising->setMaxInterval(0x60);
 
+    // NimBLE 2.x : après la première config, utiliser pServer->startAdvertising()
+    // pour les reconnexions. Ici c'est le premier démarrage.
     NimBLEDevice::startAdvertising();
     advertising = true;
 
     Serial.println("[BLE] ✓ Advertising");
 }
+
+
 void BLEManager::stopAdvertising() {
     if (!advertising) return;
     NimBLEDevice::stopAdvertising();
