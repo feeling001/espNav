@@ -354,28 +354,27 @@ void uartReaderTask(void* parameter) {
         }
         
         // Print statistics every 30 seconds
+        #ifdef DEBUG_UART
         if (millis() - lastStatsTime > 30000) {
+            
             Serial.println("\n[UART Reader] ════════ Core 0 Stats ════════");
             Serial.printf("[UART Reader] Sentences read: %u\n", sentencesRead);
             Serial.printf("[UART Reader] Parse errors: %u\n", parseErrors);
             
             if (queueFullCount > 0) {
                 float dropRate = (float)queueFullCount / sentencesRead * 100.0f;
-                Serial.printf("[UART Reader] ⚠️  Queue full events: %u (%.1f%%)\n", 
-                             queueFullCount, dropRate);
+                Serial.printf("[UART Reader] ⚠️  Queue full events: %u (%.1f%%)\n", queueFullCount, dropRate);
                 g_nmeaQueueFullEvents = queueFullCount;
             } else {
                 Serial.println("[UART Reader] ✅ No queue overflows");
                 g_nmeaQueueFullEvents = 0;
             }
             
+            
             // Queue health
             UBaseType_t queueLevel = uxQueueMessagesWaiting(nmeaQueue);
             UBaseType_t queueSpaces = uxQueueSpacesAvailable(nmeaQueue);
-            Serial.printf("[UART Reader] Queue: %u/%d used (%.1f%% full)\n", 
-                         queueLevel, NMEA_QUEUE_SIZE, 
-                         (float)queueLevel / NMEA_QUEUE_SIZE * 100.0f);
-            
+            Serial.printf("[UART Reader] Queue: %u/%d used (%.1f%% full)\n", queueLevel, NMEA_QUEUE_SIZE, (float)queueLevel / NMEA_QUEUE_SIZE * 100.0f);            
             Serial.println("[UART Reader] ════════════════════════════════\n");
             
             lastStatsTime = millis();
@@ -383,6 +382,7 @@ void uartReaderTask(void* parameter) {
             parseErrors = 0;
             queueFullCount = 0;
         }
+        #endif
         
         // Minimal delay - stay responsive
         vTaskDelay(pdMS_TO_TICKS(1));
@@ -434,6 +434,7 @@ void processorTask(void* parameter) {
             }
         }
         
+        #ifdef DEBUG_CPU
         // Print statistics every 30 seconds
         if (millis() - lastStatsTime > 30000) {
             Serial.println("\n[Processor] ════════ Core 1 Stats ════════");
@@ -481,6 +482,7 @@ void processorTask(void* parameter) {
             wsBroadcasts = 0;
             tcpSkipped = 0;
         }
+        #endif
         
         // Short delay
         vTaskDelay(pdMS_TO_TICKS(5));

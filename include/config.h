@@ -10,8 +10,9 @@
 
 #ifdef DEBUG
 //#define DEBUG_WEB
+//#define DEBUG_UART
 #define DEBUG_BLE
-#define DEBUG_UART
+
 #endif
 
 // WiFi Configuration
