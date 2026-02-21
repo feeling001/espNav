@@ -1,23 +1,35 @@
 #ifndef BLE_MANAGER_H
 #define BLE_MANAGER_H
 
+// ============================================================
+// NimBLE-Arduino 2.x API
+//
+// Breaking changes vs 1.4.x:
+//  - NimBLESecurity.h removed → security configured via NimBLEDevice static methods
+//  - NimBLESecurityCallbacks removed → use NimBLEServerCallbacks::onAuthenticationComplete
+//  - onConnect/onDisconnect now receive NimBLEConnInfo&
+//  - onWrite now receives NimBLEConnInfo&
+//  - onAuthenticationComplete receives NimBLEConnInfo&
+// ============================================================
+
 #include <Arduino.h>
-#include <BLEDevice.h>
-#include <BLEServer.h>
-#include <BLEUtils.h>
-#include <BLE2902.h>
+#include <NimBLEDevice.h>
+#include <NimBLEServer.h>
+#include <NimBLEUtils.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <freertos/semphr.h>
 #include "ble_config.h"
 #include "boat_state.h"
 
-// BLE Configuration structure
+// ============================================================
+// BLE Configuration
+// ============================================================
 struct BLEConfig {
     bool enabled;
     char device_name[32];
-    char pin_code[7];  // 6 digits + null terminator
-    
+    char pin_code[7];   // 6 digits + null terminator
+
     BLEConfig() : enabled(false) {
         strncpy(device_name, BLE_DEVICE_NAME, sizeof(device_name) - 1);
         device_name[sizeof(device_name) - 1] = '\0';
@@ -26,152 +38,128 @@ struct BLEConfig {
     }
 };
 
-// Autopilot command structure
+// ============================================================
+// Autopilot command
+// ============================================================
 struct AutopilotCommand {
     enum Type {
-        NONE = 0,
-        ENABLE,
-        DISABLE,
-        ADJUST_PLUS_10,
-        ADJUST_MINUS_10,
-        ADJUST_PLUS_1,
-        ADJUST_MINUS_1
+        NONE = 0, ENABLE, DISABLE,
+        ADJUST_PLUS_10, ADJUST_MINUS_10,
+        ADJUST_PLUS_1,  ADJUST_MINUS_1
     };
-    
-    Type type;
+    Type     type;
     uint32_t timestamp;
-    
     AutopilotCommand() : type(NONE), timestamp(0) {}
 };
 
+// ============================================================
 // Forward declaration
+// ============================================================
 class BLEManager;
 
-// Custom BLE Server callbacks (renamed to avoid conflict with library class)
-class CustomBLEServerCallbacks : public BLEServerCallbacks {
+// ============================================================
+// Server callbacks — NimBLE 2.x API
+//
+// onConnect / onDisconnect now receive NimBLEConnInfo&.
+// onAuthenticationComplete replaces NimBLESecurityCallbacks.
+// ============================================================
+class MarineServerCallbacks : public NimBLEServerCallbacks {
 public:
-    CustomBLEServerCallbacks(BLEManager* manager);
-    void onConnect(BLEServer* pServer) override;
-    void onDisconnect(BLEServer* pServer) override;
-    void onDisconnect(BLEServer* pServer, esp_ble_gatts_cb_param_t* param) override;
-    
+    explicit MarineServerCallbacks(BLEManager* mgr) : manager(mgr) {}
+
+    void onConnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo) override;
+    void onDisconnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo, int reason) override;
+    void onAuthenticationComplete(NimBLEConnInfo& connInfo) override;
+
 private:
-    BLEManager* bleManager;
+    BLEManager* manager;
 };
 
-// Autopilot command characteristic callback
-class AutopilotCommandCallbacks : public BLECharacteristicCallbacks {
+// ============================================================
+// Characteristic write callback — NimBLE 2.x API
+// onWrite now receives NimBLEConnInfo&
+// ============================================================
+class AutopilotCmdCallbacks : public NimBLECharacteristicCallbacks {
 public:
-    AutopilotCommandCallbacks(BLEManager* manager);
-    void onWrite(BLECharacteristic* pCharacteristic) override;
-    
+    explicit AutopilotCmdCallbacks(BLEManager* mgr) : manager(mgr) {}
+
+    void onWrite(NimBLECharacteristic* pChar, NimBLEConnInfo& connInfo) override;
+
 private:
-    BLEManager* bleManager;
+    BLEManager* manager;
 };
 
-// Custom BLE Security callbacks (renamed to avoid conflict with library class)
-class CustomBLESecurityCallbacks : public BLESecurityCallbacks {
-public:
-    CustomBLESecurityCallbacks(BLEManager* manager);
-    
-    uint32_t onPassKeyRequest() override;
-    void onPassKeyNotify(uint32_t pass_key) override;
-    bool onConfirmPIN(uint32_t pass_key) override;
-    bool onSecurityRequest() override;
-    void onAuthenticationComplete(esp_ble_auth_cmpl_t auth_cmpl) override;
-    
-private:
-    BLEManager* bleManager;
-};
-
+// ============================================================
+// BLEManager
+// ============================================================
 class BLEManager {
 public:
     BLEManager();
     ~BLEManager();
-    
+
     void init(const BLEConfig& config, BoatState* state);
     void start();
     void stop();
     void update();
-    
-    // Configuration
-    bool isEnabled() const { return config.enabled; }
-    void setEnabled(bool enabled);
-    void setDeviceName(const char* name);
-    void setPinCode(const char* pin);
-    BLEConfig getConfig() const { return config; }
-    
-    // Status
-    bool isAdvertising() const { return advertising; }
-    uint32_t getConnectedDevices() const { return connectedDevices; }
-    
-    // Autopilot commands
-    bool hasAutopilotCommand();
+
+    bool      isEnabled()           const { return config.enabled; }
+    void      setEnabled(bool en);
+    void      setDeviceName(const char* name);
+    void      setPinCode(const char* pin);
+    BLEConfig getConfig()           const { return config; }
+    bool      isAdvertising()       const { return advertising; }
+    uint32_t  getConnectedDevices() const { return connectedDevices; }
+
+    bool             hasAutopilotCommand();
     AutopilotCommand getAutopilotCommand();
-    
-    // Friend classes
-    friend class CustomBLEServerCallbacks;
-    friend class AutopilotCommandCallbacks;
-    friend class CustomBLESecurityCallbacks;
-    
+
+    friend class MarineServerCallbacks;
+    friend class AutopilotCmdCallbacks;
+
 private:
-    // Core BLE objects
-    BLEServer* pServer;
-    BLEAdvertising* pAdvertising;
-    
-    // Services and characteristics
-    BLEService* pNavigationService;
-    BLECharacteristic* pNavDataChar;
-    
-    BLEService* pWindService;
-    BLECharacteristic* pWindDataChar;
-    
-    BLEService* pAutopilotService;
-    BLECharacteristic* pAutopilotDataChar;
-    BLECharacteristic* pAutopilotCmdChar;
-    
-    // Callbacks (using renamed classes)
-    CustomBLEServerCallbacks* serverCallbacks;
-    AutopilotCommandCallbacks* autopilotCmdCallbacks;
-    CustomBLESecurityCallbacks* securityCallbacks;
-    
+    // NimBLE objects
+    NimBLEServer*         pServer;
+    NimBLEAdvertising*    pAdvertising;
+
+    NimBLEService*        pNavService;
+    NimBLECharacteristic* pNavDataChar;
+
+    NimBLEService*        pWindService;
+    NimBLECharacteristic* pWindDataChar;
+
+    NimBLEService*        pAutopilotService;
+    NimBLECharacteristic* pAutopilotDataChar;
+    NimBLECharacteristic* pAutopilotCmdChar;
+
+    MarineServerCallbacks*  serverCallbacks;
+    AutopilotCmdCallbacks*  autopilotCmdCallbacks;
+
     // State
-    BLEConfig config;
+    BLEConfig  config;
     BoatState* boatState;
-    bool initialized;
-    bool advertising;
-    uint32_t connectedDevices;
-    
-    // Autopilot command queue
-    AutopilotCommand pendingCommand;
+    bool       initialized;
+    bool       advertising;
+    uint32_t   connectedDevices;
+
+    // Autopilot queue
+    AutopilotCommand  pendingCommand;
     SemaphoreHandle_t commandMutex;
 
-    // Zombie connection watchdog
-    // Tracks the last time a connected client sent any activity (notify ACK,
-    // GATT read, or write). If no activity for ZOMBIE_TIMEOUT_MS the connection
-    // is forcibly closed so advertising can restart.
-    uint32_t lastActivityMs;
-    uint16_t lastConnId;       // ← ADD THIS
-    uint8_t  notifyFailCount;  // ← ADD THIS
-    static const uint32_t ZOMBIE_TIMEOUT_MS = 15000;
-    void checkZombieConnections();
+    // FreeRTOS update task
+    TaskHandle_t   updateTaskHandle;
+    static void    updateTask(void* param);
 
-    
-    // Update task
-    TaskHandle_t updateTaskHandle;
-    static void updateTask(void* parameter);
-    
-    // Helper methods
-    void setupServices();
+    // Internal helpers
     void setupSecurity();
+    void setupServices();
     void startAdvertising();
     void stopAdvertising();
-    
-    void updateNavigationData();
+
+    void updateNavData();
     void updateWindData();
     void updateAutopilotData();
-    
-    String buildNavigationJSON();
+
+    String buildNavJSON();
     String buildWindJSON();
     String buildAutopilotJSON();
 };
