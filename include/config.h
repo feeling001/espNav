@@ -6,6 +6,8 @@
 // Version
 #define VERSION "1.0.0"
 
+// #define DEBUG
+
 // WiFi Configuration
 #define WIFI_CONNECT_TIMEOUT_MS  30000
 #define WIFI_AP_SSID_PREFIX      "MarineGateway"

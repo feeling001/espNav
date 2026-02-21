@@ -86,29 +86,36 @@ bool ConfigManager::getSerialConfig(UARTConfig& config) {
     config.parity = nvs.getUChar("serial_parity", 0);
     config.stopBits = nvs.getUChar("serial_stop", 1);
     
+    #ifdef DEBUG
     Serial.println("[Config] Serial config loaded from NVS");
     Serial.printf("[Config]   Baud: %u\n", config.baudRate);
     Serial.printf("[Config]   Data: %u\n", config.dataBits);
     Serial.printf("[Config]   Parity: %u\n", config.parity);
     Serial.printf("[Config]   Stop: %u\n", config.stopBits);
+    #endif
     
     return true;
 }
 
 bool ConfigManager::setSerialConfig(const UARTConfig& config) {
+    #ifdef DEBUG
     Serial.println("[Config] Saving Serial config to NVS");
-    
+    #endif
+
     nvs.putUInt("serial_baud", config.baudRate);
     nvs.putUChar("serial_data", config.dataBits);
     nvs.putUChar("serial_parity", config.parity);
     nvs.putUChar("serial_stop", config.stopBits);
     
+    #ifdef DEBUG
     Serial.printf("[Config]   Baud: %u\n", config.baudRate);
     Serial.printf("[Config]   Data: %u\n", config.dataBits);
     Serial.printf("[Config]   Parity: %u\n", config.parity);
     Serial.printf("[Config]   Stop: %u\n", config.stopBits);
     
     Serial.println("[Config] ✓ Serial config saved");
+    #endif
+
     return true;
 }
 

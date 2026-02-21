@@ -10,6 +10,7 @@
 #include "config_manager.h"
 #include "wifi_manager.h"
 #include "uart_handler.h"
+// #include "seatalk1_handler.h"
 #include "nmea_parser.h"
 #include "tcp_server.h"
 #include "web_server.h"

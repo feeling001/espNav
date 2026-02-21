@@ -53,6 +53,7 @@ public:
     CustomBLEServerCallbacks(BLEManager* manager);
     void onConnect(BLEServer* pServer) override;
     void onDisconnect(BLEServer* pServer) override;
+    void onDisconnect(BLEServer* pServer, esp_ble_gatts_cb_param_t* param) override;
     
 private:
     BLEManager* bleManager;
@@ -144,6 +145,15 @@ private:
     // Autopilot command queue
     AutopilotCommand pendingCommand;
     SemaphoreHandle_t commandMutex;
+
+    // Zombie connection watchdog
+    // Tracks the last time a connected client sent any activity (notify ACK,
+    // GATT read, or write). If no activity for ZOMBIE_TIMEOUT_MS the connection
+    // is forcibly closed so advertising can restart.
+    uint32_t lastActivityMs;
+    static const uint32_t ZOMBIE_TIMEOUT_MS = 15000; // 15 s
+    void checkZombieConnections();
+
     
     // Update task
     TaskHandle_t updateTaskHandle;

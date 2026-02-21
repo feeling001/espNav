@@ -1,5 +1,7 @@
 #include "ble_manager.h"
 #include <ArduinoJson.h>
+#include <esp_gap_ble_api.h>   // esp_ble_gap_disconnect()
+#include <esp_gatt_defs.h>     // esp_ble_gatts_cb_param_t
 
 // ============================================================
 // BLE Server Callbacks Implementation
@@ -7,20 +9,39 @@
 
 CustomBLEServerCallbacks::CustomBLEServerCallbacks(BLEManager* manager) : bleManager(manager) {}
 
-void CustomBLEServerCallbacks::onConnect(BLEServer* pServer) {
+ void CustomBLEServerCallbacks::onConnect(BLEServer* pServer) {
     bleManager->connectedDevices++;
+    bleManager->lastActivityMs = millis();
     Serial.printf("[BLE] Device connected (total: %u)\n", bleManager->connectedDevices);
+ 
+    // Stop advertising once we reach max connections
+    if (bleManager->connectedDevices >= BLE_MAX_CONNECTIONS) {
+        bleManager->stopAdvertising();
+    }
 }
 
+void CustomBLEServerCallbacks::onDisconnect(BLEServer* pServer, esp_ble_gatts_cb_param_t* param) {
+    uint8_t reason = param ? param->disconnect.reason : 0;
+    Serial.printf("[BLE] Device disconnected — reason=0x%02X (remaining: %u)\n", reason, bleManager->connectedDevices > 0 ? bleManager->connectedDevices - 1 : 0);
+
+     if (bleManager->connectedDevices > 0) {
+         bleManager->connectedDevices--;
+     }
+
+     if (bleManager->config.enabled && bleManager->connectedDevices < BLE_MAX_CONNECTIONS) {
+        // Use a FreeRTOS software timer instead of delay() to defer advertising
+        // restart out of the BLE stack callback context.
+         bleManager->startAdvertising();
+     }
+ }
+
+// Fallback overload for older Arduino BLE versions that don't pass the param.
 void CustomBLEServerCallbacks::onDisconnect(BLEServer* pServer) {
     if (bleManager->connectedDevices > 0) {
         bleManager->connectedDevices--;
     }
-    Serial.printf("[BLE] Device disconnected (remaining: %u)\n", bleManager->connectedDevices);
-    
-    // Restart advertising if still enabled
+    Serial.printf("[BLE] Device disconnected — no param (remaining: %u)\n", bleManager->connectedDevices);
     if (bleManager->config.enabled && bleManager->connectedDevices < BLE_MAX_CONNECTIONS) {
-        delay(500);  // Brief delay before restarting advertising
         bleManager->startAdvertising();
     }
 }
@@ -123,10 +144,9 @@ BLEManager::BLEManager()
       pAutopilotService(nullptr), pAutopilotDataChar(nullptr), pAutopilotCmdChar(nullptr),
       serverCallbacks(nullptr), autopilotCmdCallbacks(nullptr), securityCallbacks(nullptr),
       boatState(nullptr), initialized(false), advertising(false), 
-      connectedDevices(0), updateTaskHandle(nullptr) {
-    
-    commandMutex = xSemaphoreCreateMutex();
-}
+      connectedDevices(0), lastActivityMs(0), updateTaskHandle(nullptr) {    
+        commandMutex = xSemaphoreCreateMutex();
+        }
 
 BLEManager::~BLEManager() {
     stop();
@@ -386,9 +406,13 @@ void BLEManager::update() {
         return;
     }
     
+    // Refresh activity timestamp whenever we successfully push data to a client
+    lastActivityMs = millis();
     updateNavigationData();
     updateWindData();
     updateAutopilotData();
+    // Check for zombie connections after pushing data
+    checkZombieConnections();
 }
 
 void BLEManager::updateTask(void* parameter) {
@@ -483,4 +507,46 @@ String BLEManager::buildAutopilotJSON() {
     String output;
     serializeJson(doc, output);
     return output;
+}
+
+// ============================================================
+// checkZombieConnections
+//
+// The ESP32 BLE stack does not always fire onDisconnect when the Android
+// client calls gatt.close() without a prior gatt.disconnect(). The result is
+// a "zombie" connection: connectedDevices > 0 but no data flows and no new
+// client can connect.
+//
+// Detection: if connectedDevices > 0 but we have received no notify
+// acknowledgement for ZOMBIE_TIMEOUT_MS, assume the connection is dead and
+// force-close it via esp_ble_gap_disconnect on all known peer addresses.
+// ============================================================
+void BLEManager::checkZombieConnections() {
+    if (connectedDevices == 0) return;
+    if (lastActivityMs == 0) return;
+    if ((millis() - lastActivityMs) < ZOMBIE_TIMEOUT_MS) return;
+
+    Serial.printf("[BLE] ⚠ Zombie connection detected (%u device(s), no activity for %u ms)\n",
+                  connectedDevices, millis() - lastActivityMs);
+
+    // Iterate over all active connections and force-close them
+    if (pServer) {
+        std::map<uint16_t, conn_status_t> peerDevices = pServer->getPeerDevices(true);
+        for (auto& kv : peerDevices) {
+            uint16_t connId = kv.first;
+            Serial.printf("[BLE] Forcing disconnect for conn_id=%u\n", connId);
+            // esp_ble_gap_disconnect requires the peer BD address
+            conn_status_t status = kv.second;
+            esp_ble_gap_disconnect(status.peer_device->getPeerAddress().getNative());
+        }
+    }
+
+    // Reset counter and restart advertising regardless
+    connectedDevices = 0;
+    lastActivityMs   = 0;
+
+    if (config.enabled) {
+        Serial.println("[BLE] Restarting advertising after zombie cleanup");
+        startAdvertising();
+    }
 }
