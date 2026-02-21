@@ -1,0 +1,407 @@
+#include "seatalk1_handler.h"
+
+// Predefined SeaTalk datagrams
+static const uint8_t ST_BRIDGE_ID[] = {0x90, 0x00, 0xA3};
+static const uint8_t ST_KEYSTROKE_AUTO[] = {0x86, 0x21, 0x01, 0xFE};
+static const uint8_t ST_KEYSTROKE_STANDBY[] = {0x86, 0x21, 0x02, 0xFD};
+static const uint8_t ST_KEYSTROKE_PLUS_1[] = {0x86, 0x21, 0x07, 0xF8};
+static const uint8_t ST_KEYSTROKE_MINUS_1[] = {0x86, 0x21, 0x05, 0xFA};
+static const uint8_t ST_KEYSTROKE_PLUS_10[] = {0x86, 0x21, 0x08, 0xF7};
+static const uint8_t ST_KEYSTROKE_MINUS_10[] = {0x86, 0x21, 0x06, 0xF9};
+static const uint8_t ST_BEEP_ON[] = {0xA8, 0x53, 0x80, 0x00, 0x00, 0xD3};
+static const uint8_t ST_BEEP_OFF[] = {0xA8, 0x43, 0x80, 0x00, 0x00, 0xC3};
+
+SeaTalk1Handler::SeaTalk1Handler(HardwareSerial* serial)
+    : _serial(serial)
+    , _rxBytesExpected(0)
+    , _rxBytesReceived(0)
+    , _rxInProgress(false)
+    , _datagramCallback(nullptr)
+    , _windSpeedCallback(nullptr)
+    , _windAngleCallback(nullptr)
+    , _headingCallback(nullptr)
+    , _depthCallback(nullptr)
+    , _speedCallback(nullptr)
+    , _positionCallback(nullptr)
+    , _lastBridgeIDTime(0)
+    , _autoBridgeID(true)
+{
+    memset(&_stats, 0, sizeof(_stats));
+    memset(&_rxDatagram, 0, sizeof(_rxDatagram));
+}
+
+void SeaTalk1Handler::begin() {
+    // Configure UART for SeaTalk1: 4800 baud, 9 data bits, no parity, 1 stop bit
+    // Note: ESP32 UART supports 9-bit mode via parity bit
+    // We use SERIAL_9N1 which is 9 data bits + no parity
+    _serial->begin(SEATALK_BAUDRATE, SERIAL_9N1);
+    _serial->setTimeout(5);
+    
+    resetStatistics();
+    _rxInProgress = false;
+    _rxBytesExpected = 0;
+    _rxBytesReceived = 0;
+    _lastBridgeIDTime = millis();
+    
+    // Send initial bridge ID
+    if (_autoBridgeID) {
+        sendBridgeID();
+    }
+}
+
+void SeaTalk1Handler::end() {
+    _serial->end();
+}
+
+void SeaTalk1Handler::process() {
+    // Process incoming data
+    while (_serial->available() > 0) {
+        processReceivedByte();
+    }
+    
+    // Send periodic bridge ID if enabled
+    if (_autoBridgeID && (millis() - _lastBridgeIDTime >= SEATALK_BRIDGE_ID_INTERVAL_MS)) {
+        sendBridgeID();
+        _lastBridgeIDTime = millis();
+    }
+}
+
+void SeaTalk1Handler::processReceivedByte() {
+    // Read byte with 9-bit support
+    // In ESP32, the 9th bit (parity/command bit) is automatically handled
+    // We can detect it by checking if we're at the start of a new datagram
+    
+    if (!_serial->available()) return;
+    
+    // In 9N1 mode, the 9th bit is reflected in bits above 0xFF
+    // For standard read, we get the 8-bit data
+    uint16_t inByte = _serial->read();
+    
+    // Detect command byte (start of new datagram)
+    // In practice, we detect this by:
+    // 1. No datagram in progress
+    // 2. Or expected bytes received
+    bool isCommandByte = false;
+    
+    if (!_rxInProgress || _rxBytesReceived >= _rxBytesExpected) {
+        // This must be a command byte (first byte of datagram)
+        isCommandByte = true;
+        _rxInProgress = true;
+        _rxBytesReceived = 0;
+        _rxBytesExpected = 3; // Minimum length, will be updated after attribute byte
+        _rxDatagram.data[0] = inByte & 0xFF;
+        _rxDatagram.timestamp = millis();
+        _rxBytesReceived = 1;
+    }
+    else if (_rxBytesReceived == 1) {
+        // This is the attribute byte - extract total length
+        _rxDatagram.data[1] = inByte & 0xFF;
+        _rxBytesExpected = 3 + (inByte & 0x0F); // 3 base bytes + additional bytes
+        _rxBytesReceived = 2;
+    }
+    else {
+        // Regular data byte
+        if (_rxBytesReceived < SEATALK_MAX_DATAGRAM_LENGTH) {
+            _rxDatagram.data[_rxBytesReceived] = inByte & 0xFF;
+            _rxBytesReceived++;
+        }
+    }
+    
+    // Check if datagram is complete
+    if (_rxBytesReceived >= _rxBytesExpected && _rxBytesExpected >= 3) {
+        _rxDatagram.length = _rxBytesReceived;
+        processCompleteDatagram();
+        _rxInProgress = false;
+        _rxBytesExpected = 0;
+        _rxBytesReceived = 0;
+    }
+}
+
+void SeaTalk1Handler::processCompleteDatagram() {
+    _stats.datagramsReceived++;
+    
+    // Call generic callback
+    if (_datagramCallback) {
+        _datagramCallback(&_rxDatagram);
+    }
+    
+    // Parse and call specific callbacks
+    parseAndCallback(&_rxDatagram);
+}
+
+void SeaTalk1Handler::parseAndCallback(const SeaTalkDatagram* datagram) {
+    if (!datagram || datagram->length < 3) return;
+    
+    uint8_t command = datagram->data[0];
+    
+    switch (command) {
+        case ST_CMD_APPARENT_WIND_SPEED:
+            parseWindSpeed(datagram);
+            break;
+            
+        case ST_CMD_APPARENT_WIND_ANGLE:
+            parseWindAngle(datagram);
+            break;
+            
+        case ST_CMD_COMPASS_HEADING:
+            parseHeading(datagram);
+            break;
+            
+        case ST_CMD_DEPTH:
+            parseDepth(datagram);
+            break;
+            
+        case ST_CMD_SPEED_THROUGH_WATER:
+        case ST_CMD_SOG:
+            parseSpeed(datagram);
+            break;
+            
+        case ST_CMD_LAT_POSITION:
+        case ST_CMD_LON_POSITION:
+            parsePosition(datagram);
+            break;
+    }
+}
+
+void SeaTalk1Handler::parseWindSpeed(const SeaTalkDatagram* datagram) {
+    if (!_windSpeedCallback || datagram->length < 4) return;
+    
+    // Command 11: Apparent Wind Speed
+    // 11 01 XX 0Y: Speed = (XX & 0x7F) + Y/10 Knots
+    // Units: XX&0x80=0 => Knots, XX&0x80=0x80 => m/s
+    uint8_t xx = datagram->data[2];
+    uint8_t y = datagram->data[3];
+    
+    float speed = (float)(xx & 0x7F) + (float)y / 10.0f;
+    bool isMetric = (xx & 0x80) != 0;
+    
+    _windSpeedCallback(speed, isMetric);
+}
+
+void SeaTalk1Handler::parseWindAngle(const SeaTalkDatagram* datagram) {
+    if (!_windAngleCallback || datagram->length < 4) return;
+    
+    // Command 10: Apparent Wind Angle
+    // 10 01 XX YY: Angle = XXYY/2 degrees right of bow
+    uint16_t rawAngle = (datagram->data[3] << 8) | datagram->data[2];
+    float angle = (float)rawAngle / 2.0f;
+    
+    _windAngleCallback(angle);
+}
+
+void SeaTalk1Handler::parseHeading(const SeaTalkDatagram* datagram) {
+    if (!_headingCallback || datagram->length < 9) return;
+    
+    // Command 84: Compass heading, Autopilot course, and Rudder position
+    // 84 U6 VW XY 0Z 00 RR SS TT
+    uint8_t u = datagram->data[1];
+    uint8_t vw = datagram->data[2];
+    uint8_t xy = datagram->data[3];
+    uint8_t z = datagram->data[4];
+    uint8_t rr = datagram->data[6];
+    
+    // Compass heading in degrees
+    float heading = (float)((u & 0x3) * 90 + (vw & 0x3F) * 2 + (u & 0xC) / 8);
+    
+    // Autopilot course in degrees
+    float course = (float)((vw >> 6) * 90 + xy / 2);
+    
+    // Autopilot mode
+    uint8_t mode = z & 0x06; // 0=Standby, 2=Auto, 4=Vane
+    
+    // Rudder position (signed)
+    int8_t rudder = (int8_t)rr;
+    
+    _headingCallback(heading, course, mode, rudder);
+}
+
+void SeaTalk1Handler::parseDepth(const SeaTalkDatagram* datagram) {
+    if (!_depthCallback || datagram->length < 5) return;
+    
+    // Command 00: Depth below transducer
+    // 00 02 YZ XX XX: Depth = XXXX/10 feet
+    // Y=0 => feet, Y=4 => meters
+    uint8_t yz = datagram->data[2];
+    uint16_t rawDepth = (datagram->data[4] << 8) | datagram->data[3];
+    
+    float depth = (float)rawDepth / 10.0f;
+    bool isMeters = (yz & 0xF0) == 0x40;
+    
+    _depthCallback(depth, isMeters);
+}
+
+void SeaTalk1Handler::parseSpeed(const SeaTalkDatagram* datagram) {
+    if (!_speedCallback || datagram->length < 4) return;
+    
+    uint8_t command = datagram->data[0];
+    
+    if (command == ST_CMD_SPEED_THROUGH_WATER) {
+        // Command 20: Speed through water
+        // 20 01 XX XX: Speed = XXXX/10 Knots
+        uint16_t rawSpeed = (datagram->data[3] << 8) | datagram->data[2];
+        float speed = (float)rawSpeed / 10.0f;
+        _speedCallback(speed);
+    }
+    else if (command == ST_CMD_SOG) {
+        // Command 52: Speed over ground
+        // 52 01 XX XX: Speed = XXXX/10 Knots
+        uint16_t rawSpeed = (datagram->data[3] << 8) | datagram->data[2];
+        float speed = (float)rawSpeed / 10.0f;
+        _speedCallback(speed);
+    }
+}
+
+void SeaTalk1Handler::parsePosition(const SeaTalkDatagram* datagram) {
+    // Position requires storing state between LAT and LON messages
+    // For simplicity, this is a placeholder - implement if needed
+    // Would require storing last LAT/LON and calling callback when both received
+}
+
+bool SeaTalk1Handler::waitForBusIdle() {
+    // Wait for bus to be idle (no data for SEATALK_BUS_IDLE_TIME_MS)
+    uint32_t lastByteTime = millis();
+    
+    while (millis() - lastByteTime < SEATALK_BUS_IDLE_TIME_MS) {
+        if (_serial->available()) {
+            _serial->read(); // Discard data
+            lastByteTime = millis();
+        }
+        delay(1);
+    }
+    
+    return true;
+}
+
+bool SeaTalk1Handler::sendDatagram(const uint8_t* data, uint8_t length) {
+    if (!data || length < 3 || length > SEATALK_MAX_DATAGRAM_LENGTH) {
+        return false;
+    }
+    
+    // CSMA/CD: Carrier Sense Multiple Access with Collision Detection
+    for (uint8_t attempt = 0; attempt < SEATALK_MAX_SEND_TRIES; attempt++) {
+        // Wait for bus to be idle
+        waitForBusIdle();
+        
+        bool collision = false;
+        
+        // Send bytes and verify (collision detection)
+        for (uint8_t i = 0; i < length && !collision; i++) {
+            // For first byte (command byte), we need to set the 9th bit
+            // In ESP32 SERIAL_9N1 mode, we just write normally
+            // The command bit distinction must be handled by the receiver
+            
+            // Write byte
+            _serial->write(data[i]);
+            delay(SEATALK_BUS_IDLE_TIME_MS);
+            
+            // Read back and verify (collision detection)
+            if (_serial->available()) {
+                uint8_t readBack = _serial->read();
+                if (readBack != data[i]) {
+                    collision = true;
+                    _stats.collisions++;
+                }
+            } else {
+                // Nothing received - possible collision or bus error
+                collision = true;
+                _stats.collisions++;
+            }
+        }
+        
+        if (!collision) {
+            _stats.datagramsSent++;
+            return true;
+        }
+        
+        // Collision detected, wait random time before retry
+        delay(random(SEATALK_COLLISION_WAIT_MS_MIN, SEATALK_COLLISION_WAIT_MS_MAX));
+    }
+    
+    // All retries failed
+    _stats.datagramsSendFailed++;
+    return false;
+}
+
+bool SeaTalk1Handler::sendKeystroke(uint8_t keystroke, uint8_t device) {
+    uint8_t datagram[4] = {0x86, device, keystroke, (uint8_t)(~keystroke)};
+    return sendDatagram(datagram, 4);
+}
+
+bool SeaTalk1Handler::sendAuto() {
+    return sendDatagram(ST_KEYSTROKE_AUTO, sizeof(ST_KEYSTROKE_AUTO));
+}
+
+bool SeaTalk1Handler::sendStandby() {
+    return sendDatagram(ST_KEYSTROKE_STANDBY, sizeof(ST_KEYSTROKE_STANDBY));
+}
+
+bool SeaTalk1Handler::sendPlusOne() {
+    return sendDatagram(ST_KEYSTROKE_PLUS_1, sizeof(ST_KEYSTROKE_PLUS_1));
+}
+
+bool SeaTalk1Handler::sendMinusOne() {
+    return sendDatagram(ST_KEYSTROKE_MINUS_1, sizeof(ST_KEYSTROKE_MINUS_1));
+}
+
+bool SeaTalk1Handler::sendPlusTen() {
+    return sendDatagram(ST_KEYSTROKE_PLUS_10, sizeof(ST_KEYSTROKE_PLUS_10));
+}
+
+bool SeaTalk1Handler::sendMinusTen() {
+    return sendDatagram(ST_KEYSTROKE_MINUS_10, sizeof(ST_KEYSTROKE_MINUS_10));
+}
+
+bool SeaTalk1Handler::sendBridgeID() {
+    return sendDatagram(ST_BRIDGE_ID, sizeof(ST_BRIDGE_ID));
+}
+
+bool SeaTalk1Handler::sendBeepOn() {
+    return sendDatagram(ST_BEEP_ON, sizeof(ST_BEEP_ON));
+}
+
+bool SeaTalk1Handler::sendBeepOff() {
+    return sendDatagram(ST_BEEP_OFF, sizeof(ST_BEEP_OFF));
+}
+
+void SeaTalk1Handler::onDatagram(SeaTalkDatagramCallback callback) {
+    _datagramCallback = callback;
+}
+
+void SeaTalk1Handler::onWindSpeed(SeaTalkWindSpeedCallback callback) {
+    _windSpeedCallback = callback;
+}
+
+void SeaTalk1Handler::onWindAngle(SeaTalkWindAngleCallback callback) {
+    _windAngleCallback = callback;
+}
+
+void SeaTalk1Handler::onHeading(SeaTalkHeadingCallback callback) {
+    _headingCallback = callback;
+}
+
+void SeaTalk1Handler::onDepth(SeaTalkDepthCallback callback) {
+    _depthCallback = callback;
+}
+
+void SeaTalk1Handler::onSpeed(SeaTalkSpeedCallback callback) {
+    _speedCallback = callback;
+}
+
+void SeaTalk1Handler::onPosition(SeaTalkPositionCallback callback) {
+    _positionCallback = callback;
+}
+
+SeaTalk1Handler::Statistics SeaTalk1Handler::getStatistics() const {
+    return _stats;
+}
+
+void SeaTalk1Handler::resetStatistics() {
+    memset(&_stats, 0, sizeof(_stats));
+}
+
+void SeaTalk1Handler::setAutoBridgeID(bool enable) {
+    _autoBridgeID = enable;
+    if (enable) {
+        _lastBridgeIDTime = millis();
+    }
+}

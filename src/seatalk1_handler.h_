@@ -1,0 +1,150 @@
+#ifndef SEATALK1_HANDLER_H
+#define SEATALK1_HANDLER_H
+
+#include <Arduino.h>
+#include <HardwareSerial.h>
+
+// SeaTalk1 Protocol Configuration
+#define SEATALK_BAUDRATE 4800
+#define SEATALK_MAX_DATAGRAM_LENGTH 18
+#define SEATALK_MAX_SEND_TRIES 5
+#define SEATALK_COLLISION_WAIT_MS_MIN 2
+#define SEATALK_COLLISION_WAIT_MS_MAX 50
+#define SEATALK_BUS_IDLE_TIME_MS 3
+#define SEATALK_BRIDGE_ID_INTERVAL_MS 10000
+
+// SeaTalk1 Command IDs (from documentation)
+#define ST_CMD_DEPTH 0x00
+#define ST_CMD_APPARENT_WIND_ANGLE 0x10
+#define ST_CMD_APPARENT_WIND_SPEED 0x11
+#define ST_CMD_SPEED_THROUGH_WATER 0x20
+#define ST_CMD_WATER_TEMP 0x27
+#define ST_CMD_LAMP_INTENSITY 0x30
+#define ST_CMD_LAT_POSITION 0x50
+#define ST_CMD_LON_POSITION 0x51
+#define ST_CMD_SOG 0x52
+#define ST_CMD_COG_MAG 0x53
+#define ST_CMD_GMT_TIME 0x54
+#define ST_CMD_KEYSTROKE 0x86
+#define ST_CMD_COMPASS_HEADING 0x84
+#define ST_CMD_AUTOPILOT_PARAM 0x88
+#define ST_CMD_DEVICE_ID 0x90
+
+// Autopilot Keystroke Commands
+#define ST_KEY_AUTO 0x01
+#define ST_KEY_STANDBY 0x02
+#define ST_KEY_TRACK 0x03
+#define ST_KEY_DISP 0x04
+#define ST_KEY_MINUS_1 0x05
+#define ST_KEY_MINUS_10 0x06
+#define ST_KEY_PLUS_1 0x07
+#define ST_KEY_PLUS_10 0x08
+
+// Structure for SeaTalk datagram
+struct SeaTalkDatagram {
+    uint8_t data[SEATALK_MAX_DATAGRAM_LENGTH];
+    uint8_t length;
+    uint32_t timestamp;
+};
+
+// Callback function types
+typedef void (*SeaTalkDatagramCallback)(const SeaTalkDatagram* datagram);
+typedef void (*SeaTalkWindSpeedCallback)(float windSpeed, bool isMetric);
+typedef void (*SeaTalkWindAngleCallback)(float windAngle);
+typedef void (*SeaTalkHeadingCallback)(float heading, float course, uint8_t autopilotMode, int8_t rudderPosition);
+typedef void (*SeaTalkDepthCallback)(float depth, bool isMeters);
+typedef void (*SeaTalkSpeedCallback)(float speed);
+typedef void (*SeaTalkPositionCallback)(float latitude, float longitude);
+
+class SeaTalk1Handler {
+public:
+    // Constructor
+    SeaTalk1Handler(HardwareSerial* serial = &Serial1);
+    
+    // Initialization
+    void begin();
+    void end();
+    
+    // Main processing (call from task or loop)
+    void process();
+    
+    // Sending functions
+    bool sendDatagram(const uint8_t* data, uint8_t length);
+    bool sendKeystroke(uint8_t keystroke, uint8_t device = 0x21); // device: 0x01=ST1000+, 0x21=Z101 remote
+    bool sendAuto();
+    bool sendStandby();
+    bool sendPlusOne();
+    bool sendMinusOne();
+    bool sendPlusTen();
+    bool sendMinusTen();
+    bool sendBridgeID();
+    bool sendBeepOn();
+    bool sendBeepOff();
+    
+    // Register callbacks for specific message types
+    void onDatagram(SeaTalkDatagramCallback callback);
+    void onWindSpeed(SeaTalkWindSpeedCallback callback);
+    void onWindAngle(SeaTalkWindAngleCallback callback);
+    void onHeading(SeaTalkHeadingCallback callback);
+    void onDepth(SeaTalkDepthCallback callback);
+    void onSpeed(SeaTalkSpeedCallback callback);
+    void onPosition(SeaTalkPositionCallback callback);
+    
+    // Statistics
+    struct Statistics {
+        uint32_t datagramsReceived;
+        uint32_t datagramsSent;
+        uint32_t datagramsSendFailed;
+        uint32_t collisions;
+        uint32_t overruns;
+        uint32_t parityErrors;
+        uint32_t framingErrors;
+    };
+    
+    Statistics getStatistics() const;
+    void resetStatistics();
+    
+    // Enable/disable automatic bridge ID sending
+    void setAutoBridgeID(bool enable);
+    
+private:
+    HardwareSerial* _serial;
+    
+    // Receive buffer
+    SeaTalkDatagram _rxDatagram;
+    uint8_t _rxBytesExpected;
+    uint8_t _rxBytesReceived;
+    bool _rxInProgress;
+    
+    // Callbacks
+    SeaTalkDatagramCallback _datagramCallback;
+    SeaTalkWindSpeedCallback _windSpeedCallback;
+    SeaTalkWindAngleCallback _windAngleCallback;
+    SeaTalkHeadingCallback _headingCallback;
+    SeaTalkDepthCallback _depthCallback;
+    SeaTalkSpeedCallback _speedCallback;
+    SeaTalkPositionCallback _positionCallback;
+    
+    // Statistics
+    Statistics _stats;
+    
+    // Timing
+    uint32_t _lastBridgeIDTime;
+    bool _autoBridgeID;
+    
+    // Private methods
+    void processReceivedByte();
+    void processCompleteDatagram();
+    bool waitForBusIdle();
+    void parseAndCallback(const SeaTalkDatagram* datagram);
+    
+    // Parser methods for specific messages
+    void parseWindSpeed(const SeaTalkDatagram* datagram);
+    void parseWindAngle(const SeaTalkDatagram* datagram);
+    void parseHeading(const SeaTalkDatagram* datagram);
+    void parseDepth(const SeaTalkDatagram* datagram);
+    void parseSpeed(const SeaTalkDatagram* datagram);
+    void parsePosition(const SeaTalkDatagram* datagram);
+};
+
+#endif // SEATALK1_HANDLER_H
