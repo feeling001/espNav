@@ -2,24 +2,20 @@
 #define BLE_MANAGER_H
 
 // ============================================================
-// NimBLE-Arduino 1.4.x
+// NimBLE-Arduino 2.x API
 //
-// NOTE: This file targets the 1.4.x API which is what PlatformIO
-// installs despite requesting ^2.3.7. To force 2.x:
-//   1. Delete .pio/libdeps/esp32s3/NimBLE-Arduino
-//   2. Run: pio pkg install --library "h2zero/NimBLE-Arduino@2.3.7"
-//   3. pio run --target clean && pio run
-//
-// Key advantage over Bluedroid: onDisconnect() fires reliably
-// even after Android gatt.close() without prior disconnect(),
-// eliminating the zombie connection problem.
+// Breaking changes vs 1.4.x:
+//  - NimBLESecurity.h removed → security configured via NimBLEDevice static methods
+//  - NimBLESecurityCallbacks removed → use NimBLEServerCallbacks::onAuthenticationComplete
+//  - onConnect/onDisconnect now receive NimBLEConnInfo&
+//  - onWrite now receives NimBLEConnInfo&
+//  - onAuthenticationComplete receives NimBLEConnInfo&
 // ============================================================
 
 #include <Arduino.h>
 #include <NimBLEDevice.h>
 #include <NimBLEServer.h>
 #include <NimBLEUtils.h>
-#include <NimBLESecurity.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <freertos/semphr.h>
@@ -62,65 +58,32 @@ struct AutopilotCommand {
 class BLEManager;
 
 // ============================================================
-// Server callbacks — NimBLE 1.4.x API
+// Server callbacks — NimBLE 2.x API
 //
-// In 1.4.x the callbacks do NOT receive NimBLEConnInfo.
-// Access peer list via pServer->getPeerDevices() if needed.
-//
-// IMPORTANT: NimBLE 1.4.x DOES fire onDisconnect() reliably
-// even when Android drops the link without a proper disconnect.
-// This is the core fix for the zombie connection problem.
+// onConnect / onDisconnect now receive NimBLEConnInfo&.
+// onAuthenticationComplete replaces NimBLESecurityCallbacks.
 // ============================================================
 class MarineServerCallbacks : public NimBLEServerCallbacks {
 public:
     explicit MarineServerCallbacks(BLEManager* mgr) : manager(mgr) {}
 
-    // 1.4.x signature — no NimBLEConnInfo parameter
-    void onConnect(NimBLEServer* pServer) override;
-    void onDisconnect(NimBLEServer* pServer) override;
+    void onConnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo) override;
+    void onDisconnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo, int reason) override;
+    void onAuthenticationComplete(NimBLEConnInfo& connInfo) override;
 
 private:
     BLEManager* manager;
 };
 
 // ============================================================
-// Characteristic write callback — NimBLE 1.4.x API
+// Characteristic write callback — NimBLE 2.x API
+// onWrite now receives NimBLEConnInfo&
 // ============================================================
 class AutopilotCmdCallbacks : public NimBLECharacteristicCallbacks {
 public:
     explicit AutopilotCmdCallbacks(BLEManager* mgr) : manager(mgr) {}
 
-    // 1.4.x signature — no NimBLEConnInfo parameter
-    void onWrite(NimBLECharacteristic* pChar) override;
-
-private:
-    BLEManager* manager;
-};
-
-// ============================================================
-// Security callbacks — NimBLE 1.4.x API
-//
-// In 1.4.x NimBLESecurityCallbacks still exists (removed in 2.x).
-// Signatures match the 1.4.x virtual methods exactly.
-// ============================================================
-class MarineSecurityCallbacks : public NimBLESecurityCallbacks {
-public:
-    explicit MarineSecurityCallbacks(BLEManager* mgr) : manager(mgr) {}
-
-    // Called to get the static passkey to display/use
-    uint32_t onPassKeyRequest() override;
-
-    // Called when the peer sends its passkey — log only
-    void onPassKeyNotify(uint32_t pass_key) override;
-
-    // Called for numeric comparison — return true to confirm
-    bool onConfirmPIN(uint32_t pass_key) override;
-
-    // Called when a security request arrives from the client
-    bool onSecurityRequest() override;
-
-    // Called when pairing completes (success or failure)
-    void onAuthenticationComplete(ble_gap_conn_desc* desc) override;
+    void onWrite(NimBLECharacteristic* pChar, NimBLEConnInfo& connInfo) override;
 
 private:
     BLEManager* manager;
@@ -152,7 +115,6 @@ public:
 
     friend class MarineServerCallbacks;
     friend class AutopilotCmdCallbacks;
-    friend class MarineSecurityCallbacks;
 
 private:
     // NimBLE objects
@@ -169,9 +131,8 @@ private:
     NimBLECharacteristic* pAutopilotDataChar;
     NimBLECharacteristic* pAutopilotCmdChar;
 
-    MarineServerCallbacks*   serverCallbacks;
-    AutopilotCmdCallbacks*   autopilotCmdCallbacks;
-    MarineSecurityCallbacks* securityCallbacks;
+    MarineServerCallbacks*  serverCallbacks;
+    AutopilotCmdCallbacks*  autopilotCmdCallbacks;
 
     // State
     BLEConfig  config;

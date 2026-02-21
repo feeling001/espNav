@@ -3,8 +3,6 @@
 
 // ============================================================
 // Helper macro — ArduinoJson v7 compatible null/value assignment.
-// JsonVariant(float) and JsonVariant(nullptr) constructors were
-// removed in v7. Use direct assignment instead.
 // ============================================================
 #define SET_JSON_DP(doc, key, dp) \
     do { \
@@ -16,17 +14,13 @@
     } while (0)
 
 // ============================================================
-// MarineServerCallbacks — NimBLE 1.4.x signatures
-//
-// NimBLE 1.4.x DOES reliably fire onDisconnect() even when
-// Android calls gatt.close() without prior gatt.disconnect().
-// This is the fundamental fix for zombie connections — no
-// watchdog or esp_restart() required.
+// MarineServerCallbacks — NimBLE 2.x signatures
 // ============================================================
 
-void MarineServerCallbacks::onConnect(NimBLEServer* pServer) {
+void MarineServerCallbacks::onConnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo) {
     manager->connectedDevices++;
-    Serial.printf("[BLE] Device connected (total=%u)\n",
+    Serial.printf("[BLE] Device connected addr=%s (total=%u)\n",
+                  connInfo.getAddress().toString().c_str(),
                   manager->connectedDevices);
 
     if (manager->connectedDevices >= BLE_MAX_CONNECTIONS) {
@@ -34,10 +28,12 @@ void MarineServerCallbacks::onConnect(NimBLEServer* pServer) {
     }
 }
 
-void MarineServerCallbacks::onDisconnect(NimBLEServer* pServer) {
+void MarineServerCallbacks::onDisconnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo, int reason) {
     if (manager->connectedDevices > 0) manager->connectedDevices--;
 
-    Serial.printf("[BLE] Device disconnected (remaining=%u)\n",
+    Serial.printf("[BLE] Device disconnected addr=%s reason=%d (remaining=%u)\n",
+                  connInfo.getAddress().toString().c_str(),
+                  reason,
                   manager->connectedDevices);
 
     // Restart advertising so new clients can connect
@@ -47,15 +43,31 @@ void MarineServerCallbacks::onDisconnect(NimBLEServer* pServer) {
     }
 }
 
+void MarineServerCallbacks::onAuthenticationComplete(NimBLEConnInfo& connInfo) {
+    // In NimBLE 2.x, NimBLESecurityCallbacks is gone.
+    // onAuthenticationComplete is now a method of NimBLEServerCallbacks.
+    if (connInfo.isEncrypted()) {
+        Serial.printf("[BLE] ✓ Auth complete — addr=%s encrypted=yes bonded=%s\n",
+                      connInfo.getAddress().toString().c_str(),
+                      connInfo.isBonded() ? "yes" : "no");
+    } else {
+        Serial.printf("[BLE] ✗ Auth failed — addr=%s\n",
+                      connInfo.getAddress().toString().c_str());
+    }
+}
+
 // ============================================================
-// AutopilotCmdCallbacks — NimBLE 1.4.x signature
+// AutopilotCmdCallbacks — NimBLE 2.x signature
 // ============================================================
 
-void AutopilotCmdCallbacks::onWrite(NimBLECharacteristic* pChar) {
+void AutopilotCmdCallbacks::onWrite(NimBLECharacteristic* pChar, NimBLEConnInfo& connInfo) {
+    // NimBLE 2.x: getValue() returns NimBLEAttVal, cast to std::string
     std::string raw = pChar->getValue();
     if (raw.empty()) return;
 
-    Serial.printf("[BLE] Autopilot command: %s\n", raw.c_str());
+    Serial.printf("[BLE] Autopilot command from %s: %s\n",
+                  connInfo.getAddress().toString().c_str(),
+                  raw.c_str());
 
     JsonDocument doc;
     DeserializationError err = deserializeJson(doc, raw.c_str());
@@ -86,43 +98,6 @@ void AutopilotCmdCallbacks::onWrite(NimBLECharacteristic* pChar) {
 }
 
 // ============================================================
-// MarineSecurityCallbacks — NimBLE 1.4.x signatures
-//
-// Device is display-only: we print the PIN to Serial.
-// The Wear OS client types it in the pairing dialog.
-// ============================================================
-
-uint32_t MarineSecurityCallbacks::onPassKeyRequest() {
-    uint32_t pin = (uint32_t)atoi(manager->config.pin_code);
-    Serial.printf("[BLE] PassKey request → PIN: %06u\n", pin);
-    return pin;
-}
-
-void MarineSecurityCallbacks::onPassKeyNotify(uint32_t pass_key) {
-    Serial.printf("[BLE] PassKey notify: %06u\n", pass_key);
-}
-
-bool MarineSecurityCallbacks::onConfirmPIN(uint32_t pass_key) {
-    Serial.printf("[BLE] Confirm PIN: %06u — auto-confirming\n", pass_key);
-    return true;
-}
-
-bool MarineSecurityCallbacks::onSecurityRequest() {
-    Serial.println("[BLE] Security request — accepted");
-    return true;
-}
-
-void MarineSecurityCallbacks::onAuthenticationComplete(ble_gap_conn_desc* desc) {
-    if (desc->sec_state.encrypted) {
-        Serial.printf("[BLE] ✓ Auth complete — encrypted=%d bonded=%d\n",
-                      desc->sec_state.encrypted,
-                      desc->sec_state.bonded);
-    } else {
-        Serial.println("[BLE] ✗ Authentication failed");
-    }
-}
-
-// ============================================================
 // Constructor / Destructor
 // ============================================================
 
@@ -131,7 +106,7 @@ BLEManager::BLEManager()
       pNavService(nullptr),       pNavDataChar(nullptr),
       pWindService(nullptr),      pWindDataChar(nullptr),
       pAutopilotService(nullptr), pAutopilotDataChar(nullptr), pAutopilotCmdChar(nullptr),
-      serverCallbacks(nullptr), autopilotCmdCallbacks(nullptr), securityCallbacks(nullptr),
+      serverCallbacks(nullptr), autopilotCmdCallbacks(nullptr),
       boatState(nullptr), initialized(false), advertising(false),
       connectedDevices(0), updateTaskHandle(nullptr) {
 
@@ -143,7 +118,6 @@ BLEManager::~BLEManager() {
     if (commandMutex)           vSemaphoreDelete(commandMutex);
     if (serverCallbacks)        delete serverCallbacks;
     if (autopilotCmdCallbacks)  delete autopilotCmdCallbacks;
-    if (securityCallbacks)      delete securityCallbacks;
 }
 
 // ============================================================
@@ -156,15 +130,13 @@ void BLEManager::init(const BLEConfig& cfg, BoatState* state) {
     config    = cfg;
     boatState = state;
 
-    Serial.println("[BLE] Initializing NimBLE stack");
+    Serial.println("[BLE] Initializing NimBLE 2.x stack");
     Serial.printf("[BLE]   Device name : %s\n", config.device_name);
     Serial.printf("[BLE]   PIN code    : %s\n", config.pin_code);
     Serial.printf("[BLE]   Enabled     : %s\n", config.enabled ? "yes" : "no");
 
     NimBLEDevice::init(config.device_name);
-
-    // NimBLE 1.4.x setPower signature: (esp_power_level_t, esp_ble_power_type_t)
-    NimBLEDevice::setPower(ESP_PWR_LVL_P9);
+    NimBLEDevice::setPower(9); // +9 dBm — NimBLE 2.x uses dBm directly
 
     setupSecurity();
 
@@ -175,7 +147,7 @@ void BLEManager::init(const BLEConfig& cfg, BoatState* state) {
     setupServices();
 
     initialized = true;
-    Serial.println("[BLE] ✓ NimBLE initialization complete");
+    Serial.println("[BLE] ✓ NimBLE 2.x initialization complete");
 }
 
 // ============================================================
@@ -228,16 +200,17 @@ void BLEManager::updateTask(void* param) {
 }
 
 // ============================================================
-// setupSecurity — NimBLE 1.4.x
+// setupSecurity — NimBLE 2.x
+//
+// NimBLESecurityCallbacks is gone in 2.x.
+// onAuthenticationComplete() is now part of NimBLEServerCallbacks.
+// Security parameters are still set via NimBLEDevice static methods.
 // ============================================================
 
 void BLEManager::setupSecurity() {
     if (!BLE_SECURITY_ENABLED) return;
 
-    Serial.println("[BLE] Configuring security...");
-
-    securityCallbacks = new MarineSecurityCallbacks(this);
-    NimBLEDevice::setSecurityCallbacks(securityCallbacks);
+    Serial.println("[BLE] Configuring security (NimBLE 2.x)...");
 
     uint32_t passkey = (uint32_t)atoi(config.pin_code);
     NimBLEDevice::setSecurityPasskey(passkey);
@@ -255,9 +228,6 @@ void BLEManager::setupSecurity() {
 
 // ============================================================
 // setupServices
-//
-// NimBLE 1.4.x: CCCD (0x2902) is added automatically for
-// NOTIFY characteristics — no explicit BLE2902 needed.
 // ============================================================
 
 void BLEManager::setupServices() {
@@ -298,7 +268,10 @@ void BLEManager::setupServices() {
 }
 
 // ============================================================
-// Advertising — NimBLE 1.4.x API
+// Advertising — NimBLE 2.x API
+// setScanResponse → setScanResponseData
+// setMinPreferred → setMinInterval
+// setMaxPreferred → setMaxInterval
 // ============================================================
 
 void BLEManager::startAdvertising() {
@@ -306,13 +279,23 @@ void BLEManager::startAdvertising() {
 
     Serial.println("[BLE] Starting advertising...");
 
+    // Advertisement principal : nom du device uniquement (payload limité à 31 bytes)
+    // 3 UUIDs 128-bit = 48 bytes → trop grand pour l'adv principal
+    NimBLEAdvertisementData advData;
+    advData.setName(config.device_name);
+    advData.setFlags(0x06); // LE General Discoverable + BR/EDR Not Supported
+
+    // Scan response : les UUIDs des services (le client les découvre au scan)
+    NimBLEAdvertisementData scanData;
+    scanData.addServiceUUID(BLE_SERVICE_NAVIGATION_UUID);
+    scanData.addServiceUUID(BLE_SERVICE_WIND_UUID);
+    scanData.addServiceUUID(BLE_SERVICE_AUTOPILOT_UUID);
+
     pAdvertising = NimBLEDevice::getAdvertising();
-    pAdvertising->addServiceUUID(BLE_SERVICE_NAVIGATION_UUID);
-    pAdvertising->addServiceUUID(BLE_SERVICE_WIND_UUID);
-    pAdvertising->addServiceUUID(BLE_SERVICE_AUTOPILOT_UUID);
-    pAdvertising->setScanResponse(true);    // 1.4.x name
-    pAdvertising->setMinPreferred(0x06);    // 1.4.x name — 7.5 ms
-    pAdvertising->setMaxPreferred(0x0C);    // 1.4.x name — 15 ms
+    pAdvertising->setAdvertisementData(advData);
+    pAdvertising->setScanResponseData(scanData);
+    pAdvertising->setMinInterval(0x06);  // 7.5 ms
+    pAdvertising->setMaxInterval(0x0C);  // 15 ms
 
     NimBLEDevice::startAdvertising();
     advertising = true;
@@ -353,6 +336,11 @@ void BLEManager::setDeviceName(const char* name) {
 void BLEManager::setPinCode(const char* pin) {
     strncpy(config.pin_code, pin, sizeof(config.pin_code) - 1);
     config.pin_code[sizeof(config.pin_code) - 1] = '\0';
+
+    if (initialized && BLE_SECURITY_ENABLED) {
+        uint32_t passkey = (uint32_t)atoi(config.pin_code);
+        NimBLEDevice::setSecurityPasskey(passkey);
+    }
 }
 
 // ============================================================
@@ -403,9 +391,6 @@ void BLEManager::updateAutopilotData() {
 
 // ============================================================
 // JSON builders — ArduinoJson v7
-//
-// v7 removed JsonVariant(float) and JsonVariant(nullptr).
-// Use direct assignment via the SET_JSON_DP macro instead.
 // ============================================================
 
 String BLEManager::buildNavJSON() {
