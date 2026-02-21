@@ -535,9 +535,9 @@ void BLEManager::checkZombieConnections() {
         for (auto& kv : peerDevices) {
             uint16_t connId = kv.first;
             Serial.printf("[BLE] Forcing disconnect for conn_id=%u\n", connId);
-            // esp_ble_gap_disconnect requires the peer BD address
-            conn_status_t status = kv.second;
-            esp_ble_gap_disconnect(status.peer_device->getPeerAddress().getNative());
+            // Use esp_ble_gatts_close to terminate the connection from the server
+            // side using only the connection ID, avoiding the void* peer_device cast.
+            esp_ble_gatts_close(pServer->getHandle(), connId);
         }
     }
 
