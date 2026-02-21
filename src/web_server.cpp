@@ -188,9 +188,7 @@ void WebServer::registerRoutes() {
     server->onNotFound([](AsyncWebServerRequest* request) {
         // If it's an API request, return 404
         if (request->url().startsWith("/api/") || request->url().startsWith("/ws/")) {
-            Serial.printf("[Web] 404 API: %s %s\n", 
-                         request->methodToString(), 
-                         request->url().c_str());
+            Serial.printf("[Web] 404 API: %s %s\n", request->methodToString(), request->url().c_str());
             request->send(404, "text/plain", "Not Found");
             return;
         }
@@ -208,8 +206,7 @@ void WebServer::handleWebSocketEvent(AsyncWebSocket* server, AsyncWebSocketClien
                                       AwsEventType type, void* arg, uint8_t* data, size_t len) {
     switch (type) {
         case WS_EVT_CONNECT:
-            Serial.printf("[WebSocket] Client #%u connected from %s\n", 
-                         client->id(), client->remoteIP().toString().c_str());
+            Serial.printf("[WebSocket] Client #%u connected from %s\n", client->id(), client->remoteIP().toString().c_str());
             break;
             
         case WS_EVT_DISCONNECT:
@@ -239,7 +236,9 @@ void WebServer::broadcastNMEA(const char* sentence) {
 // ============================================================
 
 void WebServer::handleGetWiFiConfig(AsyncWebServerRequest* request) {
+    #ifdef DEBUG_WEB
     Serial.println("[Web] → GET /api/config/wifi");
+    #endif
     
     WiFiConfig config;
     configManager->getWiFiConfig(config);
@@ -260,7 +259,9 @@ void WebServer::handleGetWiFiConfig(AsyncWebServerRequest* request) {
 }
 
 void WebServer::handlePostWiFiConfig(AsyncWebServerRequest* request, uint8_t* data, size_t len) {
+    #ifdef DEBUG_WEB
     Serial.println("[Web] → POST /api/config/wifi");
+    #endif
     
     JsonDocument doc;
     DeserializationError error = deserializeJson(doc, (char*)data, len);
@@ -297,7 +298,9 @@ void WebServer::handlePostWiFiConfig(AsyncWebServerRequest* request, uint8_t* da
 }
 
 void WebServer::handleGetSerialConfig(AsyncWebServerRequest* request) {
+    #ifdef DEBUG_WEB
     Serial.println("[Web] → GET /api/config/serial");
+    #endif
     
     UARTConfig config;
     configManager->getSerialConfig(config);
@@ -315,7 +318,9 @@ void WebServer::handleGetSerialConfig(AsyncWebServerRequest* request) {
 }
 
 void WebServer::handlePostSerialConfig(AsyncWebServerRequest* request, uint8_t* data, size_t len) {
+    #ifdef DEBUG_WEB
     Serial.println("[Web] → POST /api/config/serial");
+    #endif
     
     JsonDocument doc;
     DeserializationError error = deserializeJson(doc, (char*)data, len);
@@ -334,12 +339,13 @@ void WebServer::handlePostSerialConfig(AsyncWebServerRequest* request, uint8_t* 
     
     configManager->setSerialConfig(config);
     
-    request->send(200, "application/json",
-                 "{\"success\":true,\"message\":\"Serial config saved. Restart to apply.\"}");
+    request->send(200, "application/json", "{\"success\":true,\"message\":\"Serial config saved. Restart to apply.\"}");
 }
 
 void WebServer::handleGetStatus(AsyncWebServerRequest* request) {
+    #ifdef DEBUG_WEB
     Serial.println("[Web] → GET /api/status");
+    #endif
     
     JsonDocument doc;
     
@@ -499,10 +505,11 @@ if (lastCheckTime > 0 && (now - lastCheckTime) >= 5000) {
 
 
 void WebServer::handleRestart(AsyncWebServerRequest* request) {
+    #ifdef DEBUG_WEB
     Serial.println("[Web] → POST /api/restart");
+    #endif
     
-    request->send(200, "application/json",
-                 "{\"success\":true,\"message\":\"Restarting in 2 seconds\"}");
+    request->send(200, "application/json", "{\"success\":true,\"message\":\"Restarting in 2 seconds\"}");
     
     Serial.println("[Web]   Restarting...");
     delay(2000);
@@ -514,29 +521,29 @@ void WebServer::handleRestart(AsyncWebServerRequest* request) {
 // ============================================================
 
 void WebServer::handleStartWiFiScan(AsyncWebServerRequest* request) {
+    #ifdef DEBUG_WEB
     Serial.println("[Web] → POST /api/wifi/scan");
+    #endif
     
     int16_t result = wifiManager->startScan();
     
     if (result == WIFI_SCAN_RUNNING) {
-        request->send(200, "application/json",
-                     "{\"success\":true,\"message\":\"WiFi scan started\"}");
+        request->send(200, "application/json", "{\"success\":true,\"message\":\"WiFi scan started\"}");
     } else if (result == -1) {
-        request->send(500, "application/json",
-                     "{\"success\":false,\"error\":\"Failed to start scan\"}");
+        request->send(500, "application/json", "{\"success\":false,\"error\":\"Failed to start scan\"}");
     } else {
-        request->send(200, "application/json",
-                     "{\"success\":true,\"message\":\"WiFi scan completed\"}");
+        request->send(200, "application/json", "{\"success\":true,\"message\":\"WiFi scan completed\"}");
     }
 }
 
 void WebServer::handleGetWiFiScanResults(AsyncWebServerRequest* request) {
+    #ifdef DEBUG_WEB
     Serial.println("[Web] → GET /api/wifi/scan");
+    #endif
     
     // Check if scan is complete
     if (!wifiManager->isScanComplete()) {
-        request->send(202, "application/json",
-                     "{\"scanning\":true,\"networks\":[]}");
+        request->send(202, "application/json", "{\"scanning\":true,\"networks\":[]}");
         return;
     }
     
@@ -579,7 +586,9 @@ void WebServer::handleGetWiFiScanResults(AsyncWebServerRequest* request) {
  * - GPS quality indicators
  */
 void WebServer::handleGetNavigation(AsyncWebServerRequest* request) {
+    #ifdef DEBUG_WEB
     Serial.println("[Web] → GET /api/boat/navigation");
+    #endif
     
     if (!boatState) {
         request->send(500, "application/json", "{\"error\":\"BoatState not available\"}");
@@ -716,7 +725,9 @@ void WebServer::handleGetNavigation(AsyncWebServerRequest* request) {
  */
 
  void WebServer::handleGetWind(AsyncWebServerRequest* request) {
+    #ifdef DEBUG_WEB
     Serial.println("[Web] → GET /api/boat/wind");
+    #endif
     
     if (!boatState) {
         request->send(500, "application/json", "{\"error\":\"BoatState not available\"}");
@@ -796,7 +807,9 @@ void WebServer::handleGetNavigation(AsyncWebServerRequest* request) {
  * - CPA/TCPA calculations
  */
 void WebServer::handleGetAIS(AsyncWebServerRequest* request) {
+    #ifdef DEBUG_WEB
     Serial.println("[Web] → GET /api/boat/ais");
+    #endif
     
     if (!boatState) {
         request->send(500, "application/json", "{\"error\":\"BoatState not available\"}");
@@ -858,7 +871,9 @@ void WebServer::handleGetAIS(AsyncWebServerRequest* request) {
  * This is the comprehensive endpoint that returns everything
  */
 void WebServer::handleGetBoatState(AsyncWebServerRequest* request) {
+    #ifdef DEBUG_WEB
     Serial.println("[Web] → GET /api/boat/state");
+    #endif
     
     if (!boatState) {
         request->send(500, "application/json", "{\"error\":\"BoatState not available\"}");
@@ -872,7 +887,9 @@ void WebServer::handleGetBoatState(AsyncWebServerRequest* request) {
 }
 
 void WebServer::handleGetBLEConfig(AsyncWebServerRequest* request) {
+    #ifdef DEBUG_WEB
     Serial.println("[Web] → GET /api/config/ble");
+    #endif
     
     BLEConfig config = bleManager->getConfig();
     
@@ -890,7 +907,9 @@ void WebServer::handleGetBLEConfig(AsyncWebServerRequest* request) {
 }
 
 void WebServer::handlePostBLEConfig(AsyncWebServerRequest* request, uint8_t* data, size_t len) {
+    #ifdef DEBUG_WEB
     Serial.println("[Web] → POST /api/config/ble");
+    #endif
     
     JsonDocument doc;
     DeserializationError error = deserializeJson(doc, (char*)data, len);
@@ -938,6 +957,5 @@ void WebServer::handlePostBLEConfig(AsyncWebServerRequest* request, uint8_t* dat
     }
     bleManager->setPinCode(config.pin_code);
     
-    request->send(200, "application/json",
-                 "{\"success\":true,\"message\":\"BLE config saved and applied\"}");
+    request->send(200, "application/json", "{\"success\":true,\"message\":\"BLE config saved and applied\"}");
 }
