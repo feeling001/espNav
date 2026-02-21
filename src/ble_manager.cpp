@@ -279,30 +279,28 @@ void BLEManager::startAdvertising() {
 
     Serial.println("[BLE] Starting advertising...");
 
-    // Advertisement principal : nom du device uniquement (payload limité à 31 bytes)
-    // 3 UUIDs 128-bit = 48 bytes → trop grand pour l'adv principal
-    NimBLEAdvertisementData advData;
-    advData.setName(config.device_name);
-    advData.setFlags(0x06); // LE General Discoverable + BR/EDR Not Supported
+    pAdvertising = NimBLEDevice::getAdvertising();
 
-    // Scan response : les UUIDs des services (le client les découvre au scan)
+    // Advertisement principal : nom + flags (tient dans 31 bytes)
+    NimBLEAdvertisementData advData;
+    advData.setFlags(0x06);                  // LE General Discoverable, no BR/EDR
+    advData.setName(config.device_name);     // "MarineGateway" = 14 chars → OK
+
+    // Scan response : 1 seul UUID 128-bit (16 + 2 bytes header = 18 bytes → OK)
+    // Les 2 autres services sont découverts via GATT service discovery après connexion
     NimBLEAdvertisementData scanData;
     scanData.addServiceUUID(BLE_SERVICE_NAVIGATION_UUID);
-    scanData.addServiceUUID(BLE_SERVICE_WIND_UUID);
-    scanData.addServiceUUID(BLE_SERVICE_AUTOPILOT_UUID);
 
-    pAdvertising = NimBLEDevice::getAdvertising();
     pAdvertising->setAdvertisementData(advData);
     pAdvertising->setScanResponseData(scanData);
-    pAdvertising->setMinInterval(0x06);  // 7.5 ms
-    pAdvertising->setMaxInterval(0x0C);  // 15 ms
+    pAdvertising->setMinInterval(0x30);  // 30 ms — plus raisonnable pour une montre
+    pAdvertising->setMaxInterval(0x60);  // 60 ms
 
     NimBLEDevice::startAdvertising();
     advertising = true;
 
     Serial.println("[BLE] ✓ Advertising");
 }
-
 void BLEManager::stopAdvertising() {
     if (!advertising) return;
     NimBLEDevice::stopAdvertising();
