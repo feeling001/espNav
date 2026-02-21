@@ -529,24 +529,38 @@ void BLEManager::checkZombieConnections() {
     Serial.printf("[BLE] ⚠ Zombie connection detected (%u device(s), no activity for %u ms)\n",
                   connectedDevices, millis() - lastActivityMs);
 
-    // Iterate over all active connections and force-close them
+    // getPeerDevices(true) returns all connected clients as a map of
+    // conn_id → conn_status_t. We use the peer BDA address to call
+    // esp_ble_gap_disconnect(), which is the correct API-level way to
+    // force-close a connection from the server side without needing a
+    // gatts_if handle.
     if (pServer) {
-        std::map<uint16_t, conn_status_t> peerDevices = pServer->getPeerDevices(true);
-        for (auto& kv : peerDevices) {
-            uint16_t connId = kv.first;
-            Serial.printf("[BLE] Forcing disconnect for conn_id=%u\n", connId);
-            // Use esp_ble_gatts_close to terminate the connection from the server
-            // side using only the connection ID, avoiding the void* peer_device cast.
-            esp_ble_gatts_close(pServer->getHandle(), connId);
+        std::map<uint16_t, conn_status_t> peers = pServer->getPeerDevices(true);
+        if (peers.empty()) {
+            // Table is already empty — counter was just out of sync
+            Serial.println("[BLE] Peer table empty — resetting counter");
+        } else {
+            for (auto& kv : peers) {
+                conn_status_t& cs = kv.second;
+                // peer_device is a NimBLEConnInfo* / BLEClient* depending on
+                // the Arduino BLE version. The safest cross-version approach
+                // is to disconnect via the server's disconnect(conn_id) helper.
+                uint16_t connId = kv.first;
+                Serial.printf("[BLE] Forcing close for conn_id=%u\n", connId);
+                pServer->disconnect(connId);
+            }
         }
     }
 
-    // Reset counter and restart advertising regardless
+    // Reset regardless — if the stack ignored our disconnect request we still
+    // want advertising to restart so a fresh connection is possible.
     connectedDevices = 0;
     lastActivityMs   = 0;
 
     if (config.enabled) {
         Serial.println("[BLE] Restarting advertising after zombie cleanup");
+        // Small yield to let the stack process the disconnect before advertising
+        vTaskDelay(pdMS_TO_TICKS(200));
         startAdvertising();
     }
 }
