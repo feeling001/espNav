@@ -44,9 +44,13 @@ void MarineServerCallbacks::onDisconnect(NimBLEServer* pServer, NimBLEConnInfo& 
     // évite de reconfigurer l'advertising depuis la stack BLE (risque de corruption)
     if (manager->config.enabled &&
         manager->connectedDevices < BLE_MAX_CONNECTIONS) {
+
+        vTaskDelay(pdMS_TO_TICKS(100));
+
         pServer->startAdvertising();
         manager->advertising = true;
-        Serial.println("[BLE] Advertising restarted after disconnect");
+        Serial.printf("[BLE] Advertising restarted (reason=0x%04X)\n", reason);
+
     }
 }
 
@@ -193,6 +197,16 @@ void BLEManager::stop() {
 
 void BLEManager::update() {
     if (!initialized || !config.enabled || connectedDevices == 0) return;
+
+    // Watchdog : si on devrait advertiser mais qu'on ne l'est plus
+    if (connectedDevices < BLE_MAX_CONNECTIONS && config.enabled && !advertising) {
+        Serial.println("[BLE] Watchdog: restarting advertising");
+        pServer->startAdvertising();
+        advertising = true;
+    }
+
+    if (connectedDevices == 0) return;
+
     updateNavData();
     updateWindData();
     updateAutopilotData();
@@ -239,6 +253,7 @@ void BLEManager::setupSecurity() {
 
 void BLEManager::setupServices() {
     Serial.println("[BLE] Creating GATT services...");
+
 
     // Navigation service
     pNavService  = pServer->createService(BLE_SERVICE_NAVIGATION_UUID);
