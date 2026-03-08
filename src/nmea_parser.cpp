@@ -285,9 +285,9 @@ void NMEAParser::parseMWV(const char* line) {
     if (buffer[0] != 'A') return;  // V=invalid
 
     if (reference == 'R') {
-        boatState->setApparentWind(angle, speed);
+        boatState->setApparentWind(speed, angle);
     } else if (reference == 'T') {
-        boatState->setTrueWind(angle, speed);
+        boatState->setTrueWind(speed, angle, angle);
     }
 }
 
@@ -301,7 +301,7 @@ void NMEAParser::parseMWD(const char* line) {
     parseField(line, 5, buffer, sizeof(buffer));
     float speed = parseKnots(buffer);
 
-    if (trueDir >= 0 && trueDir < 360) boatState->setTrueWind(trueDir, speed);
+    if (trueDir >= 0 && trueDir < 360) boatState->setTrueWind(speed, 0.0f, trueDir);
 }
 
 // $YXMTW - Water Temperature
