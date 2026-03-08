@@ -226,9 +226,26 @@ void WebServer::handleWebSocketEvent(AsyncWebSocket* server, AsyncWebSocketClien
 
 // Broadcast NMEA sentence to all WebSocket clients
 void WebServer::broadcastNMEA(const char* sentence) {
-    if (wsNMEA && running) {
-        wsNMEA->textAll(sentence);
+    if (!wsNMEA || !running) return;
+
+    // --- periodic cleanup (every 5 s) ----------------------------
+    static uint32_t lastCleanup = 0;
+    uint32_t now = millis();
+    if (now - lastCleanup >= 5000) {
+        wsNMEA->cleanupClients();   // removes stale / closed clients
+        lastCleanup = now;
     }
+
+    // --- bail out early when nobody is listening -----------------
+    if (wsNMEA->count() == 0) return;
+
+    // --- rate-limit to WS_MAX_RATE_HZ (default 10 fps) ----------
+    static uint32_t lastSend   = 0;
+    static const uint32_t minInterval = 1000 / WS_MAX_RATE_HZ;
+    if (now - lastSend < minInterval) return;
+    lastSend = now;
+
+    wsNMEA->textAll(sentence);
 }
 
 // ============================================================
