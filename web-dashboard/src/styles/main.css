@@ -25,10 +25,20 @@ body {
   flex-direction: column;
 }
 
-.sidebar h1 {
-  font-size: 1.5rem;
+.sidebar-brand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
   margin-bottom: 30px;
+}
+
+.sidebar-title {
+  font-size: 1.1rem;
+  font-weight: 600;
   color: #3498db;
+  text-align: center;
+  letter-spacing: 0.03em;
 }
 
 .sidebar nav {
