@@ -1,18 +1,18 @@
 .PHONY: all build flash dashboard firmware clean check help setup-venv \
         flash-partitions flash-all erase monitor upload uploadfs \
-        build-zero build-n16r8 \
-        flash-zero flash-n16r8 \
-        flash-partitions-zero flash-partitions-n16r8 \
-        flash-all-zero flash-all-n16r8
+        build-zero build-n16r8v \
+        flash-zero flash-n16r8v \
+        flash-partitions-zero flash-partitions-n16r8v \
+        flash-all-zero flash-all-n16r8v
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Board selection
 #   Default board: esp32s3_zero
-#   Override:      make flash BOARD=esp32s3_n16r8
+#   Override:      make flash BOARD=esp32s3_n16r8v
 #
 # Available boards:
 #   esp32s3_zero       ESP32-S3 Zero   4MB Flash / 2MB PSRAM
-#   esp32s3_n16r8      ESP32-S3 N16R8 16MB Flash / 8MB PSRAM
+#   esp32s3_n16r8v      ESP32-S3 N16R8 16MB Flash / 8MB PSRAM
 # ─────────────────────────────────────────────────────────────────────────────
 BOARD ?= esp32s3_zero
 
@@ -93,7 +93,7 @@ flash-partitions: setup-venv
 	@test -f $(BUILD_DIR)/partitions.bin || \
 		(echo "ERROR: $(BUILD_DIR)/partitions.bin not found" && \
 		 echo "       Run 'make firmware BOARD=$(BOARD)' first" && exit 1)
-	$(PIO) pkg exec -e $(BOARD) -p tool-esptoolpy -- esptool.py \
+	$(PIO) pkg exec -p tool-esptoolpy -- esptool.py \
 		--chip esp32s3 --port $(PORT) --baud 921600 \
 		write_flash 0x8000 $(BUILD_DIR)/partitions.bin
 	@echo "✓ Partition table flashed"
@@ -138,17 +138,17 @@ flash-all-zero:
 # ─────────────────────────────────────────────────────────────────────────────
 # Named aliases — ESP32-S3 N16R8 (16MB)
 # ─────────────────────────────────────────────────────────────────────────────
-build-n16r8:
-	$(MAKE) build BOARD=esp32s3_n16r8
+build-n16r8v:
+	$(MAKE) build BOARD=esp32s3_n16r8v
 
-flash-n16r8:
-	$(MAKE) flash BOARD=esp32s3_n16r8
+flash-n16r8v:
+	$(MAKE) flash BOARD=esp32s3_n16r8v
 
-flash-partitions-n16r8:
-	$(MAKE) flash-partitions BOARD=esp32s3_n16r8
+flash-partitions-n16r8v:
+	$(MAKE) flash-partitions BOARD=esp32s3_n16r8v
 
-flash-all-n16r8:
-	$(MAKE) flash-all BOARD=esp32s3_n16r8
+flash-all-n16r8v:
+	$(MAKE) flash-all BOARD=esp32s3_n16r8v
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Default target
@@ -197,17 +197,17 @@ help:
 	@echo ""
 	@echo "Boards:"
 	@echo "  esp32s3_zero     ESP32-S3 Zero    4MB Flash / 2MB PSRAM  (default)"
-	@echo "  esp32s3_n16r8    ESP32-S3 N16R8  16MB Flash / 8MB PSRAM"
+	@echo "  esp32s3_n16r8v    ESP32-S3 N16R8  16MB Flash / 8MB PSRAM"
 	@echo ""
 	@echo "Named targets (no BOARD= needed):"
 	@echo "  make build-zero                Build for ESP32-S3 Zero"
-	@echo "  make build-n16r8               Build for ESP32-S3 N16R8"
+	@echo "  make build-n16r8v               Build for ESP32-S3 N16R8"
 	@echo "  make flash-zero                Flash firmware + filesystem"
-	@echo "  make flash-n16r8               Flash firmware + filesystem"
+	@echo "  make flash-n16r8v               Flash firmware + filesystem"
 	@echo "  make flash-all-zero            Erase + full flash"
-	@echo "  make flash-all-n16r8           Erase + full flash"
+	@echo "  make flash-all-n16r8v           Erase + full flash"
 	@echo "  make flash-partitions-zero     Flash partition table only"
-	@echo "  make flash-partitions-n16r8    Flash partition table only"
+	@echo "  make flash-partitions-n16r8v    Flash partition table only"
 	@echo ""
 	@echo "Generic targets (use BOARD= to select):"
 	@echo "  make build            BOARD=...  Build firmware + dashboard"
@@ -227,7 +227,7 @@ help:
 	@echo "  make check                       Check development environment"
 	@echo ""
 	@echo "Port override (default: /dev/ttyACM0):"
-	@echo "  make flash-all-n16r8 PORT=/dev/ttyUSB0"
+	@echo "  make flash-all-n16r8v PORT=/dev/ttyUSB0"
 	@echo ""
 
 

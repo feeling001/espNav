@@ -1,0 +1,22 @@
+# partitions_n16r8.csv — ESP32-S3 N16R8 (16 MB Flash / 8 MB PSRAM)
+#
+# Based on esp32s3zero layout, scaled up with OTA support.
+#
+# Total flash : 16 MB (0x1000000)
+#
+#   0x009000 - 0x00efff : nvs          24 KB   config storage
+#   0x00f000 - 0x00ffff : phy_init      4 KB   RF calibration
+#   0x010000 - 0x011fff : ota_data      8 KB   OTA bookkeeping
+#   0x020000 - 0x31ffff : ota_0         3 MB   active firmware slot
+#   0x320000 - 0x61ffff : ota_1         3 MB   OTA update slot
+#   0x620000 - 0xffffff : littlefs      9.88 MB web dashboard + data
+#
+# Name,      Type,  SubType,  Offset,     Size,
+nvs,         data,  nvs,      0x9000,     0x6000,
+phy_init,    data,  phy,      0xf000,     0x1000,
+ota_data,    data,  ota,      0x10000,    0x2000,
+ota_0,       app,   ota_0,    0x20000,    0x300000,
+ota_1,       app,   ota_1,    0x320000,   0x300000,
+littlefs,    data,  spiffs,   0x620000,   0x9E0000,
+
+
