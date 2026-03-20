@@ -115,7 +115,7 @@ check_dir() {
 
 # Core files
 check_file "platformio.ini"
-check_file "partitions.csv"
+check_file "partitions_n16r8.csv"
 check_file "build_and_flash.sh"
 check_file "Makefile"
 

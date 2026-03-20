@@ -18,14 +18,11 @@ BOARD ?= esp32s3_zero
 
 # Serial port — override if needed: make flash PORT=/dev/ttyUSB0
 PORT  ?= /dev/ttyACM0
-BAUD  ?= 921600
 
 # Virtual environment
 VENV_DIR = .venv
 VENV_BIN = $(VENV_DIR)/bin
-PYTHON   = $(VENV_BIN)/python
 PIO      = $(VENV_BIN)/pio
-ESPTOOL  = $(PYTHON) -m esptool
 
 # Build output directory for the selected board
 BUILD_DIR = .pio/build/$(BOARD)
@@ -69,7 +66,7 @@ firmware: setup-venv
 build: setup-venv dashboard firmware
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Standard upload targets (PlatformIO)
+# Upload targets — all go through PlatformIO
 # ─────────────────────────────────────────────────────────────────────────────
 upload: setup-venv
 	@echo "Uploading firmware (board: $(BOARD))..."
@@ -83,7 +80,7 @@ flash: upload uploadfs
 
 # ─────────────────────────────────────────────────────────────────────────────
 # flash-partitions
-#   Writes only the partition table via esptool (address 0x8000).
+#   Writes the partition table via PlatformIO's own esptool.
 #   Required when changing partition layout between boards.
 #   Run 'make firmware BOARD=...' first to generate the .bin file.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -96,14 +93,15 @@ flash-partitions: setup-venv
 	@test -f $(BUILD_DIR)/partitions.bin || \
 		(echo "ERROR: $(BUILD_DIR)/partitions.bin not found" && \
 		 echo "       Run 'make firmware BOARD=$(BOARD)' first" && exit 1)
-	$(ESPTOOL) -p $(PORT) -b $(BAUD) --chip esp32s3 \
-		write-flash 0x8000 $(BUILD_DIR)/partitions.bin
+	$(PIO) pkg exec -e $(BOARD) -p tool-esptoolpy -- esptool.py \
+		--chip esp32s3 --port $(PORT) --baud 921600 \
+		write_flash 0x8000 $(BUILD_DIR)/partitions.bin
 	@echo "✓ Partition table flashed"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # flash-all
-#   Full sequence: erase → bootloader → partitions → firmware → filesystem.
-#   Use this when switching boards or after a partition layout change.
+#   Full sequence: erase → firmware → filesystem.
+#   Uses only PlatformIO targets — no direct esptool calls.
 # ─────────────────────────────────────────────────────────────────────────────
 flash-all: setup-venv dashboard firmware
 	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -111,21 +109,11 @@ flash-all: setup-venv dashboard firmware
 	@echo "  Board : $(BOARD)"
 	@echo "  Port  : $(PORT)"
 	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-	@test -f $(BUILD_DIR)/bootloader.bin || \
-		(echo "ERROR: $(BUILD_DIR)/bootloader.bin not found" && exit 1)
-	@test -f $(BUILD_DIR)/partitions.bin || \
-		(echo "ERROR: $(BUILD_DIR)/partitions.bin not found" && exit 1)
-	@test -f $(BUILD_DIR)/firmware.bin || \
-		(echo "ERROR: $(BUILD_DIR)/firmware.bin not found" && exit 1)
 	@echo "[1/3] Erasing flash..."
-	$(ESPTOOL) -p $(PORT) -b $(BAUD) --chip esp32s3 erase-flash
-	@echo "[2/3] Writing bootloader + partitions + firmware..."
-	$(ESPTOOL) -p $(PORT) -b $(BAUD) --chip esp32s3 \
-		write-flash \
-		0x0     $(BUILD_DIR)/bootloader.bin \
-		0x8000  $(BUILD_DIR)/partitions.bin \
-		0x10000 $(BUILD_DIR)/firmware.bin
-	@echo "[3/3] Writing filesystem..."
+	$(PIO) run -e $(BOARD) -t erase
+	@echo "[2/3] Uploading firmware..."
+	$(PIO) run -e $(BOARD) -t upload
+	@echo "[3/3] Uploading filesystem..."
 	$(PIO) run -e $(BOARD) -t uploadfs
 	@echo ""
 	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -174,8 +162,8 @@ monitor: setup-venv
 	$(PIO) device monitor
 
 erase: setup-venv
-	@echo "Erasing entire flash on $(PORT)..."
-	$(ESPTOOL) -p $(PORT) --chip esp32s3 erase-flash
+	@echo "Erasing flash (board: $(BOARD))..."
+	$(PIO) run -e $(BOARD) -t erase
 	@echo "✓ Flash erased"
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -214,32 +202,33 @@ help:
 	@echo "Named targets (no BOARD= needed):"
 	@echo "  make build-zero                Build for ESP32-S3 Zero"
 	@echo "  make build-n16r8               Build for ESP32-S3 N16R8"
-	@echo "  make flash-zero                Flash firmware+fs for Zero"
-	@echo "  make flash-n16r8               Flash firmware+fs for N16R8"
-	@echo "  make flash-all-zero            Full erase+flash for Zero"
-	@echo "  make flash-all-n16r8           Full erase+flash for N16R8"
-	@echo "  make flash-partitions-zero     Flash partition table for Zero"
-	@echo "  make flash-partitions-n16r8    Flash partition table for N16R8"
+	@echo "  make flash-zero                Flash firmware + filesystem"
+	@echo "  make flash-n16r8               Flash firmware + filesystem"
+	@echo "  make flash-all-zero            Erase + full flash"
+	@echo "  make flash-all-n16r8           Erase + full flash"
+	@echo "  make flash-partitions-zero     Flash partition table only"
+	@echo "  make flash-partitions-n16r8    Flash partition table only"
 	@echo ""
 	@echo "Generic targets (use BOARD= to select):"
-	@echo "  make build          BOARD=...   Build firmware + dashboard"
-	@echo "  make flash          BOARD=...   Upload firmware + filesystem"
-	@echo "  make flash-all      BOARD=...   Erase + full flash"
-	@echo "  make flash-partitions BOARD=... Flash partition table only"
-	@echo "  make upload         BOARD=...   Upload firmware only"
-	@echo "  make uploadfs       BOARD=...   Upload filesystem only"
-	@echo "  make firmware       BOARD=...   Build firmware only"
-	@echo "  make dashboard                  Build React dashboard only"
-	@echo "  make monitor                    Open serial monitor"
-	@echo "  make erase                      Erase entire flash"
-	@echo "  make clean          BOARD=...   Clean build artifacts"
-	@echo "  make clean-all                  Clean everything incl. venv"
-	@echo "  make setup-venv                 Create Python venv + PlatformIO"
-	@echo "  make install                    Install npm dependencies"
-	@echo "  make check                      Check development environment"
+	@echo "  make build            BOARD=...  Build firmware + dashboard"
+	@echo "  make flash            BOARD=...  Upload firmware + filesystem"
+	@echo "  make flash-all        BOARD=...  Erase + full flash"
+	@echo "  make flash-partitions BOARD=...  Flash partition table only"
+	@echo "  make upload           BOARD=...  Upload firmware only"
+	@echo "  make uploadfs         BOARD=...  Upload filesystem only"
+	@echo "  make firmware         BOARD=...  Build firmware only"
+	@echo "  make dashboard                   Build React dashboard only"
+	@echo "  make monitor                     Open serial monitor"
+	@echo "  make erase            BOARD=...  Erase flash"
+	@echo "  make clean            BOARD=...  Clean build artifacts"
+	@echo "  make clean-all                   Clean everything incl. venv"
+	@echo "  make setup-venv                  Create Python venv + PlatformIO"
+	@echo "  make install                     Install npm dependencies"
+	@echo "  make check                       Check development environment"
 	@echo ""
 	@echo "Port override (default: /dev/ttyACM0):"
 	@echo "  make flash-all-n16r8 PORT=/dev/ttyUSB0"
 	@echo ""
+
 
 
