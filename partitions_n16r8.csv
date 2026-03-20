@@ -1,0 +1,14 @@
+# partitions_n16r8.csv — ESP32-S3 N16R8 (16 MB Flash / 8 MB PSRAM)
+#
+# Total flash  : 16 MB (0x1000000)
+# Used         : ~15.9 MB
+#
+# Name,     Type, SubType,  Offset,     Size,     Flags
+nvs,        data, nvs,      0x9000,     0x6000,
+phy_init,   data, phy,      0xf000,     0x1000,
+factory,    app,  factory,  0x10000,    0x300000,
+ota_0,      app,  ota_0,    0x310000,   0x300000,
+ota_data,   data, ota,      0x610000,   0x2000,
+littlefs,   data, spiffs,   0x620000,   0x980000,
+
+
