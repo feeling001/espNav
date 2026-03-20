@@ -1,107 +1,245 @@
-.PHONY: all build flash dashboard firmware clean check help setup-venv
+.PHONY: all build flash dashboard firmware clean check help setup-venv \
+        flash-partitions flash-all erase monitor upload uploadfs \
+        build-zero build-n16r8 \
+        flash-zero flash-n16r8 \
+        flash-partitions-zero flash-partitions-n16r8 \
+        flash-all-zero flash-all-n16r8
 
-# Virtual environment settings
+# ─────────────────────────────────────────────────────────────────────────────
+# Board selection
+#   Default board: esp32s3_zero
+#   Override:      make flash BOARD=esp32s3_n16r8
+#
+# Available boards:
+#   esp32s3_zero       ESP32-S3 Zero   4MB Flash / 2MB PSRAM
+#   esp32s3_n16r8      ESP32-S3 N16R8 16MB Flash / 8MB PSRAM
+# ─────────────────────────────────────────────────────────────────────────────
+BOARD ?= esp32s3_zero
+
+# Serial port — override if needed: make flash PORT=/dev/ttyUSB0
+PORT  ?= /dev/ttyACM0
+BAUD  ?= 921600
+
+# Virtual environment
 VENV_DIR = .venv
 VENV_BIN = $(VENV_DIR)/bin
-PYTHON = $(VENV_BIN)/python
-PIO = $(VENV_BIN)/pio
+PYTHON   = $(VENV_BIN)/python
+PIO      = $(VENV_BIN)/pio
+ESPTOOL  = $(PYTHON) -m esptool
 
-# Check if venv exists, if not create it
+# Build output directory for the selected board
+BUILD_DIR = .pio/build/$(BOARD)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Virtual environment setup
+# ─────────────────────────────────────────────────────────────────────────────
 $(VENV_DIR):
 	@echo "Creating Python virtual environment..."
 	python3 -m venv $(VENV_DIR)
-	@echo "Installing PlatformIO..."
 	$(VENV_BIN)/pip install --upgrade pip
 	$(VENV_BIN)/pip install platformio
 	@echo "✓ Virtual environment ready"
 
-# Setup virtual environment
 setup-venv: $(VENV_DIR)
 
-# Default target
-all: setup-venv build flash monitor
-
-# Build everything
-build: setup-venv dashboard firmware
-
-# Check if npm dependencies are installed
+# ─────────────────────────────────────────────────────────────────────────────
+# npm dependencies
+# ─────────────────────────────────────────────────────────────────────────────
 web-dashboard/node_modules:
 	@echo "Installing npm dependencies..."
 	cd web-dashboard && npm install
 
-# Build React dashboard
+install: web-dashboard/node_modules
+	@echo "✓ npm dependencies installed"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Dashboard
+# ─────────────────────────────────────────────────────────────────────────────
 dashboard: web-dashboard/node_modules
 	@echo "Building React dashboard..."
 	cd web-dashboard && npm run build
 
-# Build ESP32 firmware
+# ─────────────────────────────────────────────────────────────────────────────
+# Firmware
+# ─────────────────────────────────────────────────────────────────────────────
 firmware: setup-venv
-	@echo "Building firmware..."
-	$(PIO) run
+	@echo "Building firmware for board: $(BOARD)"
+	$(PIO) run -e $(BOARD)
 
-# Flash everything to ESP32
-flash: setup-venv
-	@echo "Uploading filesystem..."
-	$(PIO) run -t uploadfs
-	@echo "Uploading firmware..."
-	$(PIO) run -t upload
+build: setup-venv dashboard firmware
 
-# Upload only filesystem
-uploadfs: setup-venv
-	$(PIO) run -t uploadfs
-
-# Upload only firmware
+# ─────────────────────────────────────────────────────────────────────────────
+# Standard upload targets (PlatformIO)
+# ─────────────────────────────────────────────────────────────────────────────
 upload: setup-venv
-	$(PIO) run -t upload
+	@echo "Uploading firmware (board: $(BOARD))..."
+	$(PIO) run -e $(BOARD) -t upload
 
-# Clean build artifacts
+uploadfs: setup-venv
+	@echo "Uploading filesystem (board: $(BOARD))..."
+	$(PIO) run -e $(BOARD) -t uploadfs
+
+flash: upload uploadfs
+
+# ─────────────────────────────────────────────────────────────────────────────
+# flash-partitions
+#   Writes only the partition table via esptool (address 0x8000).
+#   Required when changing partition layout between boards.
+#   Run 'make firmware BOARD=...' first to generate the .bin file.
+# ─────────────────────────────────────────────────────────────────────────────
+flash-partitions: setup-venv
+	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+	@echo "  Flashing partition table"
+	@echo "  Board : $(BOARD)"
+	@echo "  Port  : $(PORT)"
+	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+	@test -f $(BUILD_DIR)/partitions.bin || \
+		(echo "ERROR: $(BUILD_DIR)/partitions.bin not found" && \
+		 echo "       Run 'make firmware BOARD=$(BOARD)' first" && exit 1)
+	$(ESPTOOL) -p $(PORT) -b $(BAUD) --chip esp32s3 \
+		write-flash 0x8000 $(BUILD_DIR)/partitions.bin
+	@echo "✓ Partition table flashed"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# flash-all
+#   Full sequence: erase → bootloader → partitions → firmware → filesystem.
+#   Use this when switching boards or after a partition layout change.
+# ─────────────────────────────────────────────────────────────────────────────
+flash-all: setup-venv dashboard firmware
+	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+	@echo "  Full flash sequence"
+	@echo "  Board : $(BOARD)"
+	@echo "  Port  : $(PORT)"
+	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+	@test -f $(BUILD_DIR)/bootloader.bin || \
+		(echo "ERROR: $(BUILD_DIR)/bootloader.bin not found" && exit 1)
+	@test -f $(BUILD_DIR)/partitions.bin || \
+		(echo "ERROR: $(BUILD_DIR)/partitions.bin not found" && exit 1)
+	@test -f $(BUILD_DIR)/firmware.bin || \
+		(echo "ERROR: $(BUILD_DIR)/firmware.bin not found" && exit 1)
+	@echo "[1/3] Erasing flash..."
+	$(ESPTOOL) -p $(PORT) -b $(BAUD) --chip esp32s3 erase-flash
+	@echo "[2/3] Writing bootloader + partitions + firmware..."
+	$(ESPTOOL) -p $(PORT) -b $(BAUD) --chip esp32s3 \
+		write-flash \
+		0x0     $(BUILD_DIR)/bootloader.bin \
+		0x8000  $(BUILD_DIR)/partitions.bin \
+		0x10000 $(BUILD_DIR)/firmware.bin
+	@echo "[3/3] Writing filesystem..."
+	$(PIO) run -e $(BOARD) -t uploadfs
+	@echo ""
+	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+	@echo "✓ Full flash complete (board: $(BOARD))"
+	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Named aliases — ESP32-S3 Zero (4MB)
+# ─────────────────────────────────────────────────────────────────────────────
+build-zero:
+	$(MAKE) build BOARD=esp32s3_zero
+
+flash-zero:
+	$(MAKE) flash BOARD=esp32s3_zero
+
+flash-partitions-zero:
+	$(MAKE) flash-partitions BOARD=esp32s3_zero
+
+flash-all-zero:
+	$(MAKE) flash-all BOARD=esp32s3_zero
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Named aliases — ESP32-S3 N16R8 (16MB)
+# ─────────────────────────────────────────────────────────────────────────────
+build-n16r8:
+	$(MAKE) build BOARD=esp32s3_n16r8
+
+flash-n16r8:
+	$(MAKE) flash BOARD=esp32s3_n16r8
+
+flash-partitions-n16r8:
+	$(MAKE) flash-partitions BOARD=esp32s3_n16r8
+
+flash-all-n16r8:
+	$(MAKE) flash-all BOARD=esp32s3_n16r8
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Default target
+# ─────────────────────────────────────────────────────────────────────────────
+all: setup-venv build flash-all
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Monitor / erase
+# ─────────────────────────────────────────────────────────────────────────────
+monitor: setup-venv
+	$(PIO) device monitor
+
+erase: setup-venv
+	@echo "Erasing entire flash on $(PORT)..."
+	$(ESPTOOL) -p $(PORT) --chip esp32s3 erase-flash
+	@echo "✓ Flash erased"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Clean
+# ─────────────────────────────────────────────────────────────────────────────
 clean:
 	@echo "Cleaning build artifacts..."
-	@if [ -d $(VENV_DIR) ]; then $(PIO) run -t clean; fi
+	@if [ -d $(VENV_DIR) ]; then $(PIO) run -e $(BOARD) -t clean 2>/dev/null || true; fi
 	rm -rf data/www/*
 	cd web-dashboard && rm -rf dist/
 
-# Clean everything including dependencies
 clean-all: clean
 	@echo "Cleaning dependencies..."
 	cd web-dashboard && rm -rf node_modules/
 	rm -rf $(VENV_DIR)
 	@echo "✓ Cleaned venv and dependencies"
 
-# Install dashboard dependencies
-install: web-dashboard/node_modules
-	@echo "✓ npm dependencies installed"
-
-# Open serial monitor
-monitor: setup-venv
-	$(PIO) device monitor
-
+# ─────────────────────────────────────────────────────────────────────────────
 # Check setup
+# ─────────────────────────────────────────────────────────────────────────────
 check: setup-venv
 	@chmod +x check_setup.sh
 	@./check_setup.sh
 
-# Erase ESP32 flash
-erase: setup-venv
-	$(PIO) run -t erase
-
-# Show help
+# ─────────────────────────────────────────────────────────────────────────────
+# Help
+# ─────────────────────────────────────────────────────────────────────────────
 help:
-	@echo "Marine Gateway - Makefile Commands"
 	@echo ""
-	@echo "  make setup-venv - Create Python venv and install PlatformIO"
-	@echo "  make all        - Build and flash everything (default)"
-	@echo "  make build      - Build dashboard and firmware"
-	@echo "  make flash      - Upload filesystem and firmware"
-	@echo "  make dashboard  - Build React dashboard only"
-	@echo "  make firmware   - Build ESP32 firmware only"
-	@echo "  make uploadfs   - Upload filesystem only"
-	@echo "  make upload     - Upload firmware only"
-	@echo "  make monitor    - Open serial monitor"
-	@echo "  make clean      - Clean build artifacts"
-	@echo "  make clean-all  - Clean everything including venv"
-	@echo "  make install    - Install dashboard dependencies"
-	@echo "  make check      - Check development environment"
-	@echo "  make erase      - Erase ESP32 flash"
-	@echo "  make help       - Show this help"
+	@echo "Marine Gateway — Makefile"
+	@echo ""
+	@echo "Boards:"
+	@echo "  esp32s3_zero     ESP32-S3 Zero    4MB Flash / 2MB PSRAM  (default)"
+	@echo "  esp32s3_n16r8    ESP32-S3 N16R8  16MB Flash / 8MB PSRAM"
+	@echo ""
+	@echo "Named targets (no BOARD= needed):"
+	@echo "  make build-zero                Build for ESP32-S3 Zero"
+	@echo "  make build-n16r8               Build for ESP32-S3 N16R8"
+	@echo "  make flash-zero                Flash firmware+fs for Zero"
+	@echo "  make flash-n16r8               Flash firmware+fs for N16R8"
+	@echo "  make flash-all-zero            Full erase+flash for Zero"
+	@echo "  make flash-all-n16r8           Full erase+flash for N16R8"
+	@echo "  make flash-partitions-zero     Flash partition table for Zero"
+	@echo "  make flash-partitions-n16r8    Flash partition table for N16R8"
+	@echo ""
+	@echo "Generic targets (use BOARD= to select):"
+	@echo "  make build          BOARD=...   Build firmware + dashboard"
+	@echo "  make flash          BOARD=...   Upload firmware + filesystem"
+	@echo "  make flash-all      BOARD=...   Erase + full flash"
+	@echo "  make flash-partitions BOARD=... Flash partition table only"
+	@echo "  make upload         BOARD=...   Upload firmware only"
+	@echo "  make uploadfs       BOARD=...   Upload filesystem only"
+	@echo "  make firmware       BOARD=...   Build firmware only"
+	@echo "  make dashboard                  Build React dashboard only"
+	@echo "  make monitor                    Open serial monitor"
+	@echo "  make erase                      Erase entire flash"
+	@echo "  make clean          BOARD=...   Clean build artifacts"
+	@echo "  make clean-all                  Clean everything incl. venv"
+	@echo "  make setup-venv                 Create Python venv + PlatformIO"
+	@echo "  make install                    Install npm dependencies"
+	@echo "  make check                      Check development environment"
+	@echo ""
+	@echo "Port override (default: /dev/ttyACM0):"
+	@echo "  make flash-all-n16r8 PORT=/dev/ttyUSB0"
+	@echo ""
+
 
