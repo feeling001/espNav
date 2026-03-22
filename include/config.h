@@ -16,6 +16,9 @@
 
 #endif
 
+#define DEBUG_SERIAL Serial0
+
+
 // WiFi Configuration
 #define WIFI_CONNECT_TIMEOUT_MS  30000
 #define WIFI_AP_SSID_PREFIX      "MarineGateway"
