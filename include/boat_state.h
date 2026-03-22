@@ -1,6 +1,7 @@
 #ifndef BOAT_STATE_H
 #define BOAT_STATE_H
 
+#include "polar.h"
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <freertos/FreeRTOS.h>
@@ -207,6 +208,36 @@ struct AISData {
     }
 };
 
+// ============================================================
+// Performance data (polar-based calculations)
+// ============================================================
+
+/**
+ * @brief Real-time performance metrics derived from the polar diagram.
+ *
+ * Computed whenever a new STW is received, provided TWS and TWA are valid.
+ */
+struct PerformanceData {
+    /**
+     * VMG toward/away from the wind (knots).
+     * Positive = sailing toward the wind (upwind).
+     * Negative = sailing away from the wind (downwind).
+     */
+    DataPoint vmg;
+
+    /**
+     * Current STW as a percentage of the polar target STW.
+     * 100 % = exactly on polar. > 100 % = faster than polar.
+     * Invalid when polar not loaded or TWS/TWA stale.
+     */
+    DataPoint polarPct;
+
+    PerformanceData() {
+        vmg.unit     = "kn";
+        polarPct.unit = "%";
+    }
+};
+
 /**
  * Main Boat State class
  * Thread-safe storage for all boat data
@@ -215,7 +246,10 @@ class BoatState {
 public:
     BoatState();
     ~BoatState();
-    
+
+    /** Polar diagram — public for direct load/query access from web_server */
+    PolarData polar;
+
     // Initialization
     void init();
     
@@ -229,7 +263,8 @@ public:
     CalculatedData getCalculated();
     AutopilotData getAutopilot();
     AISData getAIS();
-    
+    PerformanceData getPerformance();
+
     // Data setters
     void setGPSPosition(float lat, float lon);
     void setGPSSOG(float sog);
@@ -268,7 +303,15 @@ public:
     void setAutopilotAlarm(const String& alarm);
     
     void addOrUpdateAISTarget(const AISTarget& target);
-    
+
+    /**
+     * @brief Recompute VMG and polarPct from current STW, TWS, TWA.
+     *
+     * Called automatically inside setSTW(), but can also be triggered
+     * externally (e.g. after a new polar file is uploaded).
+     */
+    void updatePerformance();
+
     // Utility functions
     void cleanupStaleData();
     void calculateDerivedData();
@@ -290,6 +333,7 @@ private:
     CalculatedData calculated;
     AutopilotData autopilot;
     AISData ais;
+    PerformanceData performance;
     
     // Thread safety
     SemaphoreHandle_t mutex;

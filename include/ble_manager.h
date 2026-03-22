@@ -59,9 +59,6 @@ class BLEManager;
 
 // ============================================================
 // Server callbacks — NimBLE 2.x API
-//
-// onConnect / onDisconnect now receive NimBLEConnInfo&.
-// onAuthenticationComplete replaces NimBLESecurityCallbacks.
 // ============================================================
 class MarineServerCallbacks : public NimBLEServerCallbacks {
 public:
@@ -77,7 +74,6 @@ private:
 
 // ============================================================
 // Characteristic write callback — NimBLE 2.x API
-// onWrite now receives NimBLEConnInfo&
 // ============================================================
 class AutopilotCmdCallbacks : public NimBLECharacteristicCallbacks {
 public:
@@ -117,39 +113,47 @@ public:
     friend class AutopilotCmdCallbacks;
 
 private:
-    // NimBLE objects
-    NimBLEServer*         pServer;
-    NimBLEAdvertising*    pAdvertising;
+    // ── NimBLE objects ──────────────────────────────────────────
 
+    NimBLEServer*      pServer;
+    NimBLEAdvertising* pAdvertising;
+
+    // Navigation service
     NimBLEService*        pNavService;
     NimBLECharacteristic* pNavDataChar;
 
+    // Wind service
     NimBLEService*        pWindService;
     NimBLECharacteristic* pWindDataChar;
 
+    // Autopilot service
     NimBLEService*        pAutopilotService;
     NimBLECharacteristic* pAutopilotDataChar;
     NimBLECharacteristic* pAutopilotCmdChar;
 
-    MarineServerCallbacks*  serverCallbacks;
-    AutopilotCmdCallbacks*  autopilotCmdCallbacks;
+    // Sail Performance service
+    NimBLEService*        pPerformanceService;
+    NimBLECharacteristic* pPerformanceDataChar;
 
-    // State
+    MarineServerCallbacks* serverCallbacks;
+    AutopilotCmdCallbacks* autopilotCmdCallbacks;
+
+    // ── State ───────────────────────────────────────────────────
     BLEConfig  config;
     BoatState* boatState;
     bool       initialized;
     bool       advertising;
     uint32_t   connectedDevices;
 
-    // Autopilot queue
+    // ── Autopilot command queue ─────────────────────────────────
     AutopilotCommand  pendingCommand;
     SemaphoreHandle_t commandMutex;
 
-    // FreeRTOS update task
+    // ── FreeRTOS update task ────────────────────────────────────
     TaskHandle_t   updateTaskHandle;
     static void    updateTask(void* param);
 
-    // Internal helpers
+    // ── Internal helpers ────────────────────────────────────────
     void setupSecurity();
     void setupServices();
     void startAdvertising();
@@ -158,10 +162,12 @@ private:
     void updateNavData();
     void updateWindData();
     void updateAutopilotData();
+    void updatePerformanceData();
 
     String buildNavJSON();
     String buildWindJSON();
     String buildAutopilotJSON();
+    String buildPerformanceJSON();
 };
 
 #endif // BLE_MANAGER_H

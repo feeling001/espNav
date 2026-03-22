@@ -45,6 +45,9 @@ void BoatState::init() {
     calculated.vmg_waypoint.unit = "kn";
     calculated.set.unit = "deg";
     calculated.drift.unit = "kn";
+
+    performance.vmg.unit      = "kn";
+    performance.polarPct.unit = "%";
     
     Serial.println("[BoatState] ✓ Initialization complete");
 }
@@ -116,6 +119,13 @@ AISData BoatState::getAIS() {
     return copy;
 }
 
+PerformanceData BoatState::getPerformance() {
+    xSemaphoreTake(mutex, portMAX_DELAY);
+    PerformanceData copy = performance;
+    xSemaphoreGive(mutex);
+    return copy;
+}
+
 // ============================================================
 // GPS Setters
 // ============================================================
@@ -164,6 +174,8 @@ void BoatState::setSTW(float stw) {
     xSemaphoreTake(mutex, portMAX_DELAY);
     speed.stw.set(stw, "kn");
     xSemaphoreGive(mutex);
+    // Recompute performance metrics with the new STW value
+    updatePerformance();
 }
 
 void BoatState::setTrip(float trip) {
@@ -353,10 +365,7 @@ void BoatState::addOrUpdateAISTarget(const AISTarget& target) {
 
 void BoatState::cleanupStaleData() {
     xSemaphoreTake(mutex, portMAX_DELAY);
-    
-    // Remove stale AIS targets
     ais.removeStaleTargets();
-    
     xSemaphoreGive(mutex);
 }
 
@@ -365,28 +374,22 @@ void BoatState::calculateDerivedData() {
     
     // Calculate True Wind from Apparent Wind if we have STW and COG
     if (wind.aws.valid && wind.awa.valid && speed.stw.valid && heading.true_heading.valid) {
-        // Convert AWA to radians (-180 to +180, starboard positive)
         float awa_rad = wind.awa.value * PI / 180.0;
         
-        // Boat velocity components
         float boat_speed = speed.stw.value;
-        float boat_vx = boat_speed * sin(0);  // Boat moving forward
+        float boat_vx = boat_speed * sin(0);
         float boat_vy = boat_speed * cos(0);
         
-        // Apparent wind components
         float aws = wind.aws.value;
         float aw_vx = aws * sin(awa_rad);
         float aw_vy = aws * cos(awa_rad);
         
-        // True wind = Apparent wind - Boat velocity
         float tw_vx = aw_vx - boat_vx;
         float tw_vy = aw_vy - boat_vy;
         
-        // Calculate TWS and TWA
         float tws = sqrt(tw_vx * tw_vx + tw_vy * tw_vy);
         float twa = atan2(tw_vx, tw_vy) * 180.0 / PI;
         
-        // Calculate TWD (True Wind Direction)
         float twd = heading.true_heading.value + twa;
         if (twd < 0) twd += 360;
         if (twd >= 360) twd -= 360;
@@ -403,21 +406,17 @@ void BoatState::calculateDerivedData() {
         calculated.vmg_wind.set(vmg_wind, "kn");
     }
     
-    // Calculate current (Set & Drift) if we have both SOG/COG and STW/Heading
+    // Calculate current (Set & Drift)
     if (gps.sog.valid && gps.cog.valid && speed.stw.valid && heading.true_heading.valid) {
-        // Convert to radians
         float cog_rad = gps.cog.value * PI / 180.0;
         float hdg_rad = heading.true_heading.value * PI / 180.0;
         
-        // SOG components
         float sog_vx = gps.sog.value * sin(cog_rad);
         float sog_vy = gps.sog.value * cos(cog_rad);
         
-        // STW components
         float stw_vx = speed.stw.value * sin(hdg_rad);
         float stw_vy = speed.stw.value * cos(hdg_rad);
         
-        // Current = SOG - STW
         float current_vx = sog_vx - stw_vx;
         float current_vy = sog_vy - stw_vy;
         
@@ -433,6 +432,51 @@ void BoatState::calculateDerivedData() {
 }
 
 // ============================================================
+// updatePerformance
+// ============================================================
+
+void BoatState::updatePerformance() {
+    // Read current values — each getter acquires the mutex internally,
+    // so we must NOT hold the mutex ourselves when calling them.
+    SpeedData spd = getSpeed();
+    WindData  wnd = getWind();
+
+    const bool haveSTW = spd.stw.valid && !spd.stw.isStale();
+    const bool haveTWS = wnd.tws.valid && !wnd.tws.isStale();
+    const bool haveTWA = wnd.twa.valid && !wnd.twa.isStale();
+
+    xSemaphoreTake(mutex, portMAX_DELAY);
+
+    // ── VMG ────────────────────────────────────────────────────
+    // VMG = STW × cos(TWA)
+    // Positive when heading toward the wind (TWA < 90°)
+    // Negative when running downwind              (TWA > 90°)
+    if (haveSTW && haveTWA) {
+        float twaRad = wnd.twa.value * PI / 180.0f;
+        float vmgVal = spd.stw.value * cosf(twaRad);
+        performance.vmg.set(vmgVal, "kn");
+    } else {
+        performance.vmg.invalidate();
+    }
+
+    // ── Polar % ────────────────────────────────────────────────
+    if (haveSTW && haveTWS && haveTWA && polar.isLoaded()) {
+        float target = polar.getTargetSTW(wnd.tws.value, wnd.twa.value);
+        if (target > 0.1f) {
+            float pct = (spd.stw.value / target) * 100.0f;
+            performance.polarPct.set(pct, "%");
+        } else {
+            // Target STW is zero for this point (e.g. dead upwind in sparse polar)
+            performance.polarPct.invalidate();
+        }
+    } else {
+        performance.polarPct.invalidate();
+    }
+
+    xSemaphoreGive(mutex);
+}
+
+// ============================================================
 // JSON Serialization
 // ============================================================
 
@@ -441,7 +485,7 @@ void BoatState::addDataPointToJSON(JsonObject obj, const char* key, const DataPo
     if (dp.valid && !dp.isStale()) {
         point["value"] = dp.value;
         point["unit"] = dp.unit;
-        point["age"] = (millis() - dp.timestamp) / 1000.0;  // Age in seconds
+        point["age"] = (millis() - dp.timestamp) / 1000.0;
     } else {
         point["value"] = nullptr;
         point["unit"] = dp.unit;
@@ -554,7 +598,6 @@ String BoatState::getNavigationJSON() {
     
     xSemaphoreTake(mutex, portMAX_DELAY);
     
-    // Critical navigation data: position, speeds, depth, COG
     JsonObject position = doc["position"].to<JsonObject>();
     addDataPointToJSON(position, "lat", gps.position.lat);
     addDataPointToJSON(position, "lon", gps.position.lon);

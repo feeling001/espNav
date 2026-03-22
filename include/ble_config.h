@@ -12,16 +12,28 @@
 
 // ============================================================
 // Service UUIDs  (custom base: 4D475743-xxxx-4E41-5649-474154494F4E)
+// MGWC = Marine Gateway Custom
 // ============================================================
+
+// Navigation Service
 #define BLE_SERVICE_NAVIGATION_UUID     "4d475743-0001-4e41-5649-474154494f4e"
 #define BLE_CHAR_NAV_DATA_UUID          "4d475743-0101-4e41-5649-474154494f4e"
 
+// Wind Service
 #define BLE_SERVICE_WIND_UUID           "4d475743-0002-4e41-5649-474154494f4e"
 #define BLE_CHAR_WIND_DATA_UUID         "4d475743-0201-4e41-5649-474154494f4e"
 
+// Autopilot Service
 #define BLE_SERVICE_AUTOPILOT_UUID      "4d475743-0003-4e41-5649-474154494f4e"
 #define BLE_CHAR_AUTOPILOT_DATA_UUID    "4d475743-0301-4e41-5649-474154494f4e"
 #define BLE_CHAR_AUTOPILOT_CMD_UUID     "4d475743-0302-4e41-5649-474154494f4e"
+
+// Sail Performance Service
+// Exposes VMG, polar efficiency (%), and polar target STW (kn).
+// Requires a polar file to be loaded on the device for polar_pct
+// and target_stw to be valid; vmg is always computed when TWA is available.
+#define BLE_SERVICE_PERFORMANCE_UUID    "4d475743-0004-4e41-5649-474154494f4e"
+#define BLE_CHAR_PERFORMANCE_DATA_UUID  "4d475743-0401-4e41-5649-474154494f4e"
 
 // ============================================================
 // Limits & task config

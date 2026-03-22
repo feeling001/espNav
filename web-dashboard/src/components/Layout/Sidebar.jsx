@@ -46,7 +46,6 @@ const ESPNavLogo = () => (
 
 export function Sidebar() {
   const location = useLocation();
-
   const isActive = (path) => location.pathname === path ? 'active' : '';
 
   return (
@@ -56,10 +55,11 @@ export function Sidebar() {
         <span className="sidebar-title">Marine Gateway</span>
       </div>
       <nav>
-        <Link to="/" className={isActive('/')}>System Status</Link>
+        <Link to="/"            className={isActive('/')}>System Status</Link>
         <Link to="/instruments" className={isActive('/instruments')}>Instruments</Link>
-        <Link to="/nmea" className={isActive('/nmea')}>NMEA Monitor</Link>
-        <Link to="/config" className={isActive('/config')}>WiFi Config</Link>
+        <Link to="/performance" className={isActive('/performance')}>Performance</Link>
+        <Link to="/nmea"        className={isActive('/nmea')}>NMEA Monitor</Link>
+        <Link to="/config"      className={isActive('/config')}>Config</Link>
       </nav>
     </div>
   );

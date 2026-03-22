@@ -7,6 +7,7 @@ import { SystemStatus } from './components/System/SystemStatus';
 import { BLEConfig } from './components/Config/BLEConfig';
 import { Instruments } from './components/Instruments/Instruments';
 import { ConfigPage } from './components/Config/ConfigPage';
+import { Performance } from './components/Performance/Performance';
 
 import './styles/main.css';
 
@@ -17,10 +18,11 @@ function App() {
         <Sidebar />
         <div className="main-content">
           <Routes>
-            <Route path="/" element={<SystemStatus />} />
+            <Route path="/"            element={<SystemStatus />} />
             <Route path="/instruments" element={<Instruments />} />
-            <Route path="/config" element={<ConfigPage />} />
-            <Route path="/nmea" element={<NMEAMonitor />} />
+            <Route path="/performance" element={<Performance />} />
+            <Route path="/config"      element={<ConfigPage />} />
+            <Route path="/nmea"        element={<NMEAMonitor />} />
           </Routes>
         </div>
       </div>

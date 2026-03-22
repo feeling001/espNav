@@ -6,7 +6,7 @@
 #include <LittleFS.h>
 #include "config_manager.h"
 #include "wifi_manager.h"
-#include "ble_manager.h"  // Include complet au lieu de forward declaration
+#include "ble_manager.h"
 
 // Forward declarations
 class TCPServer;
@@ -16,8 +16,8 @@ class BoatState;
 
 class WebServer {
 public:
-    // CONSTRUCTEUR AVEC BOATSTATE
-    WebServer(ConfigManager* cm, WiFiManager* wm, TCPServer* tcp, UARTHandler* uart, NMEAParser* nmea, BoatState* bs, BLEManager* ble);
+    WebServer(ConfigManager* cm, WiFiManager* wm, TCPServer* tcp, UARTHandler* uart,
+              NMEAParser* nmea, BoatState* bs, BLEManager* ble);
     
     void init();
     void start();
@@ -38,12 +38,18 @@ private:
     // BLE handlers
     void handleGetBLEConfig(AsyncWebServerRequest* request);
     void handlePostBLEConfig(AsyncWebServerRequest* request, uint8_t* data, size_t len);
-    
-    // Boat data handlers - AJOUTÉ
+
+    // Polar handlers
+    void handleGetPolarStatus(AsyncWebServerRequest* request);
+    void handleUploadPolar(AsyncWebServerRequest* request, const String& filename,
+                           size_t index, uint8_t* data, size_t len, bool final);
+
+    // Boat data handlers
     void handleGetNavigation(AsyncWebServerRequest* request);
     void handleGetWind(AsyncWebServerRequest* request);
     void handleGetAIS(AsyncWebServerRequest* request);
     void handleGetBoatState(AsyncWebServerRequest* request);
+    void handleGetPerformance(AsyncWebServerRequest* request);
     
     // WiFi scan handlers
     void handleStartWiFiScan(AsyncWebServerRequest* request);
@@ -53,17 +59,17 @@ private:
     void handleWebSocketEvent(AsyncWebSocket* server, AsyncWebSocketClient* client,
                              AwsEventType type, void* arg, uint8_t* data, size_t len);
     
-    // Membres privés
+    // Members
     AsyncWebServer* server;
     AsyncWebSocket* wsNMEA;
-    ConfigManager* configManager;
-    WiFiManager* wifiManager;
-    TCPServer* tcpServer;
-    UARTHandler* uartHandler;
-    NMEAParser* nmeaParser;
-    BoatState* boatState;  // AJOUTÉ
-    BLEManager* bleManager;
-    bool running;
+    ConfigManager*  configManager;
+    WiFiManager*    wifiManager;
+    TCPServer*      tcpServer;
+    UARTHandler*    uartHandler;
+    NMEAParser*     nmeaParser;
+    BoatState*      boatState;
+    BLEManager*     bleManager;
+    bool            running;
 };
 
 #endif // WEB_SERVER_H

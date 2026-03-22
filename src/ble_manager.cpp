@@ -2,7 +2,7 @@
 #include <ArduinoJson.h>
 
 // ============================================================
-// Helper macro — ArduinoJson v7 compatible null/value assignment.
+// Helper macro — ArduinoJson v7 null/value assignment.
 // ============================================================
 #define SET_JSON_DP(doc, key, dp) \
     do { \
@@ -23,8 +23,6 @@ void MarineServerCallbacks::onConnect(NimBLEServer* pServer, NimBLEConnInfo& con
                   connInfo.getAddress().toString().c_str(),
                   manager->connectedDevices);
 
-    // Demander des paramètres de connexion tolérants aux coupures brèves
-    // supervision timeout = 6 secondes (60 * 10ms), latency = 0
     pServer->updateConnParams(connInfo.getConnHandle(), 0x18, 0x30, 0, 600);
 
     if (manager->connectedDevices >= BLE_MAX_CONNECTIONS) {
@@ -40,23 +38,16 @@ void MarineServerCallbacks::onDisconnect(NimBLEServer* pServer, NimBLEConnInfo& 
                   reason,
                   manager->connectedDevices);
 
-    // NimBLE 2.x : utiliser pServer->startAdvertising() depuis le callback
-    // évite de reconfigurer l'advertising depuis la stack BLE (risque de corruption)
     if (manager->config.enabled &&
         manager->connectedDevices < BLE_MAX_CONNECTIONS) {
-
         vTaskDelay(pdMS_TO_TICKS(100));
-
         pServer->startAdvertising();
         manager->advertising = true;
         Serial.printf("[BLE] Advertising restarted (reason=0x%04X)\n", reason);
-
     }
 }
 
 void MarineServerCallbacks::onAuthenticationComplete(NimBLEConnInfo& connInfo) {
-    // In NimBLE 2.x, NimBLESecurityCallbacks is gone.
-    // onAuthenticationComplete is now a method of NimBLEServerCallbacks.
     if (connInfo.isEncrypted()) {
         Serial.printf("[BLE] ✓ Auth complete — addr=%s encrypted=yes bonded=%s\n",
                       connInfo.getAddress().toString().c_str(),
@@ -72,7 +63,6 @@ void MarineServerCallbacks::onAuthenticationComplete(NimBLEConnInfo& connInfo) {
 // ============================================================
 
 void AutopilotCmdCallbacks::onWrite(NimBLECharacteristic* pChar, NimBLEConnInfo& connInfo) {
-    // NimBLE 2.x: getValue() returns NimBLEAttVal, cast to std::string
     std::string raw = pChar->getValue();
     if (raw.empty()) return;
 
@@ -114,9 +104,10 @@ void AutopilotCmdCallbacks::onWrite(NimBLECharacteristic* pChar, NimBLEConnInfo&
 
 BLEManager::BLEManager()
     : pServer(nullptr), pAdvertising(nullptr),
-      pNavService(nullptr),       pNavDataChar(nullptr),
-      pWindService(nullptr),      pWindDataChar(nullptr),
-      pAutopilotService(nullptr), pAutopilotDataChar(nullptr), pAutopilotCmdChar(nullptr),
+      pNavService(nullptr),         pNavDataChar(nullptr),
+      pWindService(nullptr),        pWindDataChar(nullptr),
+      pAutopilotService(nullptr),   pAutopilotDataChar(nullptr), pAutopilotCmdChar(nullptr),
+      pPerformanceService(nullptr), pPerformanceDataChar(nullptr),
       serverCallbacks(nullptr), autopilotCmdCallbacks(nullptr),
       boatState(nullptr), initialized(false), advertising(false),
       connectedDevices(0), updateTaskHandle(nullptr) {
@@ -147,7 +138,7 @@ void BLEManager::init(const BLEConfig& cfg, BoatState* state) {
     Serial.printf("[BLE]   Enabled     : %s\n", config.enabled ? "yes" : "no");
 
     NimBLEDevice::init(config.device_name);
-    NimBLEDevice::setPower(9); // +9 dBm — NimBLE 2.x uses dBm directly
+    NimBLEDevice::setPower(9);
 
     setupSecurity();
 
@@ -198,18 +189,17 @@ void BLEManager::stop() {
 void BLEManager::update() {
     if (!initialized || !config.enabled || connectedDevices == 0) return;
 
-    // Watchdog : si on devrait advertiser mais qu'on ne l'est plus
+    // Watchdog: restart advertising if it dropped unexpectedly
     if (connectedDevices < BLE_MAX_CONNECTIONS && config.enabled && !advertising) {
         Serial.println("[BLE] Watchdog: restarting advertising");
         pServer->startAdvertising();
         advertising = true;
     }
 
-    if (connectedDevices == 0) return;
-
     updateNavData();
     updateWindData();
     updateAutopilotData();
+    updatePerformanceData();
 }
 
 void BLEManager::updateTask(void* param) {
@@ -222,10 +212,6 @@ void BLEManager::updateTask(void* param) {
 
 // ============================================================
 // setupSecurity — NimBLE 2.x
-//
-// NimBLESecurityCallbacks is gone in 2.x.
-// onAuthenticationComplete() is now part of NimBLEServerCallbacks.
-// Security parameters are still set via NimBLEDevice static methods.
 // ============================================================
 
 void BLEManager::setupSecurity() {
@@ -235,13 +221,7 @@ void BLEManager::setupSecurity() {
 
     uint32_t passkey = (uint32_t)atoi(config.pin_code);
     NimBLEDevice::setSecurityPasskey(passkey);
-
-    // Secure Connections + MITM + bonding
-    NimBLEDevice::setSecurityAuth(true,  // bonding
-                                   true,  // MITM
-                                   true); // SC
-
-    // Display-only: we show the PIN, client types it
+    NimBLEDevice::setSecurityAuth(true, true, true); // bonding, MITM, SC
     NimBLEDevice::setSecurityIOCap(BLE_HS_IO_DISPLAY_ONLY);
 
     Serial.printf("[BLE] ✓ Security configured (PIN: %s)\n", config.pin_code);
@@ -254,22 +234,21 @@ void BLEManager::setupSecurity() {
 void BLEManager::setupServices() {
     Serial.println("[BLE] Creating GATT services...");
 
-
-    // Navigation service
+    // ── Navigation ─────────────────────────────────────────────
     pNavService  = pServer->createService(BLE_SERVICE_NAVIGATION_UUID);
     pNavDataChar = pNavService->createCharacteristic(
         BLE_CHAR_NAV_DATA_UUID,
         NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
     Serial.println("[BLE]   ✓ Navigation service");
 
-    // Wind service
+    // ── Wind ───────────────────────────────────────────────────
     pWindService  = pServer->createService(BLE_SERVICE_WIND_UUID);
     pWindDataChar = pWindService->createCharacteristic(
         BLE_CHAR_WIND_DATA_UUID,
         NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
     Serial.println("[BLE]   ✓ Wind service");
 
-    // Autopilot service
+    // ── Autopilot ──────────────────────────────────────────────
     pAutopilotService  = pServer->createService(BLE_SERVICE_AUTOPILOT_UUID);
     pAutopilotDataChar = pAutopilotService->createCharacteristic(
         BLE_CHAR_AUTOPILOT_DATA_UUID,
@@ -280,17 +259,20 @@ void BLEManager::setupServices() {
         BLE_CHAR_AUTOPILOT_CMD_UUID,
         NIMBLE_PROPERTY::WRITE);
     pAutopilotCmdChar->setCallbacks(autopilotCmdCallbacks);
-
     Serial.println("[BLE]   ✓ Autopilot service");
+
+    // ── Sail Performance ───────────────────────────────────────
+    pPerformanceService  = pServer->createService(BLE_SERVICE_PERFORMANCE_UUID);
+    pPerformanceDataChar = pPerformanceService->createCharacteristic(
+        BLE_CHAR_PERFORMANCE_DATA_UUID,
+        NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
+    Serial.println("[BLE]   ✓ Sail Performance service");
 
     Serial.println("[BLE] ✓ All services created");
 }
 
 // ============================================================
 // Advertising — NimBLE 2.x API
-// setScanResponse → setScanResponseData
-// setMinPreferred → setMinInterval
-// setMaxPreferred → setMaxInterval
 // ============================================================
 
 void BLEManager::startAdvertising() {
@@ -306,20 +288,19 @@ void BLEManager::startAdvertising() {
 
     NimBLEAdvertisementData scanData;
     scanData.addServiceUUID(BLE_SERVICE_NAVIGATION_UUID);
+    // Also advertise the performance service UUID so scanners can filter on it
+    scanData.addServiceUUID(BLE_SERVICE_PERFORMANCE_UUID);
 
     pAdvertising->setAdvertisementData(advData);
     pAdvertising->setScanResponseData(scanData);
     pAdvertising->setMinInterval(0x30);
     pAdvertising->setMaxInterval(0x60);
 
-    // NimBLE 2.x : après la première config, utiliser pServer->startAdvertising()
-    // pour les reconnexions. Ici c'est le premier démarrage.
     NimBLEDevice::startAdvertising();
     advertising = true;
 
     Serial.println("[BLE] ✓ Advertising");
 }
-
 
 void BLEManager::stopAdvertising() {
     if (!advertising) return;
@@ -383,7 +364,7 @@ AutopilotCommand BLEManager::getAutopilotCommand() {
 }
 
 // ============================================================
-// Data push — NimBLE notify() sends to all subscribed clients
+// Data push helpers
 // ============================================================
 
 void BLEManager::updateNavData() {
@@ -405,6 +386,13 @@ void BLEManager::updateAutopilotData() {
     String json = buildAutopilotJSON();
     pAutopilotDataChar->setValue(json.c_str());
     pAutopilotDataChar->notify();
+}
+
+void BLEManager::updatePerformanceData() {
+    if (!pPerformanceDataChar) return;
+    String json = buildPerformanceJSON();
+    pPerformanceDataChar->setValue(json.c_str());
+    pPerformanceDataChar->notify();
 }
 
 // ============================================================
@@ -457,6 +445,58 @@ String BLEManager::buildAutopilotJSON() {
     SET_JSON_DP(doc, "wind_target",    ap.wind_angle_target);
     SET_JSON_DP(doc, "rudder",         ap.rudder_angle);
     SET_JSON_DP(doc, "locked_heading", ap.locked_heading);
+
+    String out;
+    serializeJson(doc, out);
+    return out;
+}
+
+/**
+ * @brief Build the Sail Performance JSON payload.
+ *
+ * Fields:
+ *   vmg         float | null   VMG in knots. Positive = upwind, negative = downwind.
+ *   polar_pct   float | null   Current STW as % of polar target. null if no polar loaded.
+ *   target_stw  float | null   Polar target STW in knots.        null if no polar loaded.
+ *   polar_loaded bool          True when a polar file is loaded on the device.
+ *
+ * Example (polar loaded, sailing upwind at 85 % efficiency):
+ *   {"vmg":4.2,"polar_pct":85.3,"target_stw":7.1,"polar_loaded":true}
+ *
+ * Example (no polar loaded):
+ *   {"vmg":4.2,"polar_pct":null,"target_stw":null,"polar_loaded":false}
+ */
+String BLEManager::buildPerformanceJSON() {
+    JsonDocument doc;
+
+    PerformanceData perf = boatState->getPerformance();
+    WindData        wind = boatState->getWind();
+
+    // ── VMG ────────────────────────────────────────────────────
+    SET_JSON_DP(doc, "vmg", perf.vmg);
+
+    // ── Polar % ────────────────────────────────────────────────
+    SET_JSON_DP(doc, "polar_pct", perf.polarPct);
+
+    // ── Target STW ─────────────────────────────────────────────
+    // Recompute directly from the polar so we always have the raw target
+    // alongside the percentage, without storing it as a separate DataPoint.
+    bool polarLoaded = boatState->polar.isLoaded();
+    doc["polar_loaded"] = polarLoaded;
+
+    if (polarLoaded &&
+        wind.tws.valid && !wind.tws.isStale() &&
+        wind.twa.valid && !wind.twa.isStale()) {
+
+        float target = boatState->polar.getTargetSTW(wind.tws.value, wind.twa.value);
+        if (target > 0.1f) {
+            doc["target_stw"] = target;
+        } else {
+            doc["target_stw"] = nullptr;
+        }
+    } else {
+        doc["target_stw"] = nullptr;
+    }
 
     String out;
     serializeJson(doc, out);
