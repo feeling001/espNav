@@ -260,7 +260,6 @@ void BLEManager::setupServices() {
     pNavDataChar = pNavService->createCharacteristic(
         BLE_CHAR_NAV_DATA_UUID,
         NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
-    pNavService->start();
     Serial.println("[BLE]   ✓ Navigation service");
 
     // Wind service
@@ -268,7 +267,6 @@ void BLEManager::setupServices() {
     pWindDataChar = pWindService->createCharacteristic(
         BLE_CHAR_WIND_DATA_UUID,
         NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
-    pWindService->start();
     Serial.println("[BLE]   ✓ Wind service");
 
     // Autopilot service
@@ -283,7 +281,6 @@ void BLEManager::setupServices() {
         NIMBLE_PROPERTY::WRITE);
     pAutopilotCmdChar->setCallbacks(autopilotCmdCallbacks);
 
-    pAutopilotService->start();
     Serial.println("[BLE]   ✓ Autopilot service");
 
     Serial.println("[BLE] ✓ All services created");

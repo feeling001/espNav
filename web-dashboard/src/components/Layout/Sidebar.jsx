@@ -58,10 +58,8 @@ export function Sidebar() {
       <nav>
         <Link to="/" className={isActive('/')}>System Status</Link>
         <Link to="/instruments" className={isActive('/instruments')}>Instruments</Link>
-        <Link to="/wifi" className={isActive('/wifi')}>WiFi Config</Link>
-        <Link to="/serial" className={isActive('/serial')}>Serial Config</Link>
         <Link to="/nmea" className={isActive('/nmea')}>NMEA Monitor</Link>
-        <Link to="/ble" className={isActive('/ble')}>Bluetooth Config</Link>
+        <Link to="/config" className={isActive('/config')}>WiFi Config</Link>
       </nav>
     </div>
   );
