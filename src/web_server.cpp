@@ -5,6 +5,7 @@
 #include "tcp_server.h"
 #include "nmea_parser.h"
 #include "polar.h"
+#include "functions.h"
 #include <ArduinoJson.h>
 
 // External variables from main.cpp for monitoring
@@ -12,8 +13,7 @@ extern volatile uint32_t g_nmeaQueueOverflows;
 extern volatile uint32_t g_nmeaQueueFullEvents;
 
 
-WebServer::WebServer(ConfigManager* cm, WiFiManager* wm, TCPServer* tcp, UARTHandler* uart,
-                     NMEAParser* nmea, BoatState* bs, BLEManager* ble)
+WebServer::WebServer(ConfigManager* cm, WiFiManager* wm, TCPServer* tcp, UARTHandler* uart, NMEAParser* nmea, BoatState* bs, BLEManager* ble)
     : configManager(cm), wifiManager(wm), tcpServer(tcp), uartHandler(uart),
       nmeaParser(nmea), boatState(bs), bleManager(ble), running(false) {
     server  = new AsyncWebServer(WEB_SERVER_PORT);
@@ -22,8 +22,8 @@ WebServer::WebServer(ConfigManager* cm, WiFiManager* wm, TCPServer* tcp, UARTHan
 
 
 void WebServer::init() {
-    Serial.println("[Web] Initializing Web Server");
-    Serial.println("[Web] Using already-mounted LittleFS");
+    serialPrintf("[Web] Initializing Web Server\n");
+    serialPrintf("[Web] Using already-mounted LittleFS\n");
     
     wsNMEA->onEvent([this](AsyncWebSocket* server, AsyncWebSocketClient* client,
                            AwsEventType type, void* arg, uint8_t* data, size_t len) {
@@ -39,41 +39,41 @@ void WebServer::start() {
     server->begin();
     running = true;
     
-    Serial.println("[Web] ═══════════════════════════════════════");
-    Serial.println("[Web] Server started on port 80");
-    Serial.println("[Web] Available endpoints:");
-    Serial.println("[Web]   Configuration:");
-    Serial.println("[Web]   - GET  /api/config/wifi");
-    Serial.println("[Web]   - POST /api/config/wifi");
-    Serial.println("[Web]   - GET  /api/config/serial");
-    Serial.println("[Web]   - POST /api/config/serial");
-    Serial.println("[Web]   - GET  /api/status");
-    Serial.println("[Web]   - POST /api/restart");
-    Serial.println("[Web]   - POST /api/wifi/scan");
-    Serial.println("[Web]   - GET  /api/wifi/scan");
-    Serial.println("[Web]   Polar:");
-    Serial.println("[Web]   - GET  /api/polar/status");
-    Serial.println("[Web]   - POST /api/polar/upload");
-    Serial.println("[Web]   Boat Data:");
-    Serial.println("[Web]   - GET  /api/boat/navigation");
-    Serial.println("[Web]   - GET  /api/boat/wind");
-    Serial.println("[Web]   - GET  /api/boat/ais");
-    Serial.println("[Web]   - GET  /api/boat/state");
-    Serial.println("[Web]   - GET  /api/boat/performance");
-    Serial.println("[Web]   WebSocket:");
-    Serial.println("[Web]   - WS   /ws/nmea");
-    Serial.println("[Web] ═══════════════════════════════════════");
+    serialPrintf("[Web] ═══════════════════════════════════════\n");
+    serialPrintf("[Web] Server started on port 80\n");
+    serialPrintf("[Web] Available endpoints:\n");
+    serialPrintf("[Web]   Configuration:\n");
+    serialPrintf("[Web]   - GET  /api/config/wifi\n");
+    serialPrintf("[Web]   - POST /api/config/wifi\n");
+    serialPrintf("[Web]   - GET  /api/config/serial\n");
+    serialPrintf("[Web]   - POST /api/config/serial\n");
+    serialPrintf("[Web]   - GET  /api/status\n");
+    serialPrintf("[Web]   - POST /api/restart\n");
+    serialPrintf("[Web]   - POST /api/wifi/scan\n");
+    serialPrintf("[Web]   - GET  /api/wifi/scan\n");
+    serialPrintf("[Web]   Polar:\n");
+    serialPrintf("[Web]   - GET  /api/polar/status\n");
+    serialPrintf("[Web]   - POST /api/polar/upload\n");
+    serialPrintf("[Web]   Boat Data:\n");
+    serialPrintf("[Web]   - GET  /api/boat/navigation\n");
+    serialPrintf("[Web]   - GET  /api/boat/wind\n");
+    serialPrintf("[Web]   - GET  /api/boat/ais\n");
+    serialPrintf("[Web]   - GET  /api/boat/state\n");
+    serialPrintf("[Web]   - GET  /api/boat/performance\n");
+    serialPrintf("[Web]   WebSocket:\n");
+    serialPrintf("[Web]   - WS   /ws/nmea\n");
+    serialPrintf("[Web] ═══════════════════════════════════════\n");
 }
 
 void WebServer::stop() {
     if (!running) return;
     running = false;
     server->end();
-    Serial.println("[Web] Server stopped");
+    serialPrintf("[Web] Server stopped\n");
 }
 
 void WebServer::registerRoutes() {
-    Serial.println("[Web]   Registering API endpoints...");
+    serialPrintf("[Web]   Registering API endpoints...\n");
     
     // ── Configuration ──────────────────────────────────────────
     server->on("/api/config/wifi", HTTP_GET, [this](AsyncWebServerRequest* request) {
@@ -167,7 +167,21 @@ void WebServer::registerRoutes() {
         this->handleGetPerformance(request);
     });
 
-    Serial.println("[Web]   ✓ All API routes registered");
+    serialPrintf("[Web]   ✓ All API routes registered\n");
+
+
+    server->on("/instruments", HTTP_GET, [](AsyncWebServerRequest* request) {
+        request->send(LittleFS, "/www/index.html", "text/html");
+    });
+    server->on("/performance", HTTP_GET, [](AsyncWebServerRequest* request) {
+        request->send(LittleFS, "/www/index.html", "text/html");
+    });
+    server->on("/config", HTTP_GET, [](AsyncWebServerRequest* request) {
+        request->send(LittleFS, "/www/index.html", "text/html");
+    });
+    server->on("/nmea", HTTP_GET, [](AsyncWebServerRequest* request) {
+        request->send(LittleFS, "/www/index.html", "text/html");
+    });
 
     // ── Static files ───────────────────────────────────────────
     server->serveStatic("/", LittleFS, "/www/")
@@ -183,7 +197,7 @@ void WebServer::registerRoutes() {
         request->send(LittleFS, "/www/index.html", "text/html");
     });
 
-    Serial.println("[Web]   ✓ All routes registered");
+    serialPrintf("[Web]   ✓ All routes registered\n");
 }
 
 // ============================================================
@@ -194,11 +208,11 @@ void WebServer::handleWebSocketEvent(AsyncWebSocket* server, AsyncWebSocketClien
                                       AwsEventType type, void* arg, uint8_t* data, size_t len) {
     switch (type) {
         case WS_EVT_CONNECT:
-            Serial.printf("[WebSocket] Client #%u connected from %s\n",
+            serialPrintf("[WebSocket] Client #%u connected from %s\n",
                           client->id(), client->remoteIP().toString().c_str());
             break;
         case WS_EVT_DISCONNECT:
-            Serial.printf("[WebSocket] Client #%u disconnected\n", client->id());
+            serialPrintf("[WebSocket] Client #%u disconnected\n", client->id());
             break;
         default:
             break;
@@ -231,7 +245,7 @@ void WebServer::broadcastNMEA(const char* sentence) {
 
 void WebServer::handleGetWiFiConfig(AsyncWebServerRequest* request) {
     #ifdef DEBUG_WEB
-    Serial.println("[Web] → GET /api/config/wifi");
+    serialPrintf("[Web] → GET /api/config/wifi\n");
     #endif
 
     WiFiConfig config;
@@ -419,7 +433,7 @@ void WebServer::handleGetStatus(AsyncWebServerRequest* request) {
 void WebServer::handleRestart(AsyncWebServerRequest* request) {
     request->send(200, "application/json",
                   "{\"success\":true,\"message\":\"Restarting in 2 seconds\"}");
-    Serial.println("[Web] Restarting...");
+    serialPrintf("[Web] Restarting...\n");
     delay(2000);
     ESP.restart();
 }
@@ -565,13 +579,13 @@ void WebServer::handleUploadPolar(AsyncWebServerRequest* request,
     static File uploadFile;
 
     if (index == 0) {
-        Serial.printf("[Web] Polar upload started: %s\n", filename.c_str());
+        serialPrintf("[Web] Polar upload started: %s\n", filename.c_str());
         if (LittleFS.exists(POLAR_FILE_PATH)) {
             LittleFS.remove(POLAR_FILE_PATH);
         }
         uploadFile = LittleFS.open(POLAR_FILE_PATH, "w");
         if (!uploadFile) {
-            Serial.println("[Web] ✗ Failed to open polar file for writing");
+            serialPrintf("[Web] ✗ Failed to open polar file for writing\n");
             return;
         }
     }
@@ -583,16 +597,16 @@ void WebServer::handleUploadPolar(AsyncWebServerRequest* request,
     if (final) {
         if (uploadFile) {
             uploadFile.close();
-            Serial.printf("[Web] Polar upload complete: %u bytes\n", index + len);
+            serialPrintf("[Web] Polar upload complete: %u bytes\n", index + len);
         }
         // Reload polar into memory immediately
         bool ok = boatState->polar.loadFromFile(POLAR_FILE_PATH);
         if (ok) {
             // Recompute performance with the newly loaded polar
             boatState->updatePerformance();
-            Serial.println("[Web] ✓ Polar reloaded and performance updated");
+            serialPrintf("[Web] ✓ Polar reloaded and performance updated\n");
         } else {
-            Serial.println("[Web] ✗ Polar parse failed after upload");
+            serialPrintf("[Web] ✗ Polar parse failed after upload\n");
         }
     }
 }

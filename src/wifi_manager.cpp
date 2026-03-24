@@ -1,6 +1,7 @@
 #include "wifi_manager.h"
 #include "config.h"
 #include <Arduino.h>
+#include "functions.h"
 
 WiFiManager::WiFiManager() 
     : currentState(WIFI_DISCONNECTED), 
@@ -12,16 +13,16 @@ WiFiManager::WiFiManager()
 void WiFiManager::init(const WiFiConfig& cfg) {
     config = cfg;
     
-    Serial.println("[WiFi] Initializing WiFi Manager");
-    Serial.printf("[WiFi] Mode: %s\n", config.mode == 0 ? "STA" : "AP");
+    serialPrintf("[WiFi] Initializing WiFi Manager\n");
+    serialPrintf("[WiFi] Mode: %s\n", config.mode == 0 ? "STA" : "AP");
     
     if (config.mode == 0) {
-        Serial.printf("[WiFi] Target SSID: %s\n", config.ssid);
+        serialPrintf("[WiFi] Target SSID: %s\n", config.ssid);
     } else {
         if (strlen(config.ap_ssid) > 0) {
-            Serial.printf("[WiFi] AP SSID: %s\n", config.ap_ssid);
+            serialPrintf("[WiFi] AP SSID: %s\n", config.ap_ssid);
         } else {
-            Serial.println("[WiFi] AP SSID: MarineGateway-XXXXXX (auto)");
+            serialPrintf("[WiFi] AP SSID: MarineGateway-XXXXXX (auto)\n");
         }
     }
 }
@@ -35,7 +36,7 @@ void WiFiManager::start() {
 }
 
 void WiFiManager::attemptSTAConnection() {
-    Serial.printf("[WiFi] Attempting STA connection to '%s'...\n", config.ssid);
+    serialPrintf("[WiFi] Attempting STA connection to '%s'...\n", config.ssid);
     
     WiFi.mode(WIFI_STA);
     WiFi.begin(config.ssid, config.password);
@@ -46,19 +47,19 @@ void WiFiManager::attemptSTAConnection() {
 
 void WiFiManager::checkSTAConnection() {
     if (WiFi.status() == WL_CONNECTED) {
-        Serial.println("[WiFi] ✓ STA connected!");
-        Serial.printf("[WiFi] IP: %s\n", WiFi.localIP().toString().c_str());
-        Serial.printf("[WiFi] RSSI: %d dBm\n", WiFi.RSSI());
+        serialPrintf("[WiFi] ✓ STA connected!\n");
+        serialPrintf("[WiFi] IP: %s\n", WiFi.localIP().toString().c_str());
+        serialPrintf("[WiFi] RSSI: %d dBm\n", WiFi.RSSI());
         currentState = WIFI_CONNECTED_STA;
         reconnectAttempts = 0;
     } else if (millis() - connectStartTime > WIFI_CONNECT_TIMEOUT_MS) {
-        Serial.println("[WiFi] STA connection timeout");
+        serialPrintf("[WiFi] STA connection timeout\n");
         fallbackToAP();
     }
 }
 
 void WiFiManager::fallbackToAP() {
-    Serial.println("[WiFi] Starting AP mode...");
+    serialPrintf("[WiFi] Starting AP mode...\n");
     
     WiFi.mode(WIFI_AP);
     
@@ -88,10 +89,10 @@ void WiFiManager::fallbackToAP() {
     
     WiFi.softAP(apSSID, apPassword);
     
-    Serial.printf("[WiFi] AP Mode Active\n");
-    Serial.printf("[WiFi]   SSID: %s\n", apSSID);
-    Serial.printf("[WiFi]   Password: %s\n", apPassword);
-    Serial.printf("[WiFi]   IP: %s\n", WiFi.softAPIP().toString().c_str());
+    serialPrintf("[WiFi] AP Mode Active\n");
+    serialPrintf("[WiFi]   SSID: %s\n", apSSID);
+    serialPrintf("[WiFi]   Password: %s\n", apPassword);
+    serialPrintf("[WiFi]   IP: %s\n", WiFi.softAPIP().toString().c_str());
     
     currentState = WIFI_AP_MODE;
 }
@@ -117,7 +118,7 @@ void WiFiManager::update() {
 
 void WiFiManager::monitorSTAConnection() {
     if (WiFi.status() != WL_CONNECTED) {
-        Serial.println("[WiFi] Connection lost, attempting to reconnect...");
+        serialPrintf("[WiFi] Connection lost, attempting to reconnect...\n");
         currentState = WIFI_RECONNECTING;
         reconnectAttempts = 0;
     }
@@ -126,11 +127,11 @@ void WiFiManager::monitorSTAConnection() {
 void WiFiManager::handleReconnection() {
     if (reconnectAttempts < WIFI_MAX_RECONNECT) {
         reconnectAttempts++;
-        Serial.printf("[WiFi] Reconnection attempt %d/%d\n", 
+        serialPrintf("[WiFi] Reconnection attempt %d/%d\n", 
                      reconnectAttempts, WIFI_MAX_RECONNECT);
         attemptSTAConnection();
     } else {
-        Serial.println("[WiFi] Max reconnect attempts reached, falling back to AP");
+        serialPrintf("[WiFi] Max reconnect attempts reached, falling back to AP\n");
         fallbackToAP();
     }
 }
@@ -190,21 +191,21 @@ String WiFiManager::getSSID() const {
 
 int16_t WiFiManager::startScan() {
     if (scanInProgress) {
-        Serial.println("[WiFi] Scan already in progress");
+        serialPrintf("[WiFi] Scan already in progress\n");
         return -1;
     }
     
-    Serial.println("[WiFi] Starting WiFi scan...");
+    serialPrintf("[WiFi] Starting WiFi scan...\n");
     scanInProgress = true;
     
     // Start async scan
     int16_t result = WiFi.scanNetworks(true, false, false, 300);
     
     if (result == WIFI_SCAN_RUNNING) {
-        Serial.println("[WiFi] Scan initiated successfully");
+        serialPrintf("[WiFi] Scan initiated successfully\n");
         return WIFI_SCAN_RUNNING;
     } else if (result == WIFI_SCAN_FAILED) {
-        Serial.println("[WiFi] Scan failed to start");
+        serialPrintf("[WiFi] Scan failed to start\n");
         scanInProgress = false;
         return -1;
     }
@@ -222,10 +223,10 @@ bool WiFiManager::isScanComplete() {
     if (result >= 0) {
         // Scan complete
         scanInProgress = false;
-        Serial.printf("[WiFi] Scan complete, found %d networks\n", result);
+        serialPrintf("[WiFi] Scan complete, found %d networks\n", result);
         return true;
     } else if (result == WIFI_SCAN_FAILED) {
-        Serial.println("[WiFi] Scan failed");
+        serialPrintf("[WiFi] Scan failed\n");
         scanInProgress = false;
         return true;  // Complete but with error
     }
@@ -293,5 +294,5 @@ std::vector<WiFiScanResult> WiFiManager::getScanResults() {
 void WiFiManager::clearScanResults() {
     WiFi.scanDelete();
     scanInProgress = false;
-    Serial.println("[WiFi] Scan results cleared");
+    serialPrintf("[WiFi] Scan results cleared\n");
 }

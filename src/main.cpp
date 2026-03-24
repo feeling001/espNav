@@ -7,6 +7,7 @@
 
 #include "config.h"
 #include "types.h"
+#include "functions.h"
 #include "boat_state.h"
 #include "config_manager.h"
 #include "wifi_manager.h"
@@ -49,26 +50,14 @@ volatile uint32_t g_messagesProcessed   = 0;
 // Shared serial mutex — prevents interleaved output from concurrent tasks
 SemaphoreHandle_t g_serialMutex = nullptr;
 
-// Thread-safe Serial printf helper
-static void serialPrintf(const char* fmt, ...) {
-    char buf[256];
-    va_list args;
-    va_start(args, fmt);
-    vsnprintf(buf, sizeof(buf), fmt, args);
-    va_end(args);
 
-    if (g_serialMutex && xSemaphoreTake(g_serialMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
-        DEBUG_SERIAL.print(buf);
-        xSemaphoreGive(g_serialMutex);
-    }
-}
 
 void listLittleFSFiles(const char* dirname, uint8_t levels) {
-    Serial.printf("[LittleFS] Listing directory: %s\n", dirname);
+    serialPrintf("[LittleFS] Listing directory: %s\n", dirname);
 
     File root = LittleFS.open(dirname);
     if (!root || !root.isDirectory()) {
-        Serial.println("[LittleFS] Failed to open directory");
+        serialPrintf("[LittleFS] Failed to open directory\n");
         return;
     }
 
@@ -78,17 +67,17 @@ void listLittleFSFiles(const char* dirname, uint8_t levels) {
 
     while (file) {
         if (file.isDirectory()) {
-            Serial.printf("  [DIR]  %s\n", file.name());
+            serialPrintf("  [DIR]  %s\n", file.name());
             if (levels) listLittleFSFiles(file.path(), levels - 1);
         } else {
-            Serial.printf("  [FILE] %s (%zu bytes)\n", file.name(), file.size());
+            serialPrintf("  [FILE] %s (%zu bytes)\n", file.name(), file.size());
             fileCount++;
             totalSize += file.size();
         }
         file = root.openNextFile();
     }
 
-    Serial.printf("[LittleFS] Total: %d files, %zu bytes\n", fileCount, totalSize);
+    serialPrintf("[LittleFS] Total: %d files, %zu bytes\n", fileCount, totalSize);
 }
 
 void setup() {
@@ -99,94 +88,94 @@ void setup() {
     // Create the serial mutex early so tasks can use serialPrintf()
     g_serialMutex = xSemaphoreCreateMutex();
 
-    Serial.println("\n\n======================================");
-    Serial.println("   Marine Gateway - ESP32-S3");
-    Serial.println("   Version: " VERSION);
-    Serial.println("   Dual-Core Optimized");
-    Serial.println("======================================\n");
+    serialPrintf("\n\n======================================\n");
+    serialPrintf("   Marine Gateway - ESP32-S3\n");
+    serialPrintf("   Version: " VERSION " \n");
+    serialPrintf("   Dual-Core Optimized \n");
+    serialPrintf("======================================\n");
 
     // Mount LittleFS
-    Serial.println("[LittleFS] Initializing filesystem...");
+    serialPrintf("[LittleFS] Initializing filesystem...\n");
     if (!LittleFS.begin(false, "/littlefs", 10, "littlefs")) {
-        Serial.println("[LittleFS] Mount failed, attempting format...");
+        serialPrintf("[LittleFS] Mount failed, attempting format...\n");
         if (LittleFS.begin(true, "/littlefs", 10, "littlefs")) {
-            Serial.println("[LittleFS] ✓ Formatted and mounted");
+            serialPrintf("[LittleFS] ✓ Formatted and mounted\n");
         } else {
-            Serial.println("[LittleFS] ❌ Format failed");
+            serialPrintf("[LittleFS] ❌ Format failed\n");
         }
     } else {
-        Serial.println("[LittleFS] ✓ Mounted successfully");
+        serialPrintf("[LittleFS] ✓ Mounted successfully\n");
     }
 
     listLittleFSFiles("/", 2);
 
     if (!LittleFS.exists("/www/index.html")) {
-        Serial.println("[LittleFS] ⚠️  Web dashboard not found");
+        serialPrintf("[LittleFS] ⚠️  Web dashboard not found\n");
     } else {
-        Serial.println("[LittleFS] ✓ Web dashboard present");
+        serialPrintf("[LittleFS] ✓ Web dashboard present\n");
     }
 
-    Serial.println("\n======================================\n");
+    serialPrintf("\n======================================\n\n");
 
     // Initialize configuration manager
-    Serial.println("[Config] Initializing...");
+    serialPrintf("[Config] Initializing...\n");
     configManager.init();
 
     // Initialize boat state
     boatState.init();
 
     // Load polar diagram from LittleFS (non-fatal if absent)
-    Serial.println("\n[Polar] Loading polar diagram...");
+    serialPrintf("\n[Polar] Loading polar diagram...\n");
     if (LittleFS.exists(POLAR_FILE_PATH)) {
         if (boatState.polar.loadFromFile()) {
-            Serial.printf("[Polar] ✓ Polar loaded: %u TWA × %u TWS  (file: %s)\n",
+            serialPrintf("[Polar] ✓ Polar loaded: %u TWA × %u TWS  (file: %s)\n",
                           boatState.polar.twaCount(),
                           boatState.polar.twsCount(),
                           POLAR_FILE_PATH);
-            Serial.printf("[Polar]   Wind speeds: %s kn\n",
+            serialPrintf("[Polar]   Wind speeds: %s kn\n",
                           boatState.polar.twsString().c_str());
         } else {
-            Serial.println("[Polar] ✗ Failed to parse polar file — upload a new one via dashboard");
+            serialPrintf("[Polar] ✗ Failed to parse polar file — upload a new one via dashboard\n");
         }
     } else {
-        Serial.printf("[Polar] No polar file at %s — upload via Performance page\n", POLAR_FILE_PATH);
+        serialPrintf("[Polar] No polar file at %s — upload via Performance page\n", POLAR_FILE_PATH);
     }
 
     // Load WiFi config
     WiFiConfig wifiConfig;
     configManager.getWiFiConfig(wifiConfig);
-    Serial.printf("\n[Config] WiFi: %s (%s mode)\n",
+    serialPrintf("\n[Config] WiFi: %s (%s mode)\n",
                   wifiConfig.ssid,
                   wifiConfig.mode == 0 ? "Station" : "AP");
 
     // Load Serial config
     UARTConfig serialConfig;
     configManager.getSerialConfig(serialConfig);
-    Serial.printf("[Config] UART: %u baud\n", serialConfig.baudRate);
+    serialPrintf("[Config] UART: %u baud\n", serialConfig.baudRate);
 
     // Load BLE config
     BLEConfigData bleConfig;
     configManager.getBLEConfig(bleConfig);
-    Serial.printf("[Config] BLE: %s (%s)\n",
+    serialPrintf("[Config] BLE: %s (%s)\n",
                   bleConfig.device_name,
                   bleConfig.enabled ? "Enabled" : "Disabled");
 
     // Initialize WiFi
-    Serial.println("\n[WiFi] Initializing...");
+    serialPrintf("\n[WiFi] Initializing...\n");
     wifiManager.init(wifiConfig);
     wifiManager.start();
 
     // Initialize UART
-    Serial.println("\n[UART] Initializing...");
+    serialPrintf("\n[UART] Initializing...\n");
     uartHandler.init(serialConfig);
     uartHandler.start();
 
     // Initialize TCP server
-    Serial.println("\n[TCP] Initializing...");
+    serialPrintf("\n[TCP] Initializing...\n");
     tcpServer.init(TCP_PORT);
 
     // Initialize BLE Manager
-    Serial.println("\n[BLE] Initializing...");
+    serialPrintf("\n[BLE] Initializing...\n");
     BLEConfig bleManagerConfig;
     bleManagerConfig.enabled = bleConfig.enabled;
     strncpy(bleManagerConfig.device_name, bleConfig.device_name, sizeof(bleManagerConfig.device_name) - 1);
@@ -198,20 +187,20 @@ void setup() {
     }
 
     // Initialize Web server
-    Serial.println("\n[Web] Initializing...");
+    serialPrintf("\n[Web] Initializing...\n");
     webServer.init();
 
     // Create NMEA queue
-    Serial.println("\n[NMEA] Creating queue...");
+    serialPrintf("\n[NMEA] Creating queue...\n");
     nmeaQueue = xQueueCreate(NMEA_QUEUE_SIZE, sizeof(NMEASentence));
     if (nmeaQueue == NULL) {
-        Serial.println("[NMEA] ❌ Queue creation failed!");
+        serialPrintf("[NMEA] ❌ Queue creation failed!\n");
     } else {
-        Serial.printf("[NMEA] ✓ Queue created (size: %d)\n", NMEA_QUEUE_SIZE);
+        serialPrintf("[NMEA] ✓ Queue created (size: %d)\n", NMEA_QUEUE_SIZE);
     }
 
     // Create FreeRTOS tasks
-    Serial.println("\n[Tasks] Creating dual-core FreeRTOS tasks...");
+    serialPrintf("\n[Tasks] Creating dual-core FreeRTOS tasks...\n");
 
     BaseType_t readerResult = xTaskCreatePinnedToCore(
         uartReaderTask, "UART_Reader", 4096, NULL, 5, &uartReaderTaskHandle, 0);
@@ -220,34 +209,34 @@ void setup() {
     BaseType_t wifiResult = xTaskCreatePinnedToCore(
         wifiTask, "WiFi", 4096, NULL, 2, &wifiTaskHandle, 1);
 
-    if (readerResult    == pdPASS) Serial.println("[Tasks] ✓ UART Reader task created (Core 0)");
-    else                            Serial.println("[Tasks] ❌ UART Reader task failed");
-    if (processorResult == pdPASS) Serial.println("[Tasks] ✓ Processor task created (Core 1)");
-    else                            Serial.println("[Tasks] ❌ Processor task failed");
-    if (wifiResult      == pdPASS) Serial.println("[Tasks] ✓ WiFi task created (Core 1)");
-    else                            Serial.println("[Tasks] ❌ WiFi task failed");
+    if (readerResult    == pdPASS) serialPrintf("[Tasks] ✓ UART Reader task created (Core 0)\n");
+    else                            serialPrintf("[Tasks] ❌ UART Reader task failed\n");
+    if (processorResult == pdPASS) serialPrintf("[Tasks] ✓ Processor task created (Core 1)\n");
+    else                            serialPrintf("[Tasks] ❌ Processor task failed\n");
+    if (wifiResult      == pdPASS) serialPrintf("[Tasks] ✓ WiFi task created (Core 1)\n");
+    else                            serialPrintf("[Tasks] ❌ WiFi task failed\n");
 
     // Wait for WiFi
-    Serial.println("\n[WiFi] Waiting for connection...");
+    serialPrintf("\n[WiFi] Waiting for connection...\n");
     delay(5000);
 
     // Start servers
-    Serial.println("\n[TCP] Starting server...");
+    serialPrintf("\n[TCP] Starting server...\n");
     tcpServer.start();
 
-    Serial.println("\n[Web] Starting server...");
+    serialPrintf("\n[Web] Starting server...\n");
     webServer.start();
 
-    Serial.println("\n======================================");
-    Serial.println("✓ Initialization complete!");
-    Serial.println("======================================\n");
+    serialPrintf("\n======================================\n");
+    serialPrintf("✓ Initialization complete!\n");
+    serialPrintf("======================================\n");
 
     if (WiFi.status() == WL_CONNECTED) {
-        Serial.printf("IP Address: %s\n", WiFi.localIP().toString().c_str());
-        Serial.printf("Web:  http://%s/\n",       WiFi.localIP().toString().c_str());
-        Serial.printf("TCP:  %s:%d\n",            WiFi.localIP().toString().c_str(), TCP_PORT);
+        serialPrintf("IP Address: %s\n", WiFi.localIP().toString().c_str());
+        serialPrintf("Web:  http://%s/\n",       WiFi.localIP().toString().c_str());
+        serialPrintf("TCP:  %s:%d\n",            WiFi.localIP().toString().c_str(), TCP_PORT);
     } else {
-        Serial.println("WiFi not connected — check configuration");
+        serialPrintf("WiFi not connected — check configuration\n");
     }
 }
 

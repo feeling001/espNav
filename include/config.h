@@ -3,14 +3,16 @@
 
 #include <Arduino.h>
 
-// Version
-#define VERSION "1.0.0"
+// Version (defined in platformio)
+#ifndef VERSION
+#define VERSION "unknown"
+#endif
 
 #define DEBUG
 
 #ifdef DEBUG
-//#define DEBUG_WEB
-//#define DEBUG_UART
+#define DEBUG_WEB
+#define DEBUG_UART
 #define DEBUG_BLE
 #define DEBUG_CPU
 
