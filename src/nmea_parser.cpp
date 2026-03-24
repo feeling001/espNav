@@ -11,6 +11,7 @@
  */
 
 #include "nmea_parser.h"
+#include "functions.h"
 #include <stdlib.h>
 
 NMEAParser::NMEAParser(BoatState* bs) : validSentences(0), invalidSentences(0), boatState(bs) {}

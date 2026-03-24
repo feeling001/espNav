@@ -1,4 +1,5 @@
 #include "uart_handler.h"
+#include "functions.h"
 #include <driver/uart.h>
 
 UARTHandler::UARTHandler() 
@@ -47,10 +48,10 @@ void UARTHandler::init(const UARTConfig& cfg) {
     
     initialized = true;
     
-    Serial.printf("[UART] Initialized: Baud=%u, Data=%u, Parity=%u, Stop=%u, RX=GPIO%u, TX=GPIO%u\n",
+    serialPrintf("[UART] Initialized: Baud=%u, Data=%u, Parity=%u, Stop=%u, RX=GPIO%u, TX=GPIO%u\n",
                   config.baudRate, config.dataBits, config.parity, config.stopBits, 
                   UART_RX_PIN, UART_TX_PIN);
-    Serial.printf("[UART] Stream buffer size: %u bytes\n", UART_BUFFER_SIZE);
+    serialPrintf("[UART] Stream buffer size: %u bytes\n", UART_BUFFER_SIZE);
 }
 
 void UARTHandler::start() {
@@ -61,7 +62,7 @@ void UARTHandler::start() {
     running = true;
     xTaskCreate(uartTask, "UART_RX", TASK_STACK_UART, this, TASK_PRIORITY_UART, &taskHandle);
     
-    Serial.println("[UART] Started");
+    serialPrintf("[UART] Started\n");
 }
 
 void UARTHandler::stop() {
@@ -76,7 +77,7 @@ void UARTHandler::stop() {
         taskHandle = NULL;
     }
     
-    Serial.println("[UART] Stopped");
+    serialPrintf("[UART] Stopped\n");
 }
 
 void UARTHandler::uartTask(void* parameter) {
@@ -135,7 +136,7 @@ bool UARTHandler::readLine(char* buffer, size_t maxLen, TickType_t timeout) {
                 // On reset et on compte comme erreur
                 linePos = 0;
                 errors++;
-                Serial.println("[UART] ⚠️  Line too long, dropped");
+                serialPrintf("[UART] ⚠️  Line too long, dropped\n");
                 continue;
             }
             // Sinon, ignorer le caractère et continuer
@@ -175,7 +176,7 @@ bool UARTHandler::readLine(char* buffer, size_t maxLen, TickType_t timeout) {
                 // Message invalide (ne commence pas par $ ou !)
                 // Probablement dû à une synchronisation perdue
                 errors++;
-                Serial.printf("[UART] ⚠️  Invalid message start: '%c' (expected $ or !)\n", buffer[0]);
+                serialPrintf("[UART] ⚠️  Invalid message start: '%c' (expected $ or !)\n", buffer[0]);
                 continue;
             }
         }

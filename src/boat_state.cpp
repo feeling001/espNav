@@ -1,4 +1,5 @@
 #include "boat_state.h"
+#include "functions.h"
 #include <math.h>
 
 BoatState::BoatState() {
@@ -12,7 +13,7 @@ BoatState::~BoatState() {
 }
 
 void BoatState::init() {
-    Serial.println("[BoatState] Initializing boat state manager");
+    serialPrintf("[BoatState] Initializing boat state manager\n");
     
     // Initialize default units
     gps.sog.unit = "kn";
@@ -49,7 +50,7 @@ void BoatState::init() {
     performance.vmg.unit      = "kn";
     performance.polarPct.unit = "%";
     
-    Serial.println("[BoatState] ✓ Initialization complete");
+    serialPrintf("[BoatState] ✓ Initialization complete\n");
 }
 
 // ============================================================

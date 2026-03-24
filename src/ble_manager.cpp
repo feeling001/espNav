@@ -1,4 +1,5 @@
 #include "ble_manager.h"
+#include "functions.h"
 #include <ArduinoJson.h>
 
 // ============================================================
@@ -19,7 +20,7 @@
 
 void MarineServerCallbacks::onConnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo) {
     manager->connectedDevices++;
-    Serial.printf("[BLE] Device connected addr=%s (total=%u)\n",
+    serialPrintf("[BLE] Device connected addr=%s (total=%u)\n",
                   connInfo.getAddress().toString().c_str(),
                   manager->connectedDevices);
 
@@ -33,7 +34,7 @@ void MarineServerCallbacks::onConnect(NimBLEServer* pServer, NimBLEConnInfo& con
 void MarineServerCallbacks::onDisconnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo, int reason) {
     if (manager->connectedDevices > 0) manager->connectedDevices--;
 
-    Serial.printf("[BLE] Device disconnected addr=%s reason=%d (remaining=%u)\n",
+    serialPrintf("[BLE] Device disconnected addr=%s reason=%d (remaining=%u)\n",
                   connInfo.getAddress().toString().c_str(),
                   reason,
                   manager->connectedDevices);
@@ -43,17 +44,17 @@ void MarineServerCallbacks::onDisconnect(NimBLEServer* pServer, NimBLEConnInfo& 
         vTaskDelay(pdMS_TO_TICKS(100));
         pServer->startAdvertising();
         manager->advertising = true;
-        Serial.printf("[BLE] Advertising restarted (reason=0x%04X)\n", reason);
+        serialPrintf("[BLE] Advertising restarted (reason=0x%04X)\n", reason);
     }
 }
 
 void MarineServerCallbacks::onAuthenticationComplete(NimBLEConnInfo& connInfo) {
     if (connInfo.isEncrypted()) {
-        Serial.printf("[BLE] ✓ Auth complete — addr=%s encrypted=yes bonded=%s\n",
+        serialPrintf("[BLE] ✓ Auth complete — addr=%s encrypted=yes bonded=%s\n",
                       connInfo.getAddress().toString().c_str(),
                       connInfo.isBonded() ? "yes" : "no");
     } else {
-        Serial.printf("[BLE] ✗ Auth failed — addr=%s\n",
+        serialPrintf("[BLE] ✗ Auth failed — addr=%s\n",
                       connInfo.getAddress().toString().c_str());
     }
 }
@@ -66,14 +67,14 @@ void AutopilotCmdCallbacks::onWrite(NimBLECharacteristic* pChar, NimBLEConnInfo&
     std::string raw = pChar->getValue();
     if (raw.empty()) return;
 
-    Serial.printf("[BLE] Autopilot command from %s: %s\n",
+    serialPrintf("[BLE] Autopilot command from %s: %s\n",
                   connInfo.getAddress().toString().c_str(),
                   raw.c_str());
 
     JsonDocument doc;
     DeserializationError err = deserializeJson(doc, raw.c_str());
     if (err) {
-        Serial.printf("[BLE] JSON parse error: %s\n", err.c_str());
+        serialPrintf("[BLE] JSON parse error: %s\n", err.c_str());
         return;
     }
 
@@ -88,14 +89,14 @@ void AutopilotCmdCallbacks::onWrite(NimBLECharacteristic* pChar, NimBLEConnInfo&
     else if (strcmp(cmd, "adjust+1")  == 0) command.type = AutopilotCommand::ADJUST_PLUS_1;
     else if (strcmp(cmd, "adjust-1")  == 0) command.type = AutopilotCommand::ADJUST_MINUS_1;
     else {
-        Serial.printf("[BLE] Unknown command: %s\n", cmd);
+        serialPrintf("[BLE] Unknown command: %s\n", cmd);
         return;
     }
 
     xSemaphoreTake(manager->commandMutex, portMAX_DELAY);
     manager->pendingCommand = command;
     xSemaphoreGive(manager->commandMutex);
-    Serial.printf("[BLE] Command queued: type=%d\n", command.type);
+    serialPrintf("[BLE] Command queued: type=%d\n", command.type);
 }
 
 // ============================================================
@@ -132,10 +133,10 @@ void BLEManager::init(const BLEConfig& cfg, BoatState* state) {
     config    = cfg;
     boatState = state;
 
-    Serial.println("[BLE] Initializing NimBLE 2.x stack");
-    Serial.printf("[BLE]   Device name : %s\n", config.device_name);
-    Serial.printf("[BLE]   PIN code    : %s\n", config.pin_code);
-    Serial.printf("[BLE]   Enabled     : %s\n", config.enabled ? "yes" : "no");
+    serialPrintf("[BLE] Initializing NimBLE 2.x stack");
+    serialPrintf("[BLE]   Device name : %s\n", config.device_name);
+    serialPrintf("[BLE]   PIN code    : %s\n", config.pin_code);
+    serialPrintf("[BLE]   Enabled     : %s\n", config.enabled ? "yes" : "no");
 
     NimBLEDevice::init(config.device_name);
     NimBLEDevice::setPower(9);
@@ -149,7 +150,7 @@ void BLEManager::init(const BLEConfig& cfg, BoatState* state) {
     setupServices();
 
     initialized = true;
-    Serial.println("[BLE] ✓ NimBLE 2.x initialization complete");
+    serialPrintf("[BLE] ✓ NimBLE 2.x initialization complete");
 }
 
 // ============================================================
@@ -157,10 +158,10 @@ void BLEManager::init(const BLEConfig& cfg, BoatState* state) {
 // ============================================================
 
 void BLEManager::start() {
-    if (!initialized) { Serial.println("[BLE] ✗ Cannot start — not initialized"); return; }
-    if (!config.enabled) { Serial.println("[BLE] Not starting — disabled in config"); return; }
+    if (!initialized) { serialPrintf("[BLE] ✗ Cannot start — not initialized"); return; }
+    if (!config.enabled) { serialPrintf("[BLE] Not starting — disabled in config"); return; }
 
-    Serial.println("[BLE] Starting...");
+    serialPrintf("[BLE] Starting...");
     startAdvertising();
 
     xTaskCreatePinnedToCore(
@@ -173,13 +174,13 @@ void BLEManager::start() {
         0
     );
 
-    Serial.println("[BLE] ✓ Started");
+    serialPrintf("[BLE] ✓ Started");
 }
 
 void BLEManager::stop() {
     if (updateTaskHandle) { vTaskDelete(updateTaskHandle); updateTaskHandle = nullptr; }
     stopAdvertising();
-    Serial.println("[BLE] Stopped");
+    serialPrintf("[BLE] Stopped");
 }
 
 // ============================================================
@@ -191,7 +192,7 @@ void BLEManager::update() {
 
     // Watchdog: restart advertising if it dropped unexpectedly
     if (connectedDevices < BLE_MAX_CONNECTIONS && config.enabled && !advertising) {
-        Serial.println("[BLE] Watchdog: restarting advertising");
+        serialPrintf("[BLE] Watchdog: restarting advertising");
         pServer->startAdvertising();
         advertising = true;
     }
@@ -217,14 +218,14 @@ void BLEManager::updateTask(void* param) {
 void BLEManager::setupSecurity() {
     if (!BLE_SECURITY_ENABLED) return;
 
-    Serial.println("[BLE] Configuring security (NimBLE 2.x)...");
+    serialPrintf("[BLE] Configuring security (NimBLE 2.x)...");
 
     uint32_t passkey = (uint32_t)atoi(config.pin_code);
     NimBLEDevice::setSecurityPasskey(passkey);
     NimBLEDevice::setSecurityAuth(true, true, true); // bonding, MITM, SC
     NimBLEDevice::setSecurityIOCap(BLE_HS_IO_DISPLAY_ONLY);
 
-    Serial.printf("[BLE] ✓ Security configured (PIN: %s)\n", config.pin_code);
+    serialPrintf("[BLE] ✓ Security configured (PIN: %s)\n", config.pin_code);
 }
 
 // ============================================================
@@ -232,21 +233,21 @@ void BLEManager::setupSecurity() {
 // ============================================================
 
 void BLEManager::setupServices() {
-    Serial.println("[BLE] Creating GATT services...");
+    serialPrintf("[BLE] Creating GATT services...");
 
     // ── Navigation ─────────────────────────────────────────────
     pNavService  = pServer->createService(BLE_SERVICE_NAVIGATION_UUID);
     pNavDataChar = pNavService->createCharacteristic(
         BLE_CHAR_NAV_DATA_UUID,
         NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
-    Serial.println("[BLE]   ✓ Navigation service");
+    serialPrintf("[BLE]   ✓ Navigation service");
 
     // ── Wind ───────────────────────────────────────────────────
     pWindService  = pServer->createService(BLE_SERVICE_WIND_UUID);
     pWindDataChar = pWindService->createCharacteristic(
         BLE_CHAR_WIND_DATA_UUID,
         NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
-    Serial.println("[BLE]   ✓ Wind service");
+    serialPrintf("[BLE]   ✓ Wind service");
 
     // ── Autopilot ──────────────────────────────────────────────
     pAutopilotService  = pServer->createService(BLE_SERVICE_AUTOPILOT_UUID);
@@ -259,16 +260,16 @@ void BLEManager::setupServices() {
         BLE_CHAR_AUTOPILOT_CMD_UUID,
         NIMBLE_PROPERTY::WRITE);
     pAutopilotCmdChar->setCallbacks(autopilotCmdCallbacks);
-    Serial.println("[BLE]   ✓ Autopilot service");
+    serialPrintf("[BLE]   ✓ Autopilot service");
 
     // ── Sail Performance ───────────────────────────────────────
     pPerformanceService  = pServer->createService(BLE_SERVICE_PERFORMANCE_UUID);
     pPerformanceDataChar = pPerformanceService->createCharacteristic(
         BLE_CHAR_PERFORMANCE_DATA_UUID,
         NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
-    Serial.println("[BLE]   ✓ Sail Performance service");
+    serialPrintf("[BLE]   ✓ Sail Performance service");
 
-    Serial.println("[BLE] ✓ All services created");
+    serialPrintf("[BLE] ✓ All services created");
 }
 
 // ============================================================
@@ -278,7 +279,7 @@ void BLEManager::setupServices() {
 void BLEManager::startAdvertising() {
     if (!initialized || !config.enabled || advertising) return;
 
-    Serial.println("[BLE] Starting advertising...");
+    serialPrintf("[BLE] Starting advertising...");
 
     pAdvertising = NimBLEDevice::getAdvertising();
 
@@ -299,14 +300,14 @@ void BLEManager::startAdvertising() {
     NimBLEDevice::startAdvertising();
     advertising = true;
 
-    Serial.println("[BLE] ✓ Advertising");
+    serialPrintf("[BLE] ✓ Advertising");
 }
 
 void BLEManager::stopAdvertising() {
     if (!advertising) return;
     NimBLEDevice::stopAdvertising();
     advertising = false;
-    Serial.println("[BLE] Advertising stopped");
+    serialPrintf("[BLE] Advertising stopped");
 }
 
 // ============================================================

@@ -1,5 +1,6 @@
 #include "wifi_manager.h"
 #include "config.h"
+#include "functions.h"
 #include <Arduino.h>
 #include "functions.h"
 

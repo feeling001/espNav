@@ -1,4 +1,5 @@
 #include "tcp_server.h"
+#include "functions.h"
 
 TCPServer::TCPServer() 
     : server(NULL), clientsMutex(NULL), port(0), 
@@ -26,13 +27,13 @@ void TCPServer::init(uint16_t p) {
     clientsMutex = xSemaphoreCreateMutex();
     
     if (clientsMutex == NULL) {
-        Serial.println("[TCP] ❌ Failed to create mutex!");
+        serialPrintf("[TCP] ❌ Failed to create mutex!\n");
         return;
     }
     
     initialized = true;
     
-    Serial.printf("[TCP] Initialized on port %u with intelligent throttling\n", port);
+    serialPrintf("[TCP] Initialized on port %u with intelligent throttling\n", port);
 }
 
 void TCPServer::start() {
@@ -43,7 +44,7 @@ void TCPServer::start() {
     server = new AsyncServer(port);
     
     if (server == NULL) {
-        Serial.println("[TCP] ❌ Failed to create server!");
+        serialPrintf("[TCP] ❌ Failed to create server!\n");
         return;
     }
     
@@ -56,7 +57,7 @@ void TCPServer::start() {
     server->begin();
     running = true;
     
-    Serial.printf("[TCP] ✓ Server started on port %u\n", port);
+    serialPrintf("[TCP] ✓ Server started on port %u\n", port);
 }
 
 void TCPServer::stop() {
@@ -81,7 +82,7 @@ void TCPServer::stop() {
     clientStats.clear();  // Clear stats map
     xSemaphoreGive(clientsMutex);
     
-    Serial.println("[TCP] Server stopped");
+    serialPrintf("[TCP] Server stopped\n");
 }
 
 void TCPServer::onConnect(AsyncClient* client) {
@@ -89,7 +90,7 @@ void TCPServer::onConnect(AsyncClient* client) {
         return;
     }
     
-    Serial.printf("[TCP] New client connected: %s:%u\n", 
+    serialPrintf("[TCP] New client connected: %s:%u\n", 
                   client->remoteIP().toString().c_str(),
                   client->remotePort());
     
@@ -110,7 +111,7 @@ void TCPServer::onConnect(AsyncClient* client) {
     }, this);
     
     client->onTimeout([](void* arg, AsyncClient* c, uint32_t time) {
-        Serial.printf("[TCP] Client timeout: %s (time: %u ms)\n", 
+        serialPrintf("[TCP] Client timeout: %s (time: %u ms)\n", 
                      c->remoteIP().toString().c_str(), time);
     }, this);
     
@@ -128,7 +129,7 @@ void TCPServer::onDisconnect(AsyncClient* client) {
         return;
     }
     
-    Serial.printf("[TCP] Client disconnected: %s:%u\n", 
+    serialPrintf("[TCP] Client disconnected: %s:%u\n", 
                   client->remoteIP().toString().c_str(),
                   client->remotePort());
     removeClient(client);
@@ -137,7 +138,7 @@ void TCPServer::onDisconnect(AsyncClient* client) {
 void TCPServer::onData(AsyncClient* client, void* data, size_t len) {
     // TCP server is transmit-only for NMEA data
     // Ignore any incoming data (could log it if needed)
-    Serial.printf("[TCP] Received %u bytes from %s (ignored)\n", 
+    serialPrintf("[TCP] Received %u bytes from %s (ignored)\n", 
                   len, client->remoteIP().toString().c_str());
 }
 
@@ -146,7 +147,7 @@ void TCPServer::onError(AsyncClient* client, int8_t error) {
         return;
     }
     
-    Serial.printf("[TCP] Client error: %s, error code: %d\n", 
+    serialPrintf("[TCP] Client error: %s, error code: %d\n", 
                   client->remoteIP().toString().c_str(), error);
     removeClient(client);
 }
@@ -171,10 +172,10 @@ void TCPServer::addClient(AsyncClient* client) {
         stats.totalSkipped = 0;
         clientStats[client] = stats;
         
-        Serial.printf("[TCP] Client added, total clients: %d/%d\n", 
+        serialPrintf("[TCP] Client added, total clients: %d/%d\n", 
                      clients.size(), TCP_MAX_CLIENTS);
     } else {
-        Serial.printf("[TCP] ⚠️  Max clients reached (%d), rejecting connection from %s\n", 
+        serialPrintf("[TCP] ⚠️  Max clients reached (%d), rejecting connection from %s\n", 
                      TCP_MAX_CLIENTS, client->remoteIP().toString().c_str());
         
         // Send rejection message before closing
@@ -204,14 +205,14 @@ void TCPServer::removeClient(AsyncClient* client) {
         auto statsIt = clientStats.find(client);
         if (statsIt != clientStats.end()) {
             const ClientStats& stats = statsIt->second;
-            Serial.printf("[TCP] Client %s stats: sent=%u, skipped=%u, fails=%u\n",
+            serialPrintf("[TCP] Client %s stats: sent=%u, skipped=%u, fails=%u\n",
                          client->remoteIP().toString().c_str(),
                          stats.totalSent, stats.totalSkipped, stats.failedSends);
             clientStats.erase(statsIt);
         }
         
         clients.erase(it);
-        Serial.printf("[TCP] Client removed, remaining clients: %d\n", clients.size());
+        serialPrintf("[TCP] Client removed, remaining clients: %d\n", clients.size());
     }
     
     xSemaphoreGive(clientsMutex);
@@ -274,7 +275,7 @@ void TCPServer::broadcast(const char* data, size_t len) {
         
         // Check if client is still connected
         if (!client || !client->connected()) {
-            Serial.printf("[TCP] Removing disconnected client during broadcast\n");
+            serialPrintf("[TCP] Removing disconnected client during broadcast\n");
             
             // Clean up stats
             auto statsIt = clientStats.find(client);
@@ -320,7 +321,7 @@ void TCPServer::broadcast(const char* data, size_t len) {
             }
             
             if (shouldDisconnect) {
-                Serial.printf("[TCP] Disconnecting %s: %s (fails=%u, blocked=%ums)\n", 
+                serialPrintf("[TCP] Disconnecting %s: %s (fails=%u, blocked=%ums)\n", 
                              client->remoteIP().toString().c_str(),
                              reason,
                              stats.failedSends,
@@ -351,7 +352,7 @@ void TCPServer::broadcast(const char* data, size_t len) {
             sentCount++;
         } else {
             // Écriture partielle ou échec
-            Serial.printf("[TCP] ⚠️  Partial write to %s (%u/%u bytes)\n", 
+            serialPrintf("[TCP] ⚠️  Partial write to %s (%u/%u bytes)\n", 
                          client->remoteIP().toString().c_str(), written, sendLen);
             stats.failedSends++;
             errorCount++;
@@ -377,21 +378,21 @@ void TCPServer::broadcast(const char* data, size_t len) {
     // Log toutes les 30 secondes
     if (now - lastLog > 30000) {
         if (clients.size() > 0) {
-            Serial.println("\n[TCP] ═══════ Broadcast Stats (30s) ═══════");
-            Serial.printf("[TCP] Messages: %u broadcasts to %d clients\n", 
+            serialPrintf("\n[TCP] ═══════ Broadcast Stats (30s) ═══════\n");
+            serialPrintf("[TCP] Messages: %u broadcasts to %d clients\n", 
                          broadcastCount, clients.size());
-            Serial.printf("[TCP] Sent: %u (%.1f%%)\n", 
+            serialPrintf("[TCP] Sent: %u (%.1f%%)\n", 
                          totalSent, 
                          (float)totalSent / (broadcastCount * clients.size()) * 100.0f);
             
             if (totalSkipped > 0) {
-                Serial.printf("[TCP] ⚠️  Skipped: %u (%.1f%%) - clients too slow\n", 
+                serialPrintf("[TCP] ⚠️  Skipped: %u (%.1f%%) - clients too slow\n", 
                              totalSkipped,
                              (float)totalSkipped / (broadcastCount * clients.size()) * 100.0f);
             }
             
             if (totalErrors > 0) {
-                Serial.printf("[TCP] ❌ Errors: %u\n", totalErrors);
+                serialPrintf("[TCP] ❌ Errors: %u\n", totalErrors);
             }
             
             // Stats détaillées par client
@@ -400,18 +401,18 @@ void TCPServer::broadcast(const char* data, size_t len) {
                 uint32_t age = now - stats.lastSend;
                 
                 if (stats.totalSkipped > 0 || age > 5000) {
-                    Serial.printf("[TCP]   Client %s: sent=%u, skipped=%u, age=%ums",
+                    serialPrintf("[TCP]   Client %s: sent=%u, skipped=%u, age=%ums",
                                  client->remoteIP().toString().c_str(),
                                  stats.totalSent, stats.totalSkipped, age);
                     
                     if (stats.failedSends > 0) {
-                        Serial.printf(", current_fails=%u", stats.failedSends);
+                        serialPrintf(", current_fails=%u", stats.failedSends);
                     }
-                    Serial.println();
+                    
                 }
             }
             
-            Serial.println("[TCP] ════════════════════════════════════\n");
+            serialPrintf("[TCP] ════════════════════════════════════\n");
         }
         
         lastLog = now;

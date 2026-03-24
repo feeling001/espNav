@@ -1,4 +1,5 @@
 #include "polar.h"
+#include "functions.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -24,20 +25,20 @@ bool PolarData::loadFromFile(const char* path) {
 
     File f = LittleFS.open(path, "r");
     if (!f) {
-        Serial.printf("[Polar] File not found: %s\n", path);
+        serialPrintf("[Polar] File not found: %s\n", path);
         return false;
     }
 
     storedFileSize = f.size();
     if (storedFileSize == 0 || storedFileSize > 65536) {
-        Serial.printf("[Polar] Invalid file size: %zu bytes\n", storedFileSize);
+        serialPrintf("[Polar] Invalid file size: %zu bytes\n", storedFileSize);
         f.close();
         return false;
     }
 
     char* buf = (char*)malloc(storedFileSize + 1);
     if (!buf) {
-        Serial.println("[Polar] malloc failed");
+        serialPrintf("[Polar] malloc failed\n");
         f.close();
         return false;
     }
@@ -50,9 +51,9 @@ bool PolarData::loadFromFile(const char* path) {
     free(buf);
 
     if (ok) {
-        Serial.printf("[Polar] Loaded %u TWA × %u TWS entries from %s\n",
+        serialPrintf("[Polar] Loaded %u TWA × %u TWS entries from %s\n",
                       numTWA, numTWS, path);
-        Serial.printf("[Polar] TWA range: %.0f°–%.0f°  |  TWS range: %.0f–%.0f kn\n",
+        serialPrintf("[Polar] TWA range: %.0f°–%.0f°  |  TWS range: %.0f–%.0f kn\n",
                       twaBreaks[0], twaBreaks[numTWA - 1],
                       twsBreaks[0], twsBreaks[numTWS - 1]);
     }
@@ -87,7 +88,7 @@ bool PolarData::parseBuffer(char* buf, size_t len) {
     }
 
     if (lineCount < 2) {
-        Serial.println("[Polar] Too few lines in file");
+        serialPrintf("[Polar] Too few lines in file\n");
         return false;
     }
 
@@ -111,7 +112,7 @@ bool PolarData::parseBuffer(char* buf, size_t len) {
     }
 
     if (numTWS < 2) {
-        Serial.printf("[Polar] Too few TWS columns: %u\n", numTWS);
+        serialPrintf("[Polar] Too few TWS columns: %u\n", numTWS);
         return false;
     }
 
@@ -146,7 +147,7 @@ bool PolarData::parseBuffer(char* buf, size_t len) {
     }
 
     if (numTWA < 2) {
-        Serial.printf("[Polar] Too few TWA rows: %u\n", numTWA);
+        serialPrintf("[Polar] Too few TWA rows: %u\n", numTWA);
         return false;
     }
 
