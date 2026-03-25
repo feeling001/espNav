@@ -184,18 +184,20 @@ void WebServer::registerRoutes() {
     });
 
     // ── Static files ───────────────────────────────────────────
-    server->serveStatic("/", LittleFS, "/www/")
-          .setDefaultFile("index.html")
-          .setCacheControl("max-age=600");
-
-    // ── 404 / SPA fallback ─────────────────────────────────────
-    server->onNotFound([](AsyncWebServerRequest* request) {
-        if (request->url().startsWith("/api/") || request->url().startsWith("/ws/")) {
-            request->send(404, "text/plain", "Not Found");
-            return;
-        }
-        request->send(LittleFS, "/www/index.html", "text/html");
-    });
+   #ifdef WEB_UI_PROGMEM
+       registerProgmemRoutes(server);   // defined in web_server_progmem.cpp
+   #else
+       server->serveStatic("/", LittleFS, "/www/")
+             .setDefaultFile("index.html")
+             .setCacheControl("max-age=600");
+       server->onNotFound([](AsyncWebServerRequest* request) {
+           if (request->url().startsWith("/api/") || request->url().startsWith("/ws/")) {
+               request->send(404, "text/plain", "Not Found");
+               return;
+           }
+           request->send(LittleFS, "/www/index.html", "text/html");
+       });
+   #endif
 
     serialPrintf("[Web]   ✓ All routes registered\n");
 }

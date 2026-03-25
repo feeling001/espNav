@@ -11,13 +11,25 @@
 #   Override:      make flash BOARD=esp32s3_n16r8v
 #
 # Available boards:
-#   esp32s3_zero       ESP32-S3 Zero   4MB Flash / 2MB PSRAM
-#   esp32s3_n16r8v     ESP32-S3 N16R8 16MB Flash / 8MB PSRAM
+#   esp32s3_zero       ESP32-S3 Zero    4MB Flash / 2MB PSRAM  (default)
+#   esp32s3_n16r8v     ESP32-S3 N16R8  16MB Flash / 8MB PSRAM
 # ─────────────────────────────────────────────────────────────────────────────
 BOARD ?= esp32s3_zero
 
 # Serial port — override if needed: make flash PORT=/dev/ttyUSB0
 PORT  ?= /dev/ttyACM0
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Storage mode
+#   STORAGE=progmem   Embed dashboard in firmware binary (single .bin, no uploadfs)
+#   STORAGE=littlefs  Serve dashboard from LittleFS filesystem (default)
+#
+#   Examples:
+#     make flash                          → LittleFS mode (default)
+#     make flash STORAGE=progmem          → PROGMEM mode
+#     make flash-all-n16r8v STORAGE=progmem
+# ─────────────────────────────────────────────────────────────────────────────
+STORAGE ?= littlefs
 
 # Virtual environment
 VENV_DIR = .venv
@@ -28,8 +40,25 @@ PIO      = $(VENV_BIN)/pio
 BUILD_DIR = .pio/build/$(BOARD)
 
 # PlatformIO upload/monitor port flag — always passed explicitly
-PIO_PORT_FLAG = --upload-port $(PORT)
+PIO_PORT_FLAG    = --upload-port $(PORT)
 PIO_MONITOR_FLAG = --port $(PORT)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Internal helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Print a coloured section header
+define section
+	@echo ""
+	@echo "── $(1) ──────────────────────────────────────────────"
+endef
+
+# Validate STORAGE value
+_check_storage:
+	@if [ "$(STORAGE)" != "progmem" ] && [ "$(STORAGE)" != "littlefs" ]; then \
+		echo "ERROR: STORAGE must be 'progmem' or 'littlefs' (got '$(STORAGE)')"; \
+		exit 1; \
+	fi
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Virtual environment setup
@@ -54,46 +83,57 @@ install: web-dashboard/node_modules
 	@echo "✓ npm dependencies installed"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Dashboard
+# Dashboard build
+#   Always writes to data/www/ (used by both LittleFS uploadfs and the
+#   embed_dashboard.py script for PROGMEM embedding).
 # ─────────────────────────────────────────────────────────────────────────────
 dashboard: web-dashboard/node_modules
-	@echo "Building React dashboard..."
+	$(call section,Building React dashboard)
 	cd web-dashboard && npm run build
+	@echo "✓ Dashboard built → data/www/"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Firmware
+# Firmware build
+#   PROGMEM mode: embed script runs as PlatformIO pre-script automatically.
+#   LittleFS mode: same firmware build, no embedding.
+#   Either way, dashboard must be built first so data/www/ exists.
 # ─────────────────────────────────────────────────────────────────────────────
-firmware: setup-venv
-	@echo "Building firmware for board: $(BOARD)"
+firmware: setup-venv dashboard _check_storage
+	$(call section,Building firmware [BOARD=$(BOARD) STORAGE=$(STORAGE)])
+ifeq ($(STORAGE),progmem)
+	@echo "Mode: PROGMEM — dashboard embedded in firmware binary"
 	$(PIO) run -e $(BOARD)
+else
+	@echo "Mode: LittleFS — dashboard served from filesystem"
+	$(PIO) run -e $(BOARD)
+endif
 
-build: setup-venv dashboard firmware
+build: firmware
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Upload targets — all go through PlatformIO
+# Upload targets
 # ─────────────────────────────────────────────────────────────────────────────
-upload: setup-venv
-	@echo "Uploading firmware (board: $(BOARD), port: $(PORT))..."
+upload: setup-venv _check_storage
+	$(call section,Uploading firmware [BOARD=$(BOARD) STORAGE=$(STORAGE)])
 	$(PIO) run -e $(BOARD) -t upload $(PIO_PORT_FLAG)
 
-uploadfs: setup-venv
-	@echo "Uploading filesystem (board: $(BOARD), port: $(PORT))..."
+# uploadfs is a no-op in PROGMEM mode (dashboard is baked into firmware).
+uploadfs: setup-venv _check_storage
+ifeq ($(STORAGE),progmem)
+	@echo "STORAGE=progmem → uploadfs skipped (dashboard is embedded in firmware)"
+else
+	$(call section,Uploading filesystem [BOARD=$(BOARD)])
 	$(PIO) run -e $(BOARD) -t uploadfs $(PIO_PORT_FLAG)
+endif
 
+# flash = upload firmware + upload filesystem (if needed)
 flash: upload uploadfs
 
 # ─────────────────────────────────────────────────────────────────────────────
 # flash-partitions
-#   Writes the partition table via PlatformIO's own esptool.
-#   Required when changing partition layout between boards.
-#   Run 'make firmware BOARD=...' first to generate the .bin file.
 # ─────────────────────────────────────────────────────────────────────────────
 flash-partitions: setup-venv
-	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-	@echo "  Flashing partition table"
-	@echo "  Board : $(BOARD)"
-	@echo "  Port  : $(PORT)"
-	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+	$(call section,Flashing partition table [BOARD=$(BOARD)])
 	@test -f $(BUILD_DIR)/partitions.bin || \
 		(echo "ERROR: $(BUILD_DIR)/partitions.bin not found" && \
 		 echo "       Run 'make firmware BOARD=$(BOARD)' first" && exit 1)
@@ -103,56 +143,57 @@ flash-partitions: setup-venv
 	@echo "✓ Partition table flashed"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# flash-all
-#   Full sequence: erase → firmware → filesystem.
-#   Uses only PlatformIO targets — no direct esptool calls.
+# flash-all — full erase → firmware → filesystem (if needed)
 # ─────────────────────────────────────────────────────────────────────────────
-flash-all: setup-venv dashboard firmware
-	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-	@echo "  Full flash sequence"
-	@echo "  Board : $(BOARD)"
-	@echo "  Port  : $(PORT)"
-	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-	@echo "[1/3] Erasing flash..."
+flash-all: setup-venv firmware _check_storage
+	$(call section,Full flash sequence [BOARD=$(BOARD) STORAGE=$(STORAGE)])
+	@echo "[1/$(if $(filter progmem,$(STORAGE)),2,3)] Erasing flash..."
 	$(PIO) run -e $(BOARD) -t erase $(PIO_PORT_FLAG)
-	@echo "[2/3] Uploading firmware..."
+	@echo "[2/$(if $(filter progmem,$(STORAGE)),2,3)] Uploading firmware..."
 	$(PIO) run -e $(BOARD) -t upload $(PIO_PORT_FLAG)
+ifeq ($(STORAGE),littlefs)
 	@echo "[3/3] Uploading filesystem..."
 	$(PIO) run -e $(BOARD) -t uploadfs $(PIO_PORT_FLAG)
+endif
 	@echo ""
 	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-	@echo "✓ Full flash complete (board: $(BOARD))"
+	@echo "✓ Flash complete [BOARD=$(BOARD) STORAGE=$(STORAGE)]"
+ifeq ($(STORAGE),progmem)
+	@echo "  Dashboard embedded — no uploadfs needed."
+else
+	@echo "  Dashboard served from LittleFS."
+endif
 	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Named aliases — ESP32-S3 Zero (4MB)
 # ─────────────────────────────────────────────────────────────────────────────
 build-zero:
-	$(MAKE) build BOARD=esp32s3_zero
+	$(MAKE) build BOARD=esp32s3_zero STORAGE=$(STORAGE)
 
 flash-zero:
-	$(MAKE) flash BOARD=esp32s3_zero PORT=$(PORT)
+	$(MAKE) flash BOARD=esp32s3_zero PORT=$(PORT) STORAGE=$(STORAGE)
 
 flash-partitions-zero:
 	$(MAKE) flash-partitions BOARD=esp32s3_zero PORT=$(PORT)
 
 flash-all-zero:
-	$(MAKE) flash-all BOARD=esp32s3_zero PORT=$(PORT)
+	$(MAKE) flash-all BOARD=esp32s3_zero PORT=$(PORT) STORAGE=$(STORAGE)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Named aliases — ESP32-S3 N16R8 (16MB)
 # ─────────────────────────────────────────────────────────────────────────────
 build-n16r8v:
-	$(MAKE) build BOARD=esp32s3_n16r8v
+	$(MAKE) build BOARD=esp32s3_n16r8v STORAGE=$(STORAGE)
 
 flash-n16r8v:
-	$(MAKE) flash BOARD=esp32s3_n16r8v PORT=$(PORT)
+	$(MAKE) flash BOARD=esp32s3_n16r8v PORT=$(PORT) STORAGE=$(STORAGE)
 
 flash-partitions-n16r8v:
 	$(MAKE) flash-partitions BOARD=esp32s3_n16r8v PORT=$(PORT)
 
 flash-all-n16r8v:
-	$(MAKE) flash-all BOARD=esp32s3_n16r8v PORT=$(PORT)
+	$(MAKE) flash-all BOARD=esp32s3_n16r8v PORT=$(PORT) STORAGE=$(STORAGE)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Default target
@@ -161,8 +202,6 @@ all: setup-venv build flash-all
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Monitor
-#   Always passes --port explicitly so PORT= is respected.
-#   Also passes --upload-port so the exception decoder can find the firmware.
 # ─────────────────────────────────────────────────────────────────────────────
 monitor: setup-venv
 	@echo "Opening serial monitor (board: $(BOARD), port: $(PORT))..."
@@ -183,6 +222,7 @@ clean:
 	@echo "Cleaning build artifacts..."
 	@if [ -d $(VENV_DIR) ]; then $(PIO) run -e $(BOARD) -t clean 2>/dev/null || true; fi
 	rm -rf data/www/*
+	rm -rf src/generated/
 	cd web-dashboard && rm -rf dist/
 
 clean-all: clean
@@ -205,43 +245,49 @@ help:
 	@echo ""
 	@echo "Marine Gateway — Makefile"
 	@echo ""
-	@echo "Boards:"
+	@echo "Storage modes (STORAGE=):"
+	@echo "  littlefs   Dashboard served from LittleFS filesystem  (default)"
+	@echo "             Requires: make upload + make uploadfs"
+	@echo "  progmem    Dashboard embedded in firmware binary"
+	@echo "             Requires: make upload only — no uploadfs step"
+	@echo ""
+	@echo "Boards (BOARD=):"
 	@echo "  esp32s3_zero     ESP32-S3 Zero    4MB Flash / 2MB PSRAM  (default)"
 	@echo "  esp32s3_n16r8v   ESP32-S3 N16R8  16MB Flash / 8MB PSRAM"
 	@echo ""
 	@echo "Port (default: /dev/ttyACM0):"
 	@echo "  All targets accept PORT=/dev/ttyUSB0 (or any path)"
-	@echo "  The port is always passed explicitly to PlatformIO."
 	@echo ""
-	@echo "Named targets (no BOARD= needed):"
-	@echo "  make build-zero                Build for ESP32-S3 Zero"
-	@echo "  make build-n16r8v              Build for ESP32-S3 N16R8"
-	@echo "  make flash-zero                Flash firmware + filesystem"
-	@echo "  make flash-n16r8v              Flash firmware + filesystem"
-	@echo "  make flash-all-zero            Erase + full flash"
-	@echo "  make flash-all-n16r8v          Erase + full flash"
-	@echo "  make flash-partitions-zero     Flash partition table only"
-	@echo "  make flash-partitions-n16r8v   Flash partition table only"
+	@echo "Named targets (board pre-selected, STORAGE= and PORT= still apply):"
+	@echo "  make build-zero                        Build for ESP32-S3 Zero"
+	@echo "  make build-n16r8v                      Build for ESP32-S3 N16R8"
+	@echo "  make flash-zero                        Flash (firmware + fs if needed)"
+	@echo "  make flash-n16r8v"
+	@echo "  make flash-all-zero                    Erase + full flash"
+	@echo "  make flash-all-n16r8v"
+	@echo "  make flash-partitions-zero             Flash partition table only"
+	@echo "  make flash-partitions-n16r8v"
 	@echo ""
-	@echo "Generic targets (use BOARD= and PORT= to select):"
-	@echo "  make build            BOARD=...           Build firmware + dashboard"
-	@echo "  make flash            BOARD=... PORT=...  Upload firmware + filesystem"
-	@echo "  make flash-all        BOARD=... PORT=...  Erase + full flash"
-	@echo "  make flash-partitions BOARD=... PORT=...  Flash partition table only"
-	@echo "  make upload           BOARD=... PORT=...  Upload firmware only"
-	@echo "  make uploadfs         BOARD=... PORT=...  Upload filesystem only"
-	@echo "  make firmware         BOARD=...           Build firmware only"
-	@echo "  make dashboard                            Build React dashboard only"
-	@echo "  make monitor          BOARD=... PORT=...  Open serial monitor"
-	@echo "  make erase            BOARD=... PORT=...  Erase flash"
-	@echo "  make clean            BOARD=...           Clean build artifacts"
-	@echo "  make clean-all                            Clean everything incl. venv"
-	@echo "  make setup-venv                           Create Python venv + PlatformIO"
-	@echo "  make install                              Install npm dependencies"
-	@echo "  make check                                Check development environment"
+	@echo "Generic targets:"
+	@echo "  make build            BOARD=... STORAGE=...           Build"
+	@echo "  make flash            BOARD=... STORAGE=... PORT=...  Upload fw + fs"
+	@echo "  make flash-all        BOARD=... STORAGE=... PORT=...  Erase + full flash"
+	@echo "  make flash-partitions BOARD=... PORT=...              Flash partition table"
+	@echo "  make upload           BOARD=... PORT=...              Upload firmware only"
+	@echo "  make uploadfs         BOARD=... PORT=...              Upload filesystem only"
+	@echo "  make firmware         BOARD=... STORAGE=...           Build only"
+	@echo "  make dashboard                                        Build React dashboard"
+	@echo "  make monitor          BOARD=... PORT=...              Serial monitor"
+	@echo "  make erase            BOARD=... PORT=...              Erase flash"
+	@echo "  make clean            BOARD=...                       Clean build artifacts"
+	@echo "  make clean-all                                        Clean everything"
+	@echo "  make setup-venv                                       Create Python venv"
+	@echo "  make install                                          Install npm deps"
+	@echo "  make check                                            Check environment"
 	@echo ""
 	@echo "Examples:"
-	@echo "  make monitor PORT=/dev/ttyACM0"
-	@echo "  make flash-all-n16r8v PORT=/dev/ttyUSB0"
-	@echo "  make upload BOARD=esp32s3_zero PORT=/dev/ttyACM1"
+	@echo "  make flash-all-n16r8v STORAGE=progmem PORT=/dev/ttyUSB0"
+	@echo "  make flash-all-zero   STORAGE=littlefs PORT=/dev/ttyACM0"
+	@echo "  make build            BOARD=esp32s3_zero STORAGE=progmem"
+	@echo "  make monitor          PORT=/dev/ttyACM0"
 	@echo ""

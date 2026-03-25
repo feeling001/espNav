@@ -14,6 +14,11 @@ class UARTHandler;
 class NMEAParser;
 class BoatState;
 
+#ifdef WEB_UI_PROGMEM
+class AsyncWebServer;
+void registerProgmemRoutes(AsyncWebServer* server);
+#endif
+
 class WebServer {
 public:
     WebServer(ConfigManager* cm, WiFiManager* wm, TCPServer* tcp, UARTHandler* uart,
