@@ -38,7 +38,8 @@ void WiFiManager::start() {
 
 void WiFiManager::attemptSTAConnection() {
     serialPrintf("[WiFi] Attempting STA connection to '%s'...\n", config.ssid);
-    
+   
+    WiFi.persistent(false);
     WiFi.mode(WIFI_STA);
     WiFi.begin(config.ssid, config.password);
     
@@ -61,7 +62,9 @@ void WiFiManager::checkSTAConnection() {
 
 void WiFiManager::fallbackToAP() {
     serialPrintf("[WiFi] Starting AP mode...\n");
-    
+   
+    WiFi.mode(WIFI_OFF); 
+    delay(100);
     WiFi.mode(WIFI_AP);
     
     char apSSID[32];

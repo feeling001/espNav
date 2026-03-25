@@ -28,6 +28,8 @@
 
 #ifdef WEB_UI_PROGMEM
 
+#pragma message("WEB_UI_PROGMEM is ENABLED")
+
 #include "web_server.h"
 #include "generated/web_ui.h"
 #include <ESPAsyncWebServer.h>
@@ -72,7 +74,7 @@ static void serveProgmem(AsyncWebServerRequest* request) {
     memcpy_P(buf, f->data, f->size);
 
     AsyncWebServerResponse* resp =
-        request->beginResponse_P(200, f->mime, f->data, f->size);
+        request->beginResponse(200, f->mime, f->data, f->size);
 
     // Tell the browser the body is already compressed
     if (f->gzip) {
@@ -82,7 +84,7 @@ static void serveProgmem(AsyncWebServerRequest* request) {
     resp->addHeader("Cache-Control", "max-age=600");
     resp->addHeader("ETag",          f->etag);
 
-    free(buf);   // beginResponse_P copied the pointer, we can free our tmp buf
+    free(buf);   // beginResponse copied the pointer, we can free our tmp buf
     request->send(resp);
 }
 
@@ -117,5 +119,10 @@ void registerProgmemRoutes(AsyncWebServer* server) {
             WEB_UI_FILES[i].gzip ? " (gz)" : "");
     }
 }
+
+
+#else
+
+#pragma message("WEB_UI_PROGMEM is DISABLED")
 
 #endif // WEB_UI_PROGMEM

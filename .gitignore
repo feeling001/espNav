@@ -2,6 +2,9 @@
 .pio/
 .vscode/
 
+# Generated output
+src/generated/web_ui.h
+
 # React
 web-dashboard/node_modules/
 web-dashboard/dist/
