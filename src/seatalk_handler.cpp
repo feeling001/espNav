@@ -1,4 +1,6 @@
+#include "functions.h"
 #include "seatalk_handler.h"
+
 
 // Datagrammes standards [cite: 24, 25, 26, 27, 28, 29]
 const uint16_t ST_AUTO[]    = {0x186, 0x21, 0x01, 0xFE};
