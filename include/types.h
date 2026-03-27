@@ -49,7 +49,7 @@ struct SeaTalkConfig {
     bool enabled = true;
     int baud = 4800;
 
-    UARTConfig() : enabled(true), baud(4800) {}
+    SeaTalkConfig() : enabled(true), baud(4800) {}
 };
 
 // BLE configuration structure
