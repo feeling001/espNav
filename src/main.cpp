@@ -12,7 +12,6 @@
 #include "config_manager.h"
 #include "wifi_manager.h"
 #include "uart_handler.h"
-#include "seatalk_handler.h"
 #include "nmea_parser.h"
 #include "tcp_server.h"
 #include "web_server.h"
@@ -24,7 +23,6 @@ ConfigManager configManager;
 BoatState boatState;
 WiFiManager wifiManager;
 UARTHandler uartHandler;
-SeaTalkHandler stHandler
 TCPServer tcpServer;
 BLEManager bleManager;
 NMEAParser nmeaParser(&boatState);
@@ -35,7 +33,6 @@ QueueHandle_t nmeaQueue;
 
 // Task handles
 TaskHandle_t uartReaderTaskHandle;
-TaskHandle_t stTaskHandler;
 TaskHandle_t processorTaskHandle;
 TaskHandle_t wifiTaskHandle;
 
@@ -43,7 +40,6 @@ TaskHandle_t wifiTaskHandle;
 void uartReaderTask(void* parameter);
 void processorTask(void* parameter);
 void wifiTask(void* parameter);
-void stTask(void *pvParameters);
 
 // Global variables for system monitoring
 volatile uint32_t g_nmeaQueueOverflows  = 0;
@@ -157,11 +153,6 @@ void setup() {
     configManager.getSerialConfig(serialConfig);
     serialPrintf("[Config] UART: %u baud\n", serialConfig.baudRate);
 
-    SeaTalkConfig stConfig;
-    configManager.getSeatalkConfig(stConfig);
-    serialPrintf("[Config] SeaTalk: %u baud\n", stConfig.baud);
-
-
     // Load BLE config
     BLEConfigData bleConfig;
     configManager.getBLEConfig(bleConfig);
@@ -178,11 +169,6 @@ void setup() {
     serialPrintf("\n[UART] Initializing...\n");
     uartHandler.init(serialConfig);
     uartHandler.start();
-
-    // Start seatalk handler
-    serialPrintf("\n[Seatalk] Initializing...\n");
-    stHandler.init(stConfig)
-    stHandler.start();
 
     // Initialize TCP server
     serialPrintf("\n[TCP] Initializing...\n");
@@ -218,14 +204,10 @@ void setup() {
 
     BaseType_t readerResult = xTaskCreatePinnedToCore(
         uartReaderTask, "UART_Reader", 4096, NULL, 5, &uartReaderTaskHandle, 0);
-        
     BaseType_t processorResult = xTaskCreatePinnedToCore(
         processorTask, "Processor", 8192, NULL, 3, &processorTaskHandle, 1);
     BaseType_t wifiResult = xTaskCreatePinnedToCore(
         wifiTask, "WiFi", 4096, NULL, 2, &wifiTaskHandle, 1);
-
-    BaseType_t stResult = xTaskCreatePinnedToCore(
-        stTask, "SeaTalk", 4096, NULL, 4, &stTaskHandler, 0);
 
     if (readerResult    == pdPASS) serialPrintf("[Tasks] ✓ UART Reader task created (Core 0)\n");
     else                            serialPrintf("[Tasks] ❌ UART Reader task failed\n");
@@ -233,8 +215,6 @@ void setup() {
     else                            serialPrintf("[Tasks] ❌ Processor task failed\n");
     if (wifiResult      == pdPASS) serialPrintf("[Tasks] ✓ WiFi task created (Core 1)\n");
     else                            serialPrintf("[Tasks] ❌ WiFi task failed\n");
-    if (stResult        == pdPASS) serialPrintf("[Tasks] ✓ SeaTalk task created (Core 0)\n");
-    else                            serialPrintf("[Tasks] ❌ SeaTalk task failed\n");
 
     // Wait for WiFi
     serialPrintf("\n[WiFi] Waiting for connection...\n");
@@ -247,7 +227,6 @@ void setup() {
     serialPrintf("\n[Web] Starting server...\n");
     webServer.start();
 
-    
     serialPrintf("\n======================================\n");
     serialPrintf("✓ Initialization complete!\n");
     serialPrintf("======================================\n");
@@ -400,13 +379,5 @@ void wifiTask(void* parameter) {
         }
 
         vTaskDelay(pdMS_TO_TICKS(1000));
-    }
-}
-
-void stTask(void *pvParameters) {
-    Serial.println("SeaTalk Task started on Core 0");
-    for (;;) {
-        stHandler.loop();
-        vTaskDelay(1 / portTICK_PERIOD_MS); // Yield pour laisser respirer l'IDLE task
     }
 }
