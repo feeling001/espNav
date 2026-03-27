@@ -23,9 +23,15 @@ bool PolarData::loadFromFile(const char* path) {
     numTWS = 0;
     numTWA = 0;
 
+    // Guard against VFS error log when file doesn't exist
+    if (!LittleFS.exists(path)) {
+        serialPrintf("[Polar] File not found: %s\n", path);
+        return false;
+    }
+
     File f = LittleFS.open(path, "r");
     if (!f) {
-        serialPrintf("[Polar] File not found: %s\n", path);
+        serialPrintf("[Polar] Failed to open: %s\n", path);
         return false;
     }
 

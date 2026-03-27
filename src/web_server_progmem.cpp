@@ -26,6 +26,8 @@
 //
 // ============================================================
 
+// #define WEB_UI_PROGMEM
+
 #ifdef WEB_UI_PROGMEM
 
 #pragma message("WEB_UI_PROGMEM is ENABLED")

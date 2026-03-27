@@ -1,15 +1,9 @@
-# Name,   Type, SubType, Offset,  Size, Flags
-#nvs,data,nvs,0x9000,0x3000,
-#phy_init,data,phy,0xC000,0x1000,
-#factory,app,factory,0x10000,0x1B0000,
-#littlefs,data,spiffs,0x1C0000,0x240000,
-
-
-# Name,   Type, SubType, Offset,  Size
+# Name,     Type, SubType,  Offset,   Size,     Flags
+# ESP32-S3: 4MB Flash + 2MB PSRAM
+# Optimized partition table without OTA for maximum space
+# Total usable: ~4MB - system partitions
 
 nvs,        data, nvs,      0x9000,   0x6000,
 phy_init,   data, phy,      0xf000,   0x1000,
 factory,    app,  factory,  0x10000,  0x1F0000,
 littlefs,   data, spiffs,   0x200000, 0x1E0000,
-
-

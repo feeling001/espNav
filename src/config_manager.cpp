@@ -19,8 +19,9 @@ void ConfigManager::init() {
 
 bool ConfigManager::getWiFiConfig(WiFiConfig& config) {
     // Load STA configuration
-    String ssid = nvs.getString("wifi_ssid", "");
-    String password = nvs.getString("wifi_pass", "");
+    String ssid     = nvs.isKey("wifi_ssid") ? nvs.getString("wifi_ssid", "") : "";
+    String password = nvs.isKey("wifi_pass") ? nvs.getString("wifi_pass", "") : "";
+
     uint8_t mode = nvs.getUChar("wifi_mode", 0);
     
     strncpy(config.ssid, ssid.c_str(), sizeof(config.ssid) - 1);
@@ -32,8 +33,8 @@ bool ConfigManager::getWiFiConfig(WiFiConfig& config) {
     config.mode = mode;
     
     // Load AP configuration
-    String apSSID = nvs.getString("wifi_ap_ssid", "");
-    String apPassword = nvs.getString("wifi_ap_pass", "");
+    String apSSID       = nvs.isKey("wifi_ap_ssid") ? nvs.getString("wifi_ap_ssid", "") : "";
+    String apPassword   = nvs.isKey("wifi_ap_pass") ? nvs.getString("wifi_ap_pass", "") : "";
     
     strncpy(config.ap_ssid, apSSID.c_str(), sizeof(config.ap_ssid) - 1);
     config.ap_ssid[sizeof(config.ap_ssid) - 1] = '\0';
@@ -122,12 +123,16 @@ bool ConfigManager::setSerialConfig(const UARTConfig& config) {
 
 bool ConfigManager::getBLEConfig(BLEConfigData& config) {
     config.enabled = nvs.getBool("ble_enabled", false);
+
     
-    String deviceName = nvs.getString("ble_name", "MarineGateway");
+    String deviceName = nvs.isKey("ble_name") ? nvs.getString("ble_name", "MarineGateway") : "MarineGateway";
+    String pinCode    = nvs.isKey("ble_pin")  ? nvs.getString("ble_pin",  "123456")        : "123456";
+
+    
     strncpy(config.device_name, deviceName.c_str(), sizeof(config.device_name) - 1);
     config.device_name[sizeof(config.device_name) - 1] = '\0';
     
-    String pinCode = nvs.getString("ble_pin", "123456");
+    
     strncpy(config.pin_code, pinCode.c_str(), sizeof(config.pin_code) - 1);
     config.pin_code[sizeof(config.pin_code) - 1] = '\0';
     
