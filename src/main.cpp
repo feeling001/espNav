@@ -330,7 +330,7 @@ void uartReaderTask(void* parameter) {
 // ═══════════════════════════════════════════════════════════════
 // CORE 0: Seatalk Task
 // ═══════════════════════════════════════════════════════════════
-void stTask(void* parameter) {
+void seatalkTask(void* parameter) {
     char lineBuffer[NMEA_MAX_LENGTH];
     NMEASentence sentence;
 
