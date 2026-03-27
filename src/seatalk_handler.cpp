@@ -14,7 +14,7 @@ SeaTalkHandler::SeaTalkHandler() : _stSerial() {}
 void SeaTalkHandler::init(SeaTalkConfig config) {
     _config = config;
     if (_config.enabled) {
-        _stSerial.begin(_config.baud, SWSERIAL_8N1, _config.rxPin, _config.txPin, false);
+        _stSerial.begin(_config.baud, SWSERIAL_8N1, ST1_RX_PIN, ST1_TX_PIN, false);
         _initialized = true;
     }
 }

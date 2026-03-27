@@ -157,8 +157,8 @@ void setup() {
     configManager.getSerialConfig(serialConfig);
     serialPrintf("[Config] UART: %u baud\n", serialConfig.baudRate);
 
-    SEATALKConfig seatalkConfig;
-    seatalkConfig.getSeatalkConfig(seatalkConfig);
+    SeaTalkConfig seatalkConfig;
+    configManager.getSeatalkConfig(seatalkConfig);
     serialPrintf("[Config] SeaTalk: %s (%d baud)\n",
                   seatalkConfig.enabled ? "Enabled" : "Disabled",
                   seatalkConfig.baud);
@@ -222,7 +222,7 @@ void setup() {
 
     BaseType_t seatalkResult = xTaskCreatePinnedToCore(
         seatalkTask, "SeaTalk", 4096, NULL, 5, &seatalkTaskHandle, 0);
-        
+
     BaseType_t processorResult = xTaskCreatePinnedToCore(
         processorTask, "Processor", 8192, NULL, 3, &processorTaskHandle, 1);
     BaseType_t wifiResult = xTaskCreatePinnedToCore(
