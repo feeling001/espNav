@@ -5,6 +5,10 @@
 # Generated output
 src/generated/web_ui.h
 
+# Empty LittleFS dir for PROGMEM builds — keep .gitkeep only
+data_empty/*
+!data_empty/.gitkeep
+
 # React
 web-dashboard/node_modules/
 web-dashboard/dist/

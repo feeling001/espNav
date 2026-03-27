@@ -11,11 +11,26 @@ extern SemaphoreHandle_t g_serialMutex;
 
 void serialPrintf(const char* fmt, ...) {
 
-    if (!fmt) return;  // garde contre NULL
+
+	    if (!fmt) return;
+
+    char buf[256];
+
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, args);  // ✅ format correct
+    va_end(args);
+
+    Serial.print(buf);  // ✅ safe avec HWCDC
+
+
+/*    
+	if (!fmt) return;  // garde contre NULL
     va_list args;
     va_start(args, fmt);
     Serial.printf(fmt, args);  // ou vprintf selon ton implémentation
     va_end(args);
+    */
 
     /*
     char buf[256];

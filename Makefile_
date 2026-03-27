@@ -3,8 +3,7 @@
         build-zero build-n16r8v \
         flash-zero flash-n16r8v \
         flash-partitions-zero flash-partitions-n16r8v \
-        flash-all-zero flash-all-n16r8v \
-        _check_storage
+        flash-all-zero flash-all-n16r8v
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Board selection
@@ -15,19 +14,24 @@
 #   esp32s3_zero       ESP32-S3 Zero    4MB Flash / 2MB PSRAM  (default)
 #   esp32s3_n16r8v     ESP32-S3 N16R8  16MB Flash / 8MB PSRAM
 # ─────────────────────────────────────────────────────────────────────────────
-BOARD   ?= esp32s3_zero
-PORT    ?= /dev/ttyACM0
+BOARD ?= esp32s3_zero
+
+# Serial port — override if needed: make flash PORT=/dev/ttyUSB0
+PORT  ?= /dev/ttyACM0
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Storage mode
-#   STORAGE=progmem   Embed dashboard in firmware binary (default)
-#   STORAGE=littlefs  Serve dashboard from LittleFS filesystem
+#   STORAGE=progmem   Embed dashboard in firmware binary (single .bin, no uploadfs)
+#   STORAGE=littlefs  Serve dashboard from LittleFS filesystem (default)
+#
+#   Examples:
+#     make flash                          → LittleFS mode (default)
+#     make flash STORAGE=progmem          → PROGMEM mode
+#     make flash-all-n16r8v STORAGE=progmem
 # ─────────────────────────────────────────────────────────────────────────────
-STORAGE ?= progmem
+STORAGE ?= littlefs
 
-# ─────────────────────────────────────────────────────────────────────────────
 # Virtual environment
-# ─────────────────────────────────────────────────────────────────────────────
 VENV_DIR = .venv
 VENV_BIN = $(VENV_DIR)/bin
 PIO      = $(VENV_BIN)/pio
@@ -35,37 +39,21 @@ PIO      = $(VENV_BIN)/pio
 # Build output directory for the selected board
 BUILD_DIR = .pio/build/$(BOARD)
 
-# PlatformIO port flags
+# PlatformIO upload/monitor port flag — always passed explicitly
 PIO_PORT_FLAG    = --upload-port $(PORT)
 PIO_MONITOR_FLAG = --port $(PORT)
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Computed PIO flags — set once, used everywhere
-#
-#   PIO_BUILD_ENV  injects -DWEB_UI_PROGMEM when STORAGE=progmem
-#   PIO_DATA_DIR   points uploadfs to an empty dir when STORAGE=progmem
-#                  (LittleFS partition still needed for polar file storage)
-#   PIO_RUN        shorthand: build env flags + board env, ready to use
-# ─────────────────────────────────────────────────────────────────────────────
-ifeq ($(STORAGE),progmem)
-PIO_BUILD_ENV = PLATFORMIO_BUILD_FLAGS="-DWEB_UI_PROGMEM"
-PIO_DATA_DIR  = PLATFORMIO_DATA_DIR=data_empty
-else
-PIO_BUILD_ENV =
-PIO_DATA_DIR  =
-endif
-
-PIO_RUN = $(PIO_BUILD_ENV) $(PIO) run -e $(BOARD)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Internal helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Print a coloured section header
 define section
 	@echo ""
 	@echo "── $(1) ──────────────────────────────────────────────"
 endef
 
+# Validate STORAGE value
 _check_storage:
 	@if [ "$(STORAGE)" != "progmem" ] && [ "$(STORAGE)" != "littlefs" ]; then \
 		echo "ERROR: STORAGE must be 'progmem' or 'littlefs' (got '$(STORAGE)')"; \
@@ -106,31 +94,55 @@ dashboard: web-dashboard/node_modules
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Firmware build
+#   PROGMEM mode: embed script runs as PlatformIO pre-script automatically.
+#   LittleFS mode: same firmware build, no embedding.
+#   Either way, dashboard must be built first so data/www/ exists.
 # ─────────────────────────────────────────────────────────────────────────────
 firmware: setup-venv dashboard _check_storage
 	$(call section,Building firmware [BOARD=$(BOARD) STORAGE=$(STORAGE)])
-	$(PIO_RUN)
+
+
+
+ifeq ($(STORAGE),progmem)
+	@echo "Mode: PROGMEM — dashboard embedded in firmware binary"
+	PLATFORMIO_BUILD_FLAGS="-DWEB_UI_PROGMEM" $(PIO) run -e $(BOARD)
+else
+	@echo "Mode: LittleFS — dashboard served from filesystem"
+	$(PIO) run -e $(BOARD)
+endif
+
+
 
 build: firmware
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Upload targets
 # ─────────────────────────────────────────────────────────────────────────────
-
-# Upload firmware only
 upload: setup-venv _check_storage
 	$(call section,Uploading firmware [BOARD=$(BOARD) STORAGE=$(STORAGE)])
-	$(PIO_RUN) -t upload $(PIO_PORT_FLAG)
+	$(PIO) run -e $(BOARD) -t upload $(PIO_PORT_FLAG)
 
-# Upload filesystem:
-#   littlefs → uploads dashboard from data/www/
-#   progmem  → uploads empty filesystem (LittleFS still needed for polar storage)
+# uploadfs is a no-op in PROGMEM mode (dashboard is baked into firmware).
 uploadfs: setup-venv _check_storage
-	$(call section,Uploading filesystem [BOARD=$(BOARD) STORAGE=$(STORAGE)])
+ifeq ($(STORAGE),progmem)
+	@echo "STORAGE=progmem → uploading empty filesystem (for polar storage)"
 	@mkdir -p data_empty
-	$(PIO_DATA_DIR) $(PIO) run -e $(BOARD) -t uploadfs $(PIO_PORT_FLAG)
+	PLATFORMIO_DATA_DIR=data_empty $(PIO) run -e $(BOARD) -t uploadfs $(PIO_PORT_FLAG)
+else
+	$(call section,Uploading filesystem [BOARD=$(BOARD)])
+	$(PIO) run -e $(BOARD) -t uploadfs $(PIO_PORT_FLAG)
+endif
 
-# flash = upload firmware + upload filesystem
+upload: setup-venv _check_storage
+	$(call section,Uploading firmware [BOARD=$(BOARD) STORAGE=$(STORAGE)])
+ifeq ($(STORAGE),progmem)
+	PLATFORMIO_BUILD_FLAGS="-DWEB_UI_PROGMEM" $(PIO) run -e $(BOARD) -t upload $(PIO_PORT_FLAG)
+else
+	$(PIO) run -e $(BOARD) -t upload $(PIO_PORT_FLAG)
+endif
+
+
+# flash = upload firmware + upload filesystem (if needed)
 flash: upload uploadfs
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -147,20 +159,22 @@ flash-partitions: setup-venv
 	@echo "✓ Partition table flashed"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# flash-all — full erase → firmware → filesystem
+# flash-all — full erase → firmware → filesystem (if needed)
 # ─────────────────────────────────────────────────────────────────────────────
+
 flash-all: setup-venv firmware _check_storage
 	$(call section,Full flash sequence [BOARD=$(BOARD) STORAGE=$(STORAGE)])
 	@echo "[1/3] Erasing flash..."
-	$(PIO_RUN) -t erase $(PIO_PORT_FLAG)
+	$(PIO) run -e $(BOARD) -t erase $(PIO_PORT_FLAG)
 	@echo "[2/3] Uploading firmware..."
-	$(PIO_RUN) -t upload $(PIO_PORT_FLAG)
+	$(PIO) run -e $(BOARD) -t upload $(PIO_PORT_FLAG)
 	@echo "[3/3] Uploading filesystem..."
 	$(MAKE) uploadfs BOARD=$(BOARD) PORT=$(PORT) STORAGE=$(STORAGE)
 	@echo ""
 	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 	@echo "✓ Flash complete [BOARD=$(BOARD) STORAGE=$(STORAGE)]"
 	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Named aliases — ESP32-S3 Zero (4MB)
@@ -209,7 +223,7 @@ monitor: setup-venv
 # ─────────────────────────────────────────────────────────────────────────────
 erase: setup-venv
 	@echo "Erasing flash (board: $(BOARD), port: $(PORT))..."
-	$(PIO_RUN) -t erase $(PIO_PORT_FLAG)
+	$(PIO) run -e $(BOARD) -t erase $(PIO_PORT_FLAG)
 	@echo "✓ Flash erased"
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -243,10 +257,10 @@ help:
 	@echo "Marine Gateway — Makefile"
 	@echo ""
 	@echo "Storage modes (STORAGE=):"
-	@echo "  progmem    Dashboard embedded in firmware binary          (default)"
-	@echo "             uploadfs uploads an empty filesystem (for polar storage)"
-	@echo "  littlefs   Dashboard served from LittleFS filesystem"
+	@echo "  littlefs   Dashboard served from LittleFS filesystem  (default)"
 	@echo "             uploadfs uploads dashboard + data"
+	@echo "  progmem    Dashboard embedded in firmware binary"
+	@echo "             uploadfs uploads empty filesystem (for polar storage)"
 	@echo ""
 	@echo "Boards (BOARD=):"
 	@echo "  esp32s3_zero     ESP32-S3 Zero    4MB Flash / 2MB PSRAM  (default)"
@@ -258,7 +272,7 @@ help:
 	@echo "Named targets (board pre-selected, STORAGE= and PORT= still apply):"
 	@echo "  make build-zero                        Build for ESP32-S3 Zero"
 	@echo "  make build-n16r8v                      Build for ESP32-S3 N16R8"
-	@echo "  make flash-zero                        Flash (firmware + fs)"
+	@echo "  make flash-zero                        Flash (firmware + fs if needed)"
 	@echo "  make flash-n16r8v"
 	@echo "  make flash-all-zero                    Erase + full flash"
 	@echo "  make flash-all-n16r8v"
@@ -288,5 +302,3 @@ help:
 	@echo "  make build            BOARD=esp32s3_zero STORAGE=progmem"
 	@echo "  make monitor          PORT=/dev/ttyACM0"
 	@echo ""
-
-

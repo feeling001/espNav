@@ -78,8 +78,7 @@ void WiFiManager::fallbackToAP() {
         // Generate default SSID with MAC address
         uint8_t mac[6];
         WiFi.macAddress(mac);
-        snprintf(apSSID, sizeof(apSSID), "%s-%02X%02X%02X", 
-                 WIFI_AP_SSID_PREFIX, mac[3], mac[4], mac[5]);
+        snprintf(apSSID, sizeof(apSSID), "%s-%02X%02X%02X", WIFI_AP_SSID_PREFIX, mac[3], mac[4], mac[5]);
     }
     
     // Use custom AP password if provided, otherwise use default
