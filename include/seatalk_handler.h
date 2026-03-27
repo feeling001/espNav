@@ -4,6 +4,7 @@
 #include <Arduino.h>
 #include <SoftwareSerial.h>
 #include "config.h"
+#include "types.h"
 
 class SeaTalkHandler {
 public:
