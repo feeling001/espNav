@@ -99,6 +99,17 @@ bool ConfigManager::getSerialConfig(UARTConfig& config) {
     return true;
 }
 
+bool ConfigManager::getSeatalkConfig(SeaTalkConfig& config) {
+    config.enabled = nvs.getBool("st1_enabled", ST1_ENABLED);
+    config.baud = nvs.getInt("st1_baud", ST1_BAUD);
+    
+    serialPrintf("[Config] SeaTalk config loaded from NVS\n");
+    serialPrintf("[Config]   Enabled: %s\n", config.enabled ? "Yes" : "No");
+    serialPrintf("[Config]   Baud: %u\n", config.baud);
+    
+    return true;
+}
+
 bool ConfigManager::setSerialConfig(const UARTConfig& config) {
     #ifdef DEBUG
     serialPrintf("[Config] Saving Serial config to NVS\n");
