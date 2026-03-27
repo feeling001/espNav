@@ -45,6 +45,13 @@ struct UARTConfig {
     UARTConfig() : baudRate(38400), dataBits(8), parity(0), stopBits(1) {}
 };
 
+struct SeaTalkConfig {
+    bool enabled = true;
+    int baud = 4800;
+
+    UARTConfig() : enabled(true), baud(4800) {}
+};
+
 // BLE configuration structure
 struct BLEConfigData {
     bool enabled;

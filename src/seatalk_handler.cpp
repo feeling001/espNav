@@ -8,7 +8,6 @@ const uint16_t ST_STBY[]    = {0x186, 0x21, 0x02, 0xFD};
 const uint16_t ST_M1[]      = {0x186, 0x21, 0x05, 0xFA};
 const uint16_t ST_P1[]      = {0x186, 0x21, 0x07, 0xF8};
 
-SeaTalkHandler stHandler;
 
 SeaTalkHandler::SeaTalkHandler() : _stSerial() {}
 
