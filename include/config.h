@@ -28,12 +28,22 @@
 #define WIFI_AP_PASSWORD         "marine123"
 #define WIFI_MAX_RECONNECT       3
 
-// UART Configuration
+// UART Configuration (NMEA0183_1)
 #define UART_NUM                 UART_NUM_1
 #define UART_RX_PIN              GPIO_NUM_6
 #define UART_TX_PIN              GPIO_NUM_5
 #define UART_BUFFER_SIZE         1024      // should be enough
 #define UART_DEFAULT_BAUD        38400
+
+// --- Configuration SeaTalk1 ---
+
+#define ST1_RX_PIN          4   // GPIO4
+#define ST1_TX_PIN          5   // GPIO5
+#define ST1_BAUD            4800
+#define ST1_ENABLED         true
+// Delays (CDMA/CD)
+#define ST1_COLLISION_DELAY 3   // ms [cite: 51]
+#define ST1_MAX_TRIES       5   // [cite: 49]
 
 // TCP Server
 #define TCP_PORT                 10110
