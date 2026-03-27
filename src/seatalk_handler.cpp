@@ -1,5 +1,6 @@
 #include "functions.h"
 #include "seatalk_handler.h"
+#include "config.h"
 
 
 // Datagrammes standards [cite: 24, 25, 26, 27, 28, 29]
