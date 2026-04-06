@@ -12,7 +12,7 @@
 #include "config_manager.h"
 #include "wifi_manager.h"
 #include "uart_handler.h"
-#include "seatalk_handler.h"
+#include "seatalk_rmt.h"
 #include "nmea_parser.h"
 #include "tcp_server.h"
 #include "web_server.h"
@@ -24,7 +24,7 @@ ConfigManager configManager;
 BoatState boatState;
 WiFiManager wifiManager;
 UARTHandler uartHandler;
-SeaTalkHandler stHandler;
+SeatalkRMT seatalkHandler;
 TCPServer tcpServer;
 BLEManager bleManager;
 NMEAParser nmeaParser(&boatState);
@@ -53,7 +53,6 @@ volatile uint32_t g_messagesProcessed   = 0;
 
 // Shared serial mutex — prevents interleaved output from concurrent tasks
 SemaphoreHandle_t g_serialMutex = nullptr;
-
 
 
 void listLittleFSFiles(const char* dirname, uint8_t levels) {
@@ -157,12 +156,6 @@ void setup() {
     configManager.getSerialConfig(serialConfig);
     serialPrintf("[Config] UART: %u baud\n", serialConfig.baudRate);
 
-    SeaTalkConfig seatalkConfig;
-    configManager.getSeatalkConfig(seatalkConfig);
-    serialPrintf("[Config] SeaTalk: %s (%d baud)\n",
-                  seatalkConfig.enabled ? "Enabled" : "Disabled",
-                  seatalkConfig.baud);
-
     // Load BLE config
     BLEConfigData bleConfig;
     configManager.getBLEConfig(bleConfig);
@@ -182,8 +175,8 @@ void setup() {
 
     // Initialize SeaTalk handler
     serialPrintf("\n[SeaTalk] Initializing...\n");
-    stHandler.init(seatalkConfig);
-    stHandler.start();
+    seatalkHandler.init(ST1_RX_PIN,ST1_TX_PIN,ST1_RX_CHANNEL,ST1_TX_CHANNEL);
+    // seatalkHandler.start();
     
     // Initialize TCP server
     serialPrintf("\n[TCP] Initializing...\n");
@@ -194,7 +187,7 @@ void setup() {
     BLEConfig bleManagerConfig;
     bleManagerConfig.enabled = bleConfig.enabled;
     strncpy(bleManagerConfig.device_name, bleConfig.device_name, sizeof(bleManagerConfig.device_name) - 1);
-    strncpy(bleManagerConfig.pin_code,    bleConfig.pin_code,    sizeof(bleManagerConfig.pin_code) - 1);
+    strncpy(bleManagerConfig.pin_code,    bleConfig.pin_code,    sizeof(bleManagerConfig.pin_code)    - 1);
     bleManager.init(bleManagerConfig, &boatState);
 
     if (bleConfig.enabled) {
@@ -217,23 +210,17 @@ void setup() {
     // Create FreeRTOS tasks
     serialPrintf("\n[Tasks] Creating dual-core FreeRTOS tasks...\n");
 
-    BaseType_t readerResult = xTaskCreatePinnedToCore(
-        uartReaderTask, "UART_Reader", 4096, NULL, 5, &uartReaderTaskHandle, 0);
-
-    BaseType_t seatalkResult = xTaskCreatePinnedToCore(
-        seatalkTask, "SeaTalk", 4096, NULL, 5, &seatalkTaskHandle, 0);
-
-    BaseType_t processorResult = xTaskCreatePinnedToCore(
-        processorTask, "Processor", 8192, NULL, 3, &processorTaskHandle, 1);
-    BaseType_t wifiResult = xTaskCreatePinnedToCore(
-        wifiTask, "WiFi", 4096, NULL, 2, &wifiTaskHandle, 1);
+    BaseType_t readerResult    = xTaskCreatePinnedToCore(uartReaderTask, "UART_Reader", 4096, NULL, 5, &uartReaderTaskHandle, 0);
+    BaseType_t seatalkResult   = xTaskCreatePinnedToCore(seatalkTask   , "SeaTalk"    , 4096, NULL, 5, &seatalkTaskHandle   , 0);
+    BaseType_t processorResult = xTaskCreatePinnedToCore(processorTask , "Processor"  , 8192, NULL, 3, &processorTaskHandle , 1);
+    BaseType_t wifiResult      = xTaskCreatePinnedToCore(wifiTask      , "WiFi"       , 4096, NULL, 2, &wifiTaskHandle      , 1);
 
     if (readerResult    == pdPASS) serialPrintf("[Tasks] ✓ UART Reader task created (Core 0)\n");
-    else                            serialPrintf("[Tasks] ❌ UART Reader task failed\n");
+    else                           serialPrintf("[Tasks] ❌ UART Reader task failed\n");
     if (processorResult == pdPASS) serialPrintf("[Tasks] ✓ Processor task created (Core 1)\n");
-    else                            serialPrintf("[Tasks] ❌ Processor task failed\n");
+    else                           serialPrintf("[Tasks] ❌ Processor task failed\n");
     if (wifiResult      == pdPASS) serialPrintf("[Tasks] ✓ WiFi task created (Core 1)\n");
-    else                            serialPrintf("[Tasks] ❌ WiFi task failed\n");
+    else                           serialPrintf("[Tasks] ❌ WiFi task failed\n");
 
     // Wait for WiFi
     serialPrintf("\n[WiFi] Waiting for connection...\n");
@@ -251,7 +238,7 @@ void setup() {
     serialPrintf("======================================\n");
 
     if (WiFi.status() == WL_CONNECTED) {
-        serialPrintf("IP Address: %s\n", WiFi.localIP().toString().c_str());
+        serialPrintf("IP Address: %s\n",         WiFi.localIP().toString().c_str());
         serialPrintf("Web:  http://%s/\n",       WiFi.localIP().toString().c_str());
         serialPrintf("TCP:  %s:%d\n",            WiFi.localIP().toString().c_str(), TCP_PORT);
     } else {
@@ -331,19 +318,17 @@ void uartReaderTask(void* parameter) {
 // CORE 0: Seatalk Task
 // ═══════════════════════════════════════════════════════════════
 void seatalkTask(void* parameter) {
-    char lineBuffer[NMEA_MAX_LENGTH];
-    NMEASentence sentence;
-
-    serialPrintf("[SeaTalk] Started on Core 0\n");
+    Serial.printf("[SeaTalk] Started on Core 0\n");
 
     uint32_t lastStatsTime  = millis();
     uint32_t sentencesRead  = 0;
     uint32_t parseErrors    = 0;
 
     while (true) {
-        stHandler.loop();
+        seatalkHandler.task();
         vTaskDelay(1 / portTICK_PERIOD_MS);
         }
+
     }
 
 

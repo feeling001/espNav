@@ -121,28 +121,6 @@ bool ConfigManager::setSerialConfig(const UARTConfig& config) {
     return true;
 }
 
-bool ConfigManager::getSeatalkConfig(SeaTalkConfig& config) {
-    config.enabled = nvs.getBool("st_enabled", true);
-    config.baud = nvs.getInt("st_baud", 4800);
-    
-    serialPrintf("[Config] SeaTalk config loaded from NVS\n");
-    serialPrintf("[Config]   Enabled: %s\n", config.enabled ? "Yes" : "No");
-    serialPrintf("[Config]   Baud: %d\n", config.baud);
-    
-    return true;
-}
-
-bool ConfigManager::setSeatalkConfig(const SeaTalkConfig& config) {
-    nvs.putBool("st_enabled", config.enabled);
-    nvs.putInt("st_baud", config.baud);
-    
-    serialPrintf("[Config]   Enabled: %s\n", config.enabled ? "Yes" : "No");
-    serialPrintf("[Config]   Baud: %d\n", config.baud);
-    
-    serialPrintf("[Config] ✓ SeaTalk config saved\n");
-    return true;
-}
-
 bool ConfigManager::getBLEConfig(BLEConfigData& config) {
     config.enabled = nvs.getBool("ble_enabled", false);
 
