@@ -3,6 +3,7 @@
 #include "functions.h"
 #include <Arduino.h>
 #include "functions.h"
+#include <esp_wifi.h>
 
 WiFiManager::WiFiManager() 
     : currentState(WIFI_DISCONNECTED), 
@@ -59,7 +60,7 @@ void WiFiManager::checkSTAConnection() {
         fallbackToAP();
     }
 }
-
+/*
 void WiFiManager::fallbackToAP() {
     serialPrintf("[WiFi] Starting AP mode...\n");
    
@@ -91,6 +92,51 @@ void WiFiManager::fallbackToAP() {
     }
     
     WiFi.softAP(apSSID, apPassword);
+    
+    serialPrintf("[WiFi] AP Mode Active\n");
+    serialPrintf("[WiFi]   SSID: %s\n", apSSID);
+    serialPrintf("[WiFi]   Password: %s\n", apPassword);
+    serialPrintf("[WiFi]   IP: %s\n", WiFi.softAPIP().toString().c_str());
+    
+    currentState = WIFI_AP_MODE;
+}
+*/
+void WiFiManager::fallbackToAP() {
+    serialPrintf("[WiFi] Starting AP mode...\n");
+   
+    WiFi.mode(WIFI_OFF); 
+    delay(100);
+    WiFi.mode(WIFI_AP);
+    
+    char apSSID[32];
+    char apPassword[64];
+    
+    if (strlen(config.ap_ssid) > 0) {
+        strncpy(apSSID, config.ap_ssid, sizeof(apSSID) - 1);
+        apSSID[sizeof(apSSID) - 1] = '\0';
+    } else {
+        uint8_t mac[6];
+        WiFi.macAddress(mac);
+        snprintf(apSSID, sizeof(apSSID), "%s-%02X%02X%02X", WIFI_AP_SSID_PREFIX, mac[3], mac[4], mac[5]);
+    }
+    
+    if (strlen(config.ap_password) >= 8) {
+        strncpy(apPassword, config.ap_password, sizeof(apPassword) - 1);
+        apPassword[sizeof(apPassword) - 1] = '\0';
+    } else {
+        strncpy(apPassword, WIFI_AP_PASSWORD, sizeof(apPassword) - 1);
+        apPassword[sizeof(apPassword) - 1] = '\0';
+    }
+    
+    // Canal 6, visible, max 4 clients
+    WiFi.softAP(apSSID, apPassword, WIFI_AP_CHANNEL, 0, WIFI_AP_MAX_CLIENTS);
+
+
+    // Forcer WPA2-PSK uniquement (évite les problèmes de handshake avec WPA3/SAE)
+    wifi_config_t ap_config;
+    esp_wifi_get_config(WIFI_IF_AP, &ap_config);
+    ap_config.ap.authmode = WIFI_AUTH_WPA2_PSK;
+    esp_wifi_set_config(WIFI_IF_AP, &ap_config);
     
     serialPrintf("[WiFi] AP Mode Active\n");
     serialPrintf("[WiFi]   SSID: %s\n", apSSID);

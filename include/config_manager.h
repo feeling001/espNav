@@ -17,10 +17,6 @@ public:
     // Serial configuration
     bool getSerialConfig(UARTConfig& config);
     bool setSerialConfig(const UARTConfig& config);
-
-    // Seatalk configuration
-    bool getSeatalkConfig(SeaTalkConfig& config);
-    bool setSeatalkConfig(const SeaTalkConfig& config);
         
     // BLE configuration
     bool getBLEConfig(BLEConfigData& config);

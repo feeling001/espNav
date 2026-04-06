@@ -26,7 +26,10 @@
 #define WIFI_CONNECT_TIMEOUT_MS  30000
 #define WIFI_AP_SSID_PREFIX      "MarineGateway"
 #define WIFI_AP_PASSWORD         "marine123"
+#define WIFI_AP_MAX_CLIENTS      4
+#define WIFI_AP_CHANNEL          4
 #define WIFI_MAX_RECONNECT       3
+
 
 // UART Configuration (NMEA0183_1)
 #define UART_NUM                 UART_NUM_1

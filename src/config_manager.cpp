@@ -121,6 +121,8 @@ bool ConfigManager::setSerialConfig(const UARTConfig& config) {
     return true;
 }
 
+
+
 bool ConfigManager::getBLEConfig(BLEConfigData& config) {
     config.enabled = nvs.getBool("ble_enabled", false);
 

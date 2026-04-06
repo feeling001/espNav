@@ -8,6 +8,8 @@ struct WiFiConfig {
     char ssid[32];
     char password[64];
     uint8_t mode;  // 0=STA, 1=AP
+    int channel;
+    int maxconn;
     
     // AP mode configuration
     char ap_ssid[32];      // Custom AP SSID (if empty, use default MarineGateway-XXXXXX)
@@ -43,13 +45,6 @@ struct UARTConfig {
     uint8_t stopBits;  // 1-2
     
     UARTConfig() : baudRate(38400), dataBits(8), parity(0), stopBits(1) {}
-};
-
-struct SeaTalkConfig {
-    bool enabled = true;
-    int baud = 4800;
-
-    SeaTalkConfig() : enabled(true), baud(4800) {}
 };
 
 // BLE configuration structure

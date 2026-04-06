@@ -9,10 +9,7 @@ void SeatalkRMT::init(gpio_num_t rxPin, gpio_num_t txPin, rmt_channel_t rxChanne
     _txChannel = txChannel;
 
 
-    Serial.print("Initializing RMT RX on pin ");
-    Serial.print(_rxPin);
-    Serial.print(" channel ");
-    Serial.println(_rxChannel);
+    Serial.printf("[SeaTalk] Initializing RMT RX on pin %d, channel %d \n",_rxPin,_rxChannel);
 
     pinMode(_rxPin, INPUT_PULLUP);
 
@@ -35,11 +32,9 @@ void SeatalkRMT::init(gpio_num_t rxPin, gpio_num_t txPin, rmt_channel_t rxChanne
     _inframe = 0;
     _lasttransition = 0;
 
-    Serial.println("RX initialized successfully");
+    // Serial.println("RX initialized successfully");
 
-
-
-    Serial.printf("Initializing RMT TX on pin ... TODO\n");
+    Serial.printf("[SeaTalk] Initializing RMT TX on pin %d, channel %d \n",_txPin,_txChannel);
 
     pinMode(_txPin, OUTPUT);
     digitalWrite(_txPin, HIGH); // BUS à 12V (Repos) selon ta logique

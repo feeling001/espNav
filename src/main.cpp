@@ -147,9 +147,12 @@ void setup() {
     // Load WiFi config
     WiFiConfig wifiConfig;
     configManager.getWiFiConfig(wifiConfig);
-    serialPrintf("\n[Config] WiFi: %s (%s mode)\n",
+    serialPrintf("\n[Config] WiFi: %s (%s mode)(channel %d)(max clients %d)\n",
                   wifiConfig.ssid,
-                  wifiConfig.mode == 0 ? "Station" : "AP");
+                  wifiConfig.mode == 0 ? "Station" : "AP",
+                  wifiConfig.channel,
+                  wifiConfig.maxconn
+                );
 
     // Load Serial config
     UARTConfig serialConfig;
