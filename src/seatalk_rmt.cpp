@@ -1,4 +1,5 @@
 #include "seatalk_rmt.h"
+#include "functions.h"
 
 SeatalkRMT::SeatalkRMT() {}
 
@@ -9,7 +10,7 @@ void SeatalkRMT::init(gpio_num_t rxPin, gpio_num_t txPin, rmt_channel_t rxChanne
     _txChannel = txChannel;
 
 
-    Serial.printf("[SeaTalk] Initializing RMT RX on pin %d, channel %d \n",_rxPin,_rxChannel);
+    serialPrintf("[SeaTalk] Initializing RMT RX on pin %d, channel %d \n",_rxPin,_rxChannel);
 
     pinMode(_rxPin, INPUT_PULLUP);
 
@@ -32,9 +33,7 @@ void SeatalkRMT::init(gpio_num_t rxPin, gpio_num_t txPin, rmt_channel_t rxChanne
     _inframe = 0;
     _lasttransition = 0;
 
-    // Serial.println("RX initialized successfully");
-
-    Serial.printf("[SeaTalk] Initializing RMT TX on pin %d, channel %d \n",_txPin,_txChannel);
+    serialPrintf("[SeaTalk] Initializing RMT TX on pin %d, channel %d \n",_txPin,_txChannel);
 
     pinMode(_txPin, OUTPUT);
     digitalWrite(_txPin, HIGH); // BUS à 12V (Repos) selon ta logique
@@ -70,11 +69,11 @@ uint8_t SeatalkRMT::reverse8(uint8_t x) {
 }
 
 void SeatalkRMT::handleframe() {
-    Serial.printf("FRAME READ : [ ");
+    serialPrintf("FRAME READ : [ ");
     for(uint8_t i = 0; i < _framelen; i++) {
-        Serial.printf("0x%02X ",_frame[i]);
+        serialPrintf("0x%02X ",_frame[i]);
     }
-    Serial.println("]");
+    serialPrintf("]\n");
 }
 
 void SeatalkRMT::addchar() {
@@ -82,18 +81,18 @@ void SeatalkRMT::addchar() {
     uint8_t reg = (~(_shiftreg >> 2)) & 0xFF ;
     uint8_t newchar = reverse8( reg );
 
-    // Serial.printf("Ajout caractère %d [",_charpos);
+    // serialPrintf("Ajout caractère %d [",_charpos);
     // for (int i = 10; i >= 0; --i) {
-    //     Serial.printf("%d", (_shiftreg >> i) & 1);
+    //     serialPrintf("%d", (_shiftreg >> i) & 1);
     // }
-    // Serial.printf("] = %02X \n",newchar);
+    // serialPrintf("] = %02X \n",newchar);
 
     if(_charpos==1) {
         // We read the second character, we can compute the frame size (4 least significant bits)
         _framelen += newchar & 0x0F;
     }
 
-    // Serial.printf(" [start = %d][cd = %d][stop = %d][len = %d] \n",((_shiftreg>>10) & 1),((_shiftreg>>1) & 1),(_shiftreg & 1),_framelen);
+    // serialPrintf(" [start = %d][cd = %d][stop = %d][len = %d] \n",((_shiftreg>>10) & 1),((_shiftreg>>1) & 1),(_shiftreg & 1),_framelen);
 
     _frame[_charpos] = newchar;
     _charpos++;
@@ -107,7 +106,7 @@ void SeatalkRMT::addchar() {
 }
 
 void SeatalkRMT::addbit(uint8_t level, uint8_t count) {
-    // Serial.printf("Add %d bit %d \n",count,level);
+    // serialPrintf("Add %d bit %d \n",count,level);
 
     if(_inframe == false) {
         if(level==0) { // every new character must start with a startbit=1
@@ -146,16 +145,16 @@ void SeatalkRMT::task() {
         if (items != NULL) {
             // item_num est en octets, on divise par la taille d'un item (4 octets)
             int num_items = item_num / sizeof(rmt_item32_t);
-            //  Serial.printf("\n>>> CAPTURE (%d transitions)\n", num_items * 2);
+            //  serialPrintf("\n>>> CAPTURE (%d transitions)\n", num_items * 2);
             for (int i = 0; i < num_items; i++) {
                 // --- FRONT A ---
                 if (items[i].duration0 > 0) {
-                    // Serial.printf("Ordre %d | Niveau: %d | Durée: %4d us | %d bit %d\n", (i*2),   items[i].level0, items[i].duration0 , (items[i].duration0 + HALF_BIT_US) / SEATALK_BIT_US , items[i].level0);
+                    // serialPrintf("Ordre %d | Niveau: %d | Durée: %4d us | %d bit %d\n", (i*2),   items[i].level0, items[i].duration0 , (items[i].duration0 + HALF_BIT_US) / SEATALK_BIT_US , items[i].level0);
                     addbit(1,(items[i].duration0 + HALF_BIT_US) / SEATALK_BIT_US);
                 }
                 // --- FRONT B ---
                 if (items[i].duration1 > 0) {
-                    // Serial.printf("Ordre %d | Niveau: %d | Durée: %4d us | %d bit %d\n", (i*2)+1, items[i].level1, items[i].duration1 , (items[i].duration1 + HALF_BIT_US) / SEATALK_BIT_US , items[i].level1);
+                    // serialPrintf("Ordre %d | Niveau: %d | Durée: %4d us | %d bit %d\n", (i*2)+1, items[i].level1, items[i].duration1 , (items[i].duration1 + HALF_BIT_US) / SEATALK_BIT_US , items[i].level1);
                     addbit(0,(items[i].duration1 + HALF_BIT_US) / SEATALK_BIT_US);
                 }
             _lasttransition = micros();
@@ -173,13 +172,13 @@ void SeatalkRMT::addItemBit(uint8_t bit, uint8_t closeframe) {
             _items[_itemtransitions].level1    = 1; 
             _items[_itemtransitions].duration0 = SEATALK_BIT_US * _itemcount1;
             _items[_itemtransitions].duration1 = SEATALK_BIT_US * _itemcount0;
-            // Serial.printf("new transition %d [%d(%d)-%d(%d)]\n", _itemtransitions, _items[_itemtransitions].duration0, _itemcount1, _items[_itemtransitions].duration1,_itemcount0);
+            // serialPrintf("new transition %d [%d(%d)-%d(%d)]\n", _itemtransitions, _items[_itemtransitions].duration0, _itemcount1, _items[_itemtransitions].duration1,_itemcount0);
             _itemtransitions ++ ;
             _itemcount1      = 0;
             _itemcount0      = 0;
             if(closeframe==1) return;
             }
-    // Serial.printf("%d\n",bit);
+    // serialPrintf("%d\n",bit);
     if(bit == 1) {  _itemcount1++;  }
     else         {  _itemcount0++;  }
     _itemlastlevel = bit;
@@ -213,14 +212,14 @@ bool SeatalkRMT::sendDatagram(uint8_t* buffer, uint8_t len) {
                 
         delay( ( len * 3 ) + 100 );
 
-        // Serial.printf("compare : ");
+        // serialPrintf("compare : ");
         for(int i=0;i<len;i++) {
-            // Serial.printf("[ %02X - %02X  = %d]",buffer[i],_frame[i], (buffer[i] == _frame[i]) );
+            // serialPrintf("[ %02X - %02X  = %d]",buffer[i],_frame[i], (buffer[i] == _frame[i]) );
             if (buffer[i] != _frame[i]) compareok = false;
 
         }
         if(compareok) { return true; }
-        Serial.printf("Collision detectee, retry %d...\n", attempt + 1);
+        serialPrintf("Collision detectee, retry %d...\n", attempt + 1);
         delay(random(5, 50));
     }
     return false;
@@ -228,11 +227,11 @@ bool SeatalkRMT::sendDatagram(uint8_t* buffer, uint8_t len) {
 
 void SeatalkRMT::sendDatagramNoCD(uint8_t* buffer, uint8_t len) {
     if (len < 3 || len > 18) {
-        // Serial.printf("Datagram non conforme \n");
+        // serialPrintf("Datagram non conforme \n");
         return;
     }
     else {
-        // Serial.printf("WRITE datagram of %d char\n",len);
+        // serialPrintf("WRITE datagram of %d char\n",len);
     }
 
     rmt_tx_stop(_txChannel);
@@ -260,7 +259,7 @@ void SeatalkRMT::sendDatagramNoCD(uint8_t* buffer, uint8_t len) {
     // Send the transitions
     esp_err_t err = rmt_write_items(_txChannel, _items, _itemtransitions, true);
     if (err != ESP_OK) {
-        // Serial.printf("TX Error: %s\n", esp_err_to_name(err));
+        // serialPrintf("TX Error: %s\n", esp_err_to_name(err));
         return;
     }
 

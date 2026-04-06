@@ -321,7 +321,7 @@ void uartReaderTask(void* parameter) {
 // CORE 0: Seatalk Task
 // ═══════════════════════════════════════════════════════════════
 void seatalkTask(void* parameter) {
-    Serial.printf("[SeaTalk] Started on Core 0\n");
+    serialPrintf("[SeaTalk] Started on Core 0\n");
 
     uint32_t lastStatsTime  = millis();
     uint32_t sentencesRead  = 0;
