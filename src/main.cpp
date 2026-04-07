@@ -28,7 +28,11 @@ SeatalkRMT seatalkHandler;
 TCPServer tcpServer;
 BLEManager bleManager;
 NMEAParser nmeaParser(&boatState);
-WebServer webServer(&configManager, &wifiManager, &tcpServer, &uartHandler, &nmeaParser, &boatState, &bleManager);
+
+// WebServer now receives a pointer to the SeatalkRMT instance so that
+// the /api/autopilot/command handler can transmit SeaTalk1 datagrams.
+WebServer webServer(&configManager, &wifiManager, &tcpServer, &uartHandler,
+                    &nmeaParser, &boatState, &bleManager, &seatalkHandler);
 
 // Message queue for NMEA sentences
 QueueHandle_t nmeaQueue;
@@ -85,9 +89,9 @@ void listLittleFSFiles(const char* dirname, uint8_t levels) {
 
 void setup() {
     Serial.begin(115200);          // USB CDC
-    DEBUG_SERIAL.begin(115200);    // UART0 — debug fiable
+    DEBUG_SERIAL.begin(115200);    // UART0 — debug
     delay(1000);
-    
+
     // Create the serial mutex early so tasks can use serialPrintf()
     g_serialMutex = xSemaphoreCreateMutex();
 
@@ -178,9 +182,8 @@ void setup() {
 
     // Initialize SeaTalk handler
     serialPrintf("\n[SeaTalk] Initializing...\n");
-    seatalkHandler.init(ST1_RX_PIN,ST1_TX_PIN,ST1_RX_CHANNEL,ST1_TX_CHANNEL);
-    // seatalkHandler.start();
-    
+    seatalkHandler.init(ST1_RX_PIN, ST1_TX_PIN, ST1_RX_CHANNEL, ST1_TX_CHANNEL);
+
     // Initialize TCP server
     serialPrintf("\n[TCP] Initializing...\n");
     tcpServer.init(TCP_PORT);
@@ -220,6 +223,8 @@ void setup() {
 
     if (readerResult    == pdPASS) serialPrintf("[Tasks] ✓ UART Reader task created (Core 0)\n");
     else                           serialPrintf("[Tasks] ❌ UART Reader task failed\n");
+    if (seatalkResult   == pdPASS) serialPrintf("[Tasks] ✓ SeaTalk task created (Core 0)\n");
+    else                           serialPrintf("[Tasks] ❌ SeaTalk task failed\n");
     if (processorResult == pdPASS) serialPrintf("[Tasks] ✓ Processor task created (Core 1)\n");
     else                           serialPrintf("[Tasks] ❌ Processor task failed\n");
     if (wifiResult      == pdPASS) serialPrintf("[Tasks] ✓ WiFi task created (Core 1)\n");
@@ -292,7 +297,6 @@ void uartReaderTask(void* parameter) {
                     if (xQueueSend(nmeaQueue, &sentence, pdMS_TO_TICKS(5)) != pdTRUE) {
                         queueFullCount++;
                         g_nmeaQueueOverflows++;
-                        // Update the shared counter unconditionally (no DEBUG_UART guard)
                         g_nmeaQueueFullEvents = queueFullCount;
                     }
                 }
@@ -300,9 +304,6 @@ void uartReaderTask(void* parameter) {
                 parseErrors++;
             }
         }
-        // No taskYIELD() needed here: readLine already yields inside its loop
-        // via xStreamBufferReceive (blocked wait) and vTaskDelay(1ms).
-        // Adding taskYIELD() at priority 5 is a no-op anyway.
 
 #ifdef DEBUG_CPU
         if (millis() - lastStatsTime > 30000) {
@@ -318,21 +319,16 @@ void uartReaderTask(void* parameter) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// CORE 0: Seatalk Task
+// CORE 0: SeaTalk Task
 // ═══════════════════════════════════════════════════════════════
 void seatalkTask(void* parameter) {
     serialPrintf("[SeaTalk] Started on Core 0\n");
 
-    uint32_t lastStatsTime  = millis();
-    uint32_t sentencesRead  = 0;
-    uint32_t parseErrors    = 0;
-
     while (true) {
         seatalkHandler.task();
         vTaskDelay(1 / portTICK_PERIOD_MS);
-        }
-
     }
+}
 
 // ═══════════════════════════════════════════════════════════════
 // CORE 1: Processor Task
@@ -354,8 +350,6 @@ void processorTask(void* parameter) {
             }
             webServer.broadcastNMEA(sentence.raw);
         }
-        // No extra vTaskDelay needed: xQueueReceive already blocks for up to 100 ms
-        // when the queue is empty, giving other Core 1 tasks (WiFi, Web) time to run.
 
 #ifdef DEBUG_CPU
         if (millis() - lastStatsTime > 30000) {

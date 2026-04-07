@@ -1,0 +1,358 @@
+import { useState, useEffect, useCallback } from 'react';
+import { api } from '../../services/api';
+
+/**
+ * Autopilot page — ST4000+ SeaTalk control via the /api/autopilot/command endpoint.
+ *
+ * Displays:
+ *  - Live autopilot status (mode, heading target, rudder angle) polled from /api/status
+ *  - Mode buttons: Standby / Auto / Wind / Track
+ *  - Course adjustment buttons: -10 / -1 / +1 / +10
+ *  - Port / Starboard tack buttons
+ */
+
+// ── Mode labels ───────────────────────────────────────────────
+const MODES = [
+  { id: 'standby', label: 'Standby', icon: '⏹', description: 'Disengage autopilot' },
+  { id: 'auto',    label: 'Auto',    icon: '🧭', description: 'Hold compass heading' },
+  { id: 'wind',    label: 'Wind',    icon: '💨', description: 'Hold wind angle (vane)' },
+  { id: 'track',   label: 'Track',   icon: '📍', description: 'Follow GPS track' },
+];
+
+// ── Adjust steps ──────────────────────────────────────────────
+const ADJUST_STEPS = [
+  { label: '−10°', command: 'adjust-10', side: 'port'  },
+  { label: '−1°',  command: 'adjust-1',  side: 'port'  },
+  { label: '+1°',  command: 'adjust+1',  side: 'starboard' },
+  { label: '+10°', command: 'adjust+10', side: 'starboard' },
+];
+
+export function Autopilot() {
+  const [apStatus, setApStatus]       = useState(null);
+  const [sending, setSending]         = useState(false);
+  const [lastResult, setLastResult]   = useState(null);
+  const [autoRefresh, setAutoRefresh] = useState(true);
+
+  // ── Poll autopilot status ─────────────────────────────────
+  const loadStatus = useCallback(async () => {
+    try {
+      const data = await api.getStatus();
+      // getStatus does not yet include autopilot details; we also try the boat state
+      setApStatus(prev => ({ ...prev, system: data }));
+    } catch {
+      // ignore polling errors
+    }
+    try {
+      const nav = await api.getBoatNavigation();
+      setApStatus(prev => ({ ...prev, nav }));
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  useEffect(() => {
+    loadStatus();
+    if (!autoRefresh) return;
+    const id = setInterval(loadStatus, 2000);
+    return () => clearInterval(id);
+  }, [autoRefresh, loadStatus]);
+
+  // ── Send command to backend ───────────────────────────────
+  const sendCommand = useCallback(async (command) => {
+    if (sending) return;
+    setSending(true);
+    setLastResult(null);
+    try {
+      const result = await api.sendAutopilotCommand(command);
+      setLastResult({ ok: result.success, text: result.message || result.error || command });
+    } catch (err) {
+      setLastResult({ ok: false, text: err.message });
+    } finally {
+      setSending(false);
+    }
+  }, [sending]);
+
+  // ── Derive current mode from BoatState autopilot ──────────
+  const currentMode = apStatus?.nav?.autopilot?.mode ?? null;
+
+  // ── Heading display ───────────────────────────────────────
+  const headingTarget = apStatus?.nav?.heading?.magnetic?.value;
+  const headingStr = headingTarget != null
+    ? `${headingTarget.toFixed(0)}°`
+    : '--';
+
+  return (
+    <div className="page">
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+        <h2>🚢 Autopilot Control</h2>
+        <label style={{ fontSize: 13 }}>
+          <input
+            type="checkbox"
+            checked={autoRefresh}
+            onChange={e => setAutoRefresh(e.target.checked)}
+            style={{ marginRight: 6 }}
+          />
+          Auto-refresh (2 s)
+        </label>
+      </div>
+
+      {/* ── Info banner ── */}
+      <div style={{
+        padding: '12px 16px',
+        marginBottom: 24,
+        background: '#e7f3ff',
+        borderLeft: '4px solid #3498db',
+        borderRadius: 4,
+        fontSize: 13,
+        lineHeight: 1.6,
+      }}>
+        Commands are transmitted over the <strong>SeaTalk1 bus</strong> using
+        the ST4000+ datagram protocol (command&nbsp;<code>0x86</code>).
+        The autopilot must be powered and connected to GPIO&nbsp;
+        <strong>{'{ST1_TX_PIN}'}</strong>.
+      </div>
+
+      {/* ── Status strip ── */}
+      <div style={{
+        display: 'flex',
+        gap: 16,
+        flexWrap: 'wrap',
+        marginBottom: 24,
+      }}>
+        <StatusCard label="Current Mode"     value={currentMode ?? '--'} accent="#2c3e50" />
+        <StatusCard label="Heading (Mag)"    value={headingStr}          accent="#3498db" />
+      </div>
+
+      {/* ── Last command result ── */}
+      {lastResult && (
+        <div className={`message ${lastResult.ok ? 'success' : 'error'}`} style={{ marginBottom: 20 }}>
+          {lastResult.ok ? '✓' : '✗'} {lastResult.text}
+        </div>
+      )}
+
+      {/* ── Mode buttons ── */}
+      <section style={{ marginBottom: 28 }}>
+        <h3 style={{ marginBottom: 14, fontSize: 16, color: '#2c3e50', borderBottom: '2px solid #3498db', paddingBottom: 6 }}>
+          Mode Selection
+        </h3>
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+          {MODES.map(mode => (
+            <ModeButton
+              key={mode.id}
+              mode={mode}
+              active={currentMode === mode.id}
+              disabled={sending}
+              onClick={() => sendCommand(mode.id)}
+            />
+          ))}
+        </div>
+      </section>
+
+      {/* ── Course adjustment ── */}
+      <section style={{ marginBottom: 28 }}>
+        <h3 style={{ marginBottom: 14, fontSize: 16, color: '#2c3e50', borderBottom: '2px solid #3498db', paddingBottom: 6 }}>
+          Course Adjustment
+        </h3>
+        <p style={{ fontSize: 13, color: '#7f8c8d', marginBottom: 14 }}>
+          Only active when autopilot is in <strong>Auto</strong> or <strong>Track</strong> mode.
+        </p>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+          {ADJUST_STEPS.map(step => (
+            <AdjustButton
+              key={step.command}
+              step={step}
+              disabled={sending}
+              onClick={() => sendCommand(step.command)}
+            />
+          ))}
+        </div>
+      </section>
+
+      {/* ── Tack buttons ── */}
+      <section style={{ marginBottom: 28 }}>
+        <h3 style={{ marginBottom: 14, fontSize: 16, color: '#2c3e50', borderBottom: '2px solid #3498db', paddingBottom: 6 }}>
+          Tack (Wind Mode)
+        </h3>
+        <p style={{ fontSize: 13, color: '#7f8c8d', marginBottom: 14 }}>
+          Auto-tack manoeuvres — only valid in <strong>Wind</strong> vane mode.
+        </p>
+        <div style={{ display: 'flex', gap: 14 }}>
+          <button
+            disabled={sending}
+            onClick={() => sendCommand('tack-port')}
+            style={{
+              ...tackStyle,
+              background: 'linear-gradient(135deg, #c0392b, #e74c3c)',
+            }}
+          >
+            ◀ Port Tack
+          </button>
+          <button
+            disabled={sending}
+            onClick={() => sendCommand('tack-starboard')}
+            style={{
+              ...tackStyle,
+              background: 'linear-gradient(135deg, #27ae60, #2ecc71)',
+            }}
+          >
+            Starboard Tack ▶
+          </button>
+        </div>
+      </section>
+
+      {/* ── SeaTalk datagram reference ── */}
+      <details style={{ marginTop: 12 }}>
+        <summary style={{ cursor: 'pointer', fontSize: 13, color: '#7f8c8d', userSelect: 'none' }}>
+          SeaTalk datagram reference (ST4000+)
+        </summary>
+        <div style={{
+          marginTop: 10,
+          padding: 14,
+          background: '#f8f9fa',
+          borderRadius: 6,
+          fontFamily: 'monospace',
+          fontSize: 12,
+          lineHeight: 1.8,
+          overflowX: 'auto',
+        }}>
+          <table style={{ borderCollapse: 'collapse', width: '100%' }}>
+            <thead>
+              <tr style={{ background: '#34495e', color: 'white' }}>
+                <th style={th}>Action</th>
+                <th style={th}>Datagram (hex)</th>
+                <th style={th}>Source</th>
+              </tr>
+            </thead>
+            <tbody>
+              {DATAGRAM_REF.map((row, i) => (
+                <tr key={i} style={{ background: i % 2 === 0 ? '#fff' : '#f4f6f8' }}>
+                  <td style={td}>{row.action}</td>
+                  <td style={{ ...td, fontFamily: 'monospace', color: '#2c3e50' }}>{row.hex}</td>
+                  <td style={td}>{row.source}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </details>
+    </div>
+  );
+}
+
+// ── Sub-components ────────────────────────────────────────────
+
+function StatusCard({ label, value, accent }) {
+  return (
+    <div style={{
+      background: '#f8f9fa',
+      borderLeft: `4px solid ${accent}`,
+      borderRadius: 4,
+      padding: '12px 20px',
+      minWidth: 140,
+    }}>
+      <div style={{ fontSize: 11, textTransform: 'uppercase', color: '#7f8c8d', marginBottom: 4 }}>{label}</div>
+      <div style={{ fontSize: 22, fontWeight: 'bold', color: '#2c3e50' }}>{value}</div>
+    </div>
+  );
+}
+
+function ModeButton({ mode, active, disabled, onClick }) {
+  return (
+    <button
+      disabled={disabled}
+      onClick={onClick}
+      title={mode.description}
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        gap: 4,
+        padding: '14px 22px',
+        border: `2px solid ${active ? '#3498db' : '#ddd'}`,
+        borderRadius: 8,
+        background: active
+          ? 'linear-gradient(135deg, #3498db, #2980b9)'
+          : '#fff',
+        color: active ? '#fff' : '#2c3e50',
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        opacity: disabled ? 0.6 : 1,
+        transition: 'all 0.15s',
+        minWidth: 90,
+        boxShadow: active ? '0 4px 12px rgba(52,152,219,0.4)' : '0 1px 3px rgba(0,0,0,0.1)',
+      }}
+    >
+      <span style={{ fontSize: 24 }}>{mode.icon}</span>
+      <span style={{ fontWeight: 600, fontSize: 14 }}>{mode.label}</span>
+    </button>
+  );
+}
+
+function AdjustButton({ step, disabled, onClick }) {
+  const isPort = step.side === 'port';
+  return (
+    <button
+      disabled={disabled}
+      onClick={onClick}
+      style={{
+        padding: '12px 20px',
+        borderRadius: 6,
+        border: 'none',
+        background: isPort
+          ? 'linear-gradient(135deg, #c0392b, #e74c3c)'
+          : 'linear-gradient(135deg, #27ae60, #2ecc71)',
+        color: '#fff',
+        fontWeight: 700,
+        fontSize: 16,
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        opacity: disabled ? 0.6 : 1,
+        minWidth: 70,
+        boxShadow: '0 2px 6px rgba(0,0,0,0.15)',
+        transition: 'opacity 0.15s',
+      }}
+    >
+      {step.label}
+    </button>
+  );
+}
+
+// ── Styles ────────────────────────────────────────────────────
+const tackStyle = {
+  padding: '12px 28px',
+  border: 'none',
+  borderRadius: 8,
+  color: '#fff',
+  fontWeight: 700,
+  fontSize: 15,
+  cursor: 'pointer',
+  boxShadow: '0 3px 8px rgba(0,0,0,0.2)',
+  transition: 'opacity 0.15s',
+};
+
+const th = {
+  padding: '8px 12px',
+  textAlign: 'left',
+  fontWeight: 600,
+  fontSize: 11,
+  textTransform: 'uppercase',
+  letterSpacing: '0.5px',
+};
+
+const td = {
+  padding: '6px 12px',
+  borderBottom: '1px solid #ecf0f1',
+  fontSize: 12,
+};
+
+// ── SeaTalk reference table ───────────────────────────────────
+const DATAGRAM_REF = [
+  { action: 'Auto',             hex: '86 21 01 FE', source: 'ST4000+ (X=2)' },
+  { action: 'Standby',          hex: '86 21 02 FD', source: 'ST4000+ (X=2)' },
+  { action: 'Track',            hex: '86 21 03 FC', source: 'ST4000+ (X=2)' },
+  { action: 'Wind (vane mode)', hex: '86 21 23 DC', source: 'ST4000+ (X=2)' },
+  { action: '−1°',              hex: '86 21 05 FA', source: 'ST4000+ (X=2)' },
+  { action: '−10°',             hex: '86 21 06 F9', source: 'ST4000+ (X=2)' },
+  { action: '+1°',              hex: '86 21 07 F8', source: 'ST4000+ (X=2)' },
+  { action: '+10°',             hex: '86 21 08 F7', source: 'ST4000+ (X=2)' },
+  { action: 'Port tack',        hex: '86 21 21 DE', source: 'ST4000+ (X=2)' },
+  { action: 'Starboard tack',   hex: '86 21 22 DD', source: 'ST4000+ (X=2)' },
+];

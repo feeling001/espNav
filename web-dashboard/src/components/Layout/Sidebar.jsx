@@ -57,6 +57,7 @@ export function Sidebar() {
       <nav>
         <Link to="/"            className={isActive('/')}>System Status</Link>
         <Link to="/instruments" className={isActive('/instruments')}>Instruments</Link>
+        <Link to="/autopilot"   className={isActive('/autopilot')}>Autopilot</Link>
         <Link to="/performance" className={isActive('/performance')}>Performance</Link>
         <Link to="/nmea"        className={isActive('/nmea')}>NMEA Monitor</Link>
         <Link to="/config"      className={isActive('/config')}>Config</Link>

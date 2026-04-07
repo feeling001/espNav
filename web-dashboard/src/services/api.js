@@ -79,6 +79,36 @@ export const api = {
     return response.json();
   },
 
+  // ── Autopilot ─────────────────────────────────────────────────
+
+  /**
+   * Send an autopilot command over the SeaTalk1 bus.
+   *
+   * Accepted command strings:
+   *   'standby'      — Standby mode
+   *   'auto'         — Auto (compass) mode
+   *   'wind'         — Wind vane mode
+   *   'track'        — Track (GPS) mode
+   *   'adjust-1'     — Course −1°
+   *   'adjust-10'    — Course −10°
+   *   'adjust+1'     — Course +1°
+   *   'adjust+10'    — Course +10°
+   *   'tack-port'    — Port tack (wind mode)
+   *   'tack-starboard' — Starboard tack (wind mode)
+   *
+   * @param {string} command
+   * @returns {Promise<{success: boolean, message?: string, error?: string}>}
+   */
+  async sendAutopilotCommand(command) {
+    const response = await fetch(`${API_BASE}/autopilot/command`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command })
+    });
+    if (!response.ok) throw new Error('Failed to send autopilot command');
+    return response.json();
+  },
+
   // ── Polar / Performance ───────────────────────────────────────
 
   /**

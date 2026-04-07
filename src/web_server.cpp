@@ -12,10 +12,40 @@
 extern volatile uint32_t g_nmeaQueueOverflows;
 extern volatile uint32_t g_nmeaQueueFullEvents;
 
+// ============================================================
+// SeaTalk1 datagram definitions — ST4000+ (command 86, X=2)
+//
+// Reference: http://www.thomasknauf.de/rap/seatalk2.htm
+//
+// Datagram format:  CMD  ATTR  DATA  DATA_COMPLEMENT
+//   CMD   = 0x86
+//   ATTR  = 0x21  (X=2, length field =1)
+//   DATA  = key code
+//   COMPL = 0xFF ^ DATA  (one's complement, verified by AP)
+//
+// X field encodes the autopilot model:
+//   X=0 → ST1000+
+//   X=2 → ST4000+ / ST600R   ← we use this
+// ============================================================
 
-WebServer::WebServer(ConfigManager* cm, WiFiManager* wm, TCPServer* tcp, UARTHandler* uart, NMEAParser* nmea, BoatState* bs, BLEManager* ble)
+// Helper: build and send a 4-byte ST1 command-86 datagram.
+// Returns true if sendDatagram() succeeds.
+static bool st1SendCmd86(SeatalkRMT* st, uint8_t keyCode) {
+    // datagram: 0x86  0x21  keyCode  (0xFF ^ keyCode)
+    uint8_t buf[4] = {
+        0x86,
+        0x21,
+        keyCode,
+        static_cast<uint8_t>(0xFF ^ keyCode)
+    };
+    return st->sendDatagram(buf, sizeof(buf));
+}
+
+
+WebServer::WebServer(ConfigManager* cm, WiFiManager* wm, TCPServer* tcp, UARTHandler* uart,
+                     NMEAParser* nmea, BoatState* bs, BLEManager* ble, SeatalkRMT* seatalk)
     : configManager(cm), wifiManager(wm), tcpServer(tcp), uartHandler(uart),
-      nmeaParser(nmea), boatState(bs), bleManager(ble), running(false) {
+      nmeaParser(nmea), boatState(bs), bleManager(ble), seatalkRMT(seatalk), running(false) {
     server  = new AsyncWebServer(WEB_SERVER_PORT);
     wsNMEA  = new AsyncWebSocket("/ws/nmea");
 }
@@ -24,12 +54,12 @@ WebServer::WebServer(ConfigManager* cm, WiFiManager* wm, TCPServer* tcp, UARTHan
 void WebServer::init() {
     serialPrintf("[Web] Initializing Web Server\n");
     serialPrintf("[Web] Using already-mounted LittleFS\n");
-    
+
     wsNMEA->onEvent([this](AsyncWebSocket* server, AsyncWebSocketClient* client,
                            AwsEventType type, void* arg, uint8_t* data, size_t len) {
         this->handleWebSocketEvent(server, client, type, arg, data, len);
     });
-    
+
     server->addHandler(wsNMEA);
     registerRoutes();
 }
@@ -38,7 +68,7 @@ void WebServer::start() {
     if (running) return;
     server->begin();
     running = true;
-    
+
     serialPrintf("[Web] ═══════════════════════════════════════\n");
     serialPrintf("[Web] Server started on port 80\n");
     serialPrintf("[Web] Available endpoints:\n");
@@ -60,6 +90,8 @@ void WebServer::start() {
     serialPrintf("[Web]   - GET  /api/boat/ais\n");
     serialPrintf("[Web]   - GET  /api/boat/state\n");
     serialPrintf("[Web]   - GET  /api/boat/performance\n");
+    serialPrintf("[Web]   Autopilot:\n");
+    serialPrintf("[Web]   - POST /api/autopilot/command\n");
     serialPrintf("[Web]   WebSocket:\n");
     serialPrintf("[Web]   - WS   /ws/nmea\n");
     serialPrintf("[Web] ═══════════════════════════════════════\n");
@@ -74,7 +106,7 @@ void WebServer::stop() {
 
 void WebServer::registerRoutes() {
     serialPrintf("[Web]   Registering API endpoints...\n");
-    
+
     // ── Configuration ──────────────────────────────────────────
     server->on("/api/config/wifi", HTTP_GET, [this](AsyncWebServerRequest* request) {
         this->handleGetWiFiConfig(request);
@@ -133,7 +165,6 @@ void WebServer::registerRoutes() {
     });
 
     server->on("/api/polar/upload", HTTP_POST,
-        // Completion callback — send response after upload handler ran
         [this](AsyncWebServerRequest* request) {
             if (boatState->polar.isLoaded()) {
                 request->send(200, "application/json",
@@ -143,7 +174,6 @@ void WebServer::registerRoutes() {
                               "{\"success\":false,\"error\":\"Failed to parse polar file\"}");
             }
         },
-        // File upload callback
         [this](AsyncWebServerRequest* request, const String& filename,
                size_t index, uint8_t* data, size_t len, bool final) {
             this->handleUploadPolar(request, filename, index, data, len, final);
@@ -167,10 +197,22 @@ void WebServer::registerRoutes() {
         this->handleGetPerformance(request);
     });
 
+    // ── Autopilot ──────────────────────────────────────────────
+    server->on("/api/autopilot/command", HTTP_POST,
+        [](AsyncWebServerRequest* request) {},
+        NULL,
+        [this](AsyncWebServerRequest* request, uint8_t* data, size_t len,
+               size_t index, size_t total) {
+            this->handlePostAutopilotCommand(request, data, len);
+        }
+    );
+
     serialPrintf("[Web]   ✓ All API routes registered\n");
 
-
     server->on("/instruments", HTTP_GET, [](AsyncWebServerRequest* request) {
+        request->send(LittleFS, "/www/index.html", "text/html");
+    });
+    server->on("/autopilot", HTTP_GET, [](AsyncWebServerRequest* request) {
         request->send(LittleFS, "/www/index.html", "text/html");
     });
     server->on("/performance", HTTP_GET, [](AsyncWebServerRequest* request) {
@@ -184,20 +226,20 @@ void WebServer::registerRoutes() {
     });
 
     // ── Static files ───────────────────────────────────────────
-   #ifdef WEB_UI_PROGMEM
-       registerProgmemRoutes(server);   // defined in web_server_progmem.cpp
-   #else
-       server->serveStatic("/", LittleFS, "/www/")
-             .setDefaultFile("index.html")
-             .setCacheControl("max-age=600");
-       server->onNotFound([](AsyncWebServerRequest* request) {
-           if (request->url().startsWith("/api/") || request->url().startsWith("/ws/")) {
-               request->send(404, "text/plain", "Not Found");
-               return;
-           }
-           request->send(LittleFS, "/www/index.html", "text/html");
-       });
-   #endif
+#ifdef WEB_UI_PROGMEM
+    registerProgmemRoutes(server);
+#else
+    server->serveStatic("/", LittleFS, "/www/")
+          .setDefaultFile("index.html")
+          .setCacheControl("max-age=600");
+    server->onNotFound([](AsyncWebServerRequest* request) {
+        if (request->url().startsWith("/api/") || request->url().startsWith("/ws/")) {
+            request->send(404, "text/plain", "Not Found");
+            return;
+        }
+        request->send(LittleFS, "/www/index.html", "text/html");
+    });
+#endif
 
     serialPrintf("[Web]   ✓ All routes registered\n");
 }
@@ -246,18 +288,18 @@ void WebServer::broadcastNMEA(const char* sentence) {
 // ============================================================
 
 void WebServer::handleGetWiFiConfig(AsyncWebServerRequest* request) {
-    #ifdef DEBUG_WEB
+#ifdef DEBUG_WEB
     serialPrintf("[Web] → GET /api/config/wifi\n");
-    #endif
+#endif
 
     WiFiConfig config;
     configManager->getWiFiConfig(config);
 
     JsonDocument doc;
-    doc["ssid"]           = config.ssid;
-    doc["mode"]           = config.mode;
-    doc["has_password"]   = (strlen(config.password) > 0);
-    doc["ap_ssid"]        = config.ap_ssid;
+    doc["ssid"]            = config.ssid;
+    doc["mode"]            = config.mode;
+    doc["has_password"]    = (strlen(config.password) > 0);
+    doc["ap_ssid"]         = config.ap_ssid;
     doc["ap_has_password"] = (strlen(config.ap_password) >= 8);
 
     String response;
@@ -382,12 +424,12 @@ void WebServer::handleGetStatus(AsyncWebServerRequest* request) {
 
     // CPU estimate
     JsonObject cpu = doc["cpu"].to<JsonObject>();
-    static uint32_t lastCheckTime    = 0;
+    static uint32_t lastCheckTime     = 0;
     static uint32_t lastSentenceCount = 0;
-    static uint32_t lastHeapFree     = 0;
-    uint32_t now                     = millis();
-    uint32_t currentSentences        = uartHandler->getSentencesReceived();
-    uint32_t currentHeapFree         = ESP.getFreeHeap();
+    static uint32_t lastHeapFree      = 0;
+    uint32_t now                      = millis();
+    uint32_t currentSentences         = uartHandler->getSentencesReceived();
+    uint32_t currentHeapFree          = ESP.getFreeHeap();
 
     if (lastCheckTime > 0 && (now - lastCheckTime) >= 5000) {
         uint32_t deltaTime      = now - lastCheckTime;
@@ -404,9 +446,9 @@ void WebServer::handleGetStatus(AsyncWebServerRequest* request) {
         if (bleManager->isEnabled() && bleManager->getConnectedDevices() > 0) cpuEst += 5;
         cpuEst = min(cpuEst, (uint32_t)100);
 
-        cpu["usage_percent"]    = cpuEst;
+        cpu["usage_percent"]     = cpuEst;
         cpu["sentences_per_sec"] = (uint32_t)(sentPerSec * 10) / 10.0f;
-        cpu["method"]           = "composite";
+        cpu["method"]            = "composite";
 
         lastSentenceCount = currentSentences;
         lastHeapFree      = currentHeapFree;
@@ -417,9 +459,9 @@ void WebServer::handleGetStatus(AsyncWebServerRequest* request) {
             lastSentenceCount = currentSentences;
             lastHeapFree      = currentHeapFree;
         }
-        cpu["usage_percent"]    = 0;
+        cpu["usage_percent"]     = 0;
         cpu["sentences_per_sec"] = 0;
-        cpu["method"]           = "initializing";
+        cpu["method"]            = "initializing";
     }
 
     JsonObject ble = doc["ble"].to<JsonObject>();
@@ -548,10 +590,6 @@ void WebServer::handlePostBLEConfig(AsyncWebServerRequest* request, uint8_t* dat
 // Polar handlers
 // ============================================================
 
-/**
- * GET /api/polar/status
- * Returns whether a polar is loaded and basic metadata.
- */
 void WebServer::handleGetPolarStatus(AsyncWebServerRequest* request) {
     JsonDocument doc;
     bool loaded      = boatState->polar.isLoaded();
@@ -570,10 +608,6 @@ void WebServer::handleGetPolarStatus(AsyncWebServerRequest* request) {
     request->send(200, "application/json", response);
 }
 
-/**
- * POST /api/polar/upload  (multipart file upload)
- * Writes the incoming file to LittleFS and immediately reloads the polar.
- */
 void WebServer::handleUploadPolar(AsyncWebServerRequest* request,
                                    const String& filename,
                                    size_t index, uint8_t* data,
@@ -601,15 +635,104 @@ void WebServer::handleUploadPolar(AsyncWebServerRequest* request,
             uploadFile.close();
             serialPrintf("[Web] Polar upload complete: %u bytes\n", index + len);
         }
-        // Reload polar into memory immediately
         bool ok = boatState->polar.loadFromFile(POLAR_FILE_PATH);
         if (ok) {
-            // Recompute performance with the newly loaded polar
             boatState->updatePerformance();
             serialPrintf("[Web] ✓ Polar reloaded and performance updated\n");
         } else {
             serialPrintf("[Web] ✗ Polar parse failed after upload\n");
         }
+    }
+}
+
+// ============================================================
+// Autopilot handler
+// ============================================================
+
+/**
+ * POST /api/autopilot/command
+ *
+ * Body: { "command": "<cmd>" }
+ *
+ * Accepted commands and their SeaTalk1 datagrams (ST4000+, cmd 0x86, X=2):
+ *
+ *   standby        → 86 21 02 FD   Standby mode
+ *   auto           → 86 21 01 FE   Auto (compass lock) mode
+ *   wind           → 86 21 23 DC   Wind vane mode (Standby+Auto simultaneously)
+ *   track          → 86 21 03 FC   Track (GPS) mode
+ *   adjust-1       → 86 21 05 FA   Course −1°
+ *   adjust-10      → 86 21 06 F9   Course −10°
+ *   adjust+1       → 86 21 07 F8   Course +1°
+ *   adjust+10      → 86 21 08 F7   Course +10°
+ *   tack-port      → 86 21 21 DE   Port tack  (−1 & −10 simultaneously)
+ *   tack-starboard → 86 21 22 DD   Starboard tack (+1 & +10 simultaneously)
+ *
+ * Response: { "success": true|false, "message": "..." }
+ */
+void WebServer::handlePostAutopilotCommand(AsyncWebServerRequest* request,
+                                            uint8_t* data, size_t len) {
+    JsonDocument doc;
+    DeserializationError err = deserializeJson(doc, (char*)data, len);
+    if (err) {
+        request->send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
+        return;
+    }
+
+    const char* command = doc["command"] | "";
+    if (command[0] == '\0') {
+        request->send(400, "application/json", "{\"error\":\"Missing command field\"}");
+        return;
+    }
+
+    serialPrintf("[Web] Autopilot command: %s\n", command);
+
+    if (!seatalkRMT) {
+        request->send(503, "application/json",
+                      "{\"success\":false,\"error\":\"SeaTalk bus not initialised\"}");
+        return;
+    }
+
+    // Map command string → SeaTalk key code
+    // Key codes for ST4000+ (X=2) per Thomas Knauf reference, command 86:
+    //   Auto      = 0x01,  Standby   = 0x02,  Track     = 0x03
+    //   −1        = 0x05,  −10       = 0x06,  +1        = 0x07,  +10 = 0x08
+    //   Wind mode = 0x23  (Standby & Auto simultaneously)
+    //   Port tack = 0x21  (−1 & −10)
+    //   Stbd tack = 0x22  (+1 & +10)
+
+    uint8_t keyCode = 0;
+    const char* label = "";
+
+    if      (strcmp(command, "auto")           == 0) { keyCode = 0x01; label = "Auto";           }
+    else if (strcmp(command, "standby")        == 0) { keyCode = 0x02; label = "Standby";        }
+    else if (strcmp(command, "track")          == 0) { keyCode = 0x03; label = "Track";          }
+    else if (strcmp(command, "adjust-1")       == 0) { keyCode = 0x05; label = "−1°";            }
+    else if (strcmp(command, "adjust-10")      == 0) { keyCode = 0x06; label = "−10°";           }
+    else if (strcmp(command, "adjust+1")       == 0) { keyCode = 0x07; label = "+1°";            }
+    else if (strcmp(command, "adjust+10")      == 0) { keyCode = 0x08; label = "+10°";           }
+    else if (strcmp(command, "wind")           == 0) { keyCode = 0x23; label = "Wind mode";      }
+    else if (strcmp(command, "tack-port")      == 0) { keyCode = 0x21; label = "Port tack";      }
+    else if (strcmp(command, "tack-starboard") == 0) { keyCode = 0x22; label = "Starboard tack"; }
+    else {
+        serialPrintf("[Web] Unknown autopilot command: %s\n", command);
+        request->send(400, "application/json", "{\"success\":false,\"error\":\"Unknown command\"}");
+        return;
+    }
+
+    bool ok = st1SendCmd86(seatalkRMT, keyCode);
+
+    if (ok) {
+        serialPrintf("[Web] ✓ ST1 command sent: %s (0x%02X)\n", label, keyCode);
+        JsonDocument resp;
+        resp["success"] = true;
+        resp["message"] = String("Sent: ") + label;
+        String body;
+        serializeJson(resp, body);
+        request->send(200, "application/json", body);
+    } else {
+        serialPrintf("[Web] ✗ ST1 command failed: %s (0x%02X)\n", label, keyCode);
+        request->send(500, "application/json",
+                      "{\"success\":false,\"error\":\"SeaTalk transmission failed (collision or bus busy)\"}");
     }
 }
 
@@ -629,7 +752,6 @@ void WebServer::handleGetNavigation(AsyncWebServerRequest* request) {
     HeadingData heading = boatState->getHeading();
     DepthData   depth   = boatState->getDepth();
 
-    // Position
     JsonObject position = doc["position"].to<JsonObject>();
     if (gps.position.lat.valid && !gps.position.lat.isStale()) {
         position["latitude"]  = gps.position.lat.value;
@@ -641,48 +763,41 @@ void WebServer::handleGetNavigation(AsyncWebServerRequest* request) {
         position["age"]       = nullptr;
     }
 
-    // SOG
     if (gps.sog.valid && !gps.sog.isStale()) {
         doc["sog"]["value"] = gps.sog.value;
         doc["sog"]["unit"]  = gps.sog.unit;
         doc["sog"]["age"]   = (millis() - gps.sog.timestamp) / 1000.0;
     } else { doc["sog"]["value"] = nullptr; doc["sog"]["unit"] = "kn"; doc["sog"]["age"] = nullptr; }
 
-    // COG
     if (gps.cog.valid && !gps.cog.isStale()) {
         doc["cog"]["value"] = gps.cog.value;
         doc["cog"]["unit"]  = gps.cog.unit;
         doc["cog"]["age"]   = (millis() - gps.cog.timestamp) / 1000.0;
     } else { doc["cog"]["value"] = nullptr; doc["cog"]["unit"] = "deg"; doc["cog"]["age"] = nullptr; }
 
-    // STW
     if (speed.stw.valid && !speed.stw.isStale()) {
         doc["stw"]["value"] = speed.stw.value;
         doc["stw"]["unit"]  = speed.stw.unit;
         doc["stw"]["age"]   = (millis() - speed.stw.timestamp) / 1000.0;
     } else { doc["stw"]["value"] = nullptr; doc["stw"]["unit"] = "kn"; doc["stw"]["age"] = nullptr; }
 
-    // Heading
     if (heading.true_heading.valid && !heading.true_heading.isStale()) {
         doc["heading"]["value"] = heading.true_heading.value;
         doc["heading"]["unit"]  = heading.true_heading.unit;
         doc["heading"]["age"]   = (millis() - heading.true_heading.timestamp) / 1000.0;
     } else { doc["heading"]["value"] = nullptr; doc["heading"]["unit"] = "deg"; doc["heading"]["age"] = nullptr; }
 
-    // Depth
     if (depth.below_transducer.valid && !depth.below_transducer.isStale()) {
         doc["depth"]["value"] = depth.below_transducer.value;
         doc["depth"]["unit"]  = depth.below_transducer.unit;
         doc["depth"]["age"]   = (millis() - depth.below_transducer.timestamp) / 1000.0;
     } else { doc["depth"]["value"] = nullptr; doc["depth"]["unit"] = "m"; doc["depth"]["age"] = nullptr; }
 
-    // GPS quality
     JsonObject quality = doc["gps_quality"].to<JsonObject>();
     if (gps.satellites.valid  && !gps.satellites.isStale())  quality["satellites"]  = (int)gps.satellites.value;  else quality["satellites"]  = nullptr;
     if (gps.fix_quality.valid && !gps.fix_quality.isStale()) quality["fix_quality"] = (int)gps.fix_quality.value; else quality["fix_quality"] = nullptr;
     if (gps.hdop.valid        && !gps.hdop.isStale())        quality["hdop"]        = gps.hdop.value;             else quality["hdop"]        = nullptr;
 
-    // Trip / Total
     if (speed.trip.valid  && !speed.trip.isStale())  { doc["trip"]["value"]  = speed.trip.value;  doc["trip"]["unit"]  = speed.trip.unit; }
     else                                              { doc["trip"]["value"]  = nullptr;            doc["trip"]["unit"]  = "nm"; }
     if (speed.total.valid && !speed.total.isStale())  { doc["total"]["value"] = speed.total.value; doc["total"]["unit"] = speed.total.unit; }
@@ -737,7 +852,7 @@ void WebServer::handleGetAIS(AsyncWebServerRequest* request) {
     JsonArray targets = doc["targets"].to<JsonArray>();
 
     for (int i = 0; i < ais.targetCount; i++) {
-        AISTarget& t   = ais.targets[i];
+        AISTarget& t      = ais.targets[i];
         unsigned long age = (millis() - t.timestamp) / 1000;
         if (age > DATA_TIMEOUT_AIS / 1000) continue;
 
@@ -775,10 +890,6 @@ void WebServer::handleGetBoatState(AsyncWebServerRequest* request) {
     request->send(200, "application/json", boatState->toJSON());
 }
 
-/**
- * GET /api/boat/performance
- * Returns VMG and polar efficiency percentage.
- */
 void WebServer::handleGetPerformance(AsyncWebServerRequest* request) {
     if (!boatState) {
         request->send(500, "application/json", "{\"error\":\"BoatState not available\"}");
