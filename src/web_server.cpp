@@ -12,44 +12,19 @@
 extern volatile uint32_t g_nmeaQueueOverflows;
 extern volatile uint32_t g_nmeaQueueFullEvents;
 
-// ============================================================
-// SeaTalk1 datagram definitions — ST4000+ (command 86, X=2)
-//
-// Reference: http://www.thomasknauf.de/rap/seatalk2.htm
-//
-// Datagram format:  CMD  ATTR  DATA  DATA_COMPLEMENT
-//   CMD   = 0x86
-//   ATTR  = 0x21  (X=2, length field =1)
-//   DATA  = key code
-//   COMPL = 0xFF ^ DATA  (one's complement, verified by AP)
-//
-// X field encodes the autopilot model:
-//   X=0 → ST1000+
-//   X=2 → ST4000+ / ST600R   ← we use this
-// ============================================================
-
-// Helper: build and send a 4-byte ST1 command-86 datagram.
-// Returns true if sendDatagram() succeeds.
-static bool st1SendCmd86(SeatalkRMT* st, uint8_t keyCode) {
-    // datagram: 0x86  0x21  keyCode  (0xFF ^ keyCode)
-    uint8_t buf[4] = {
-        0x86,
-        0x21,
-        keyCode,
-        static_cast<uint8_t>(0xFF ^ keyCode)
-    };
-    return st->sendDatagram(buf, sizeof(buf));
-}
-
+// ── Constructor ───────────────────────────────────────────────────────────────
 
 WebServer::WebServer(ConfigManager* cm, WiFiManager* wm, TCPServer* tcp, UARTHandler* uart,
-                     NMEAParser* nmea, BoatState* bs, BLEManager* ble, SeatalkRMT* seatalk)
+                     NMEAParser* nmea, BoatState* bs, BLEManager* ble,
+                     SeatalkManager* stMgr)
     : configManager(cm), wifiManager(wm), tcpServer(tcp), uartHandler(uart),
-      nmeaParser(nmea), boatState(bs), bleManager(ble), seatalkRMT(seatalk), running(false) {
-    server  = new AsyncWebServer(WEB_SERVER_PORT);
-    wsNMEA  = new AsyncWebSocket("/ws/nmea");
+      nmeaParser(nmea), boatState(bs), bleManager(ble),
+      seatalkManager(stMgr), running(false) {
+    server = new AsyncWebServer(WEB_SERVER_PORT);
+    wsNMEA = new AsyncWebSocket("/ws/nmea");
 }
 
+// ── init ──────────────────────────────────────────────────────────────────────
 
 void WebServer::init() {
     serialPrintf("[Web] Initializing Web Server\n");
@@ -63,6 +38,8 @@ void WebServer::init() {
     server->addHandler(wsNMEA);
     registerRoutes();
 }
+
+// ── start / stop ──────────────────────────────────────────────────────────────
 
 void WebServer::start() {
     if (running) return;
@@ -103,6 +80,8 @@ void WebServer::stop() {
     server->end();
     serialPrintf("[Web] Server stopped\n");
 }
+
+// ── registerRoutes ────────────────────────────────────────────────────────────
 
 void WebServer::registerRoutes() {
     serialPrintf("[Web]   Registering API endpoints...\n");
@@ -209,6 +188,7 @@ void WebServer::registerRoutes() {
 
     serialPrintf("[Web]   ✓ All API routes registered\n");
 
+    // ── SPA fallback routes ────────────────────────────────────
     server->on("/instruments", HTTP_GET, [](AsyncWebServerRequest* request) {
         request->send(LittleFS, "/www/index.html", "text/html");
     });
@@ -244,9 +224,7 @@ void WebServer::registerRoutes() {
     serialPrintf("[Web]   ✓ All routes registered\n");
 }
 
-// ============================================================
-// WebSocket
-// ============================================================
+// ── WebSocket ─────────────────────────────────────────────────────────────────
 
 void WebServer::handleWebSocketEvent(AsyncWebSocket* server, AsyncWebSocketClient* client,
                                       AwsEventType type, void* arg, uint8_t* data, size_t len) {
@@ -283,9 +261,7 @@ void WebServer::broadcastNMEA(const char* sentence) {
     wsNMEA->textAll(sentence);
 }
 
-// ============================================================
-// Configuration handlers
-// ============================================================
+// ── Configuration handlers ────────────────────────────────────────────────────
 
 void WebServer::handleGetWiFiConfig(AsyncWebServerRequest* request) {
 #ifdef DEBUG_WEB
@@ -482,9 +458,7 @@ void WebServer::handleRestart(AsyncWebServerRequest* request) {
     ESP.restart();
 }
 
-// ============================================================
-// WiFi Scan
-// ============================================================
+// ── WiFi Scan ─────────────────────────────────────────────────────────────────
 
 void WebServer::handleStartWiFiScan(AsyncWebServerRequest* request) {
     int16_t result = wifiManager->startScan();
@@ -524,9 +498,7 @@ void WebServer::handleGetWiFiScanResults(AsyncWebServerRequest* request) {
     request->send(200, "application/json", response);
 }
 
-// ============================================================
-// BLE Configuration
-// ============================================================
+// ── BLE Configuration ─────────────────────────────────────────────────────────
 
 void WebServer::handleGetBLEConfig(AsyncWebServerRequest* request) {
     BLEConfig config = bleManager->getConfig();
@@ -586,9 +558,7 @@ void WebServer::handlePostBLEConfig(AsyncWebServerRequest* request, uint8_t* dat
                   "{\"success\":true,\"message\":\"BLE config saved and applied\"}");
 }
 
-// ============================================================
-// Polar handlers
-// ============================================================
+// ── Polar handlers ────────────────────────────────────────────────────────────
 
 void WebServer::handleGetPolarStatus(AsyncWebServerRequest* request) {
     JsonDocument doc;
@@ -645,29 +615,15 @@ void WebServer::handleUploadPolar(AsyncWebServerRequest* request,
     }
 }
 
-// ============================================================
-// Autopilot handler
-// ============================================================
+// ── Autopilot handler ─────────────────────────────────────────────────────────
 
 /**
  * POST /api/autopilot/command
  *
  * Body: { "command": "<cmd>" }
  *
- * Accepted commands and their SeaTalk1 datagrams (ST4000+, cmd 0x86, X=2):
- *
- *   standby        → 86 21 02 FD   Standby mode
- *   auto           → 86 21 01 FE   Auto (compass lock) mode
- *   wind           → 86 21 23 DC   Wind vane mode (Standby+Auto simultaneously)
- *   track          → 86 21 03 FC   Track (GPS) mode
- *   adjust-1       → 86 21 05 FA   Course −1°
- *   adjust-10      → 86 21 06 F9   Course −10°
- *   adjust+1       → 86 21 07 F8   Course +1°
- *   adjust+10      → 86 21 08 F7   Course +10°
- *   tack-port      → 86 21 21 DE   Port tack  (−1 & −10 simultaneously)
- *   tack-starboard → 86 21 22 DD   Starboard tack (+1 & +10 simultaneously)
- *
- * Response: { "success": true|false, "message": "..." }
+ * Delegates entirely to SeatalkManager::sendAutopilotCommand().
+ * No datagram knowledge lives here anymore.
  */
 void WebServer::handlePostAutopilotCommand(AsyncWebServerRequest* request,
                                             uint8_t* data, size_t len) {
@@ -686,59 +642,28 @@ void WebServer::handlePostAutopilotCommand(AsyncWebServerRequest* request,
 
     serialPrintf("[Web] Autopilot command: %s\n", command);
 
-    if (!seatalkRMT) {
+    if (!seatalkManager) {
         request->send(503, "application/json",
-                      "{\"success\":false,\"error\":\"SeaTalk bus not initialised\"}");
+                      "{\"success\":false,\"error\":\"SeaTalk manager not initialised\"}");
         return;
     }
 
-    // Map command string → SeaTalk key code
-    // Key codes for ST4000+ (X=2) per Thomas Knauf reference, command 86:
-    //   Auto      = 0x01,  Standby   = 0x02,  Track     = 0x03
-    //   −1        = 0x05,  −10       = 0x06,  +1        = 0x07,  +10 = 0x08
-    //   Wind mode = 0x23  (Standby & Auto simultaneously)
-    //   Port tack = 0x21  (−1 & −10)
-    //   Stbd tack = 0x22  (+1 & +10)
-
-    uint8_t keyCode = 0;
-    const char* label = "";
-
-    if      (strcmp(command, "auto")           == 0) { keyCode = 0x01; label = "Auto";           }
-    else if (strcmp(command, "standby")        == 0) { keyCode = 0x02; label = "Standby";        }
-    else if (strcmp(command, "track")          == 0) { keyCode = 0x03; label = "Track";          }
-    else if (strcmp(command, "adjust-1")       == 0) { keyCode = 0x05; label = "−1°";            }
-    else if (strcmp(command, "adjust-10")      == 0) { keyCode = 0x06; label = "−10°";           }
-    else if (strcmp(command, "adjust+1")       == 0) { keyCode = 0x07; label = "+1°";            }
-    else if (strcmp(command, "adjust+10")      == 0) { keyCode = 0x08; label = "+10°";           }
-    else if (strcmp(command, "wind")           == 0) { keyCode = 0x23; label = "Wind mode";      }
-    else if (strcmp(command, "tack-port")      == 0) { keyCode = 0x21; label = "Port tack";      }
-    else if (strcmp(command, "tack-starboard") == 0) { keyCode = 0x22; label = "Starboard tack"; }
-    else {
-        serialPrintf("[Web] Unknown autopilot command: %s\n", command);
-        request->send(400, "application/json", "{\"success\":false,\"error\":\"Unknown command\"}");
-        return;
-    }
-
-    bool ok = st1SendCmd86(seatalkRMT, keyCode);
+    bool ok = seatalkManager->sendAutopilotCommand(command);
 
     if (ok) {
-        serialPrintf("[Web] ✓ ST1 command sent: %s (0x%02X)\n", label, keyCode);
         JsonDocument resp;
         resp["success"] = true;
-        resp["message"] = String("Sent: ") + label;
+        resp["message"] = String("Sent: ") + command;
         String body;
         serializeJson(resp, body);
         request->send(200, "application/json", body);
     } else {
-        serialPrintf("[Web] ✗ ST1 command failed: %s (0x%02X)\n", label, keyCode);
         request->send(500, "application/json",
-                      "{\"success\":false,\"error\":\"SeaTalk transmission failed (collision or bus busy)\"}");
+                      "{\"success\":false,\"error\":\"SeaTalk transmission failed or unknown command\"}");
     }
 }
 
-// ============================================================
-// Boat data handlers
-// ============================================================
+// ── Boat data handlers ────────────────────────────────────────────────────────
 
 void WebServer::handleGetNavigation(AsyncWebServerRequest* request) {
     if (!boatState) {

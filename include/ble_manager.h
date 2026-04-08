@@ -21,6 +21,7 @@
 #include <freertos/semphr.h>
 #include "ble_config.h"
 #include "boat_state.h"
+#include "seatalk_manager.h"   // ← new dependency
 
 // ============================================================
 // BLE Configuration
@@ -39,7 +40,8 @@ struct BLEConfig {
 };
 
 // ============================================================
-// Autopilot command
+// AutopilotCommand — kept for backwards compatibility / logging,
+// but BLEManager now dispatches directly via SeatalkManager.
 // ============================================================
 struct AutopilotCommand {
     enum Type {
@@ -53,7 +55,7 @@ struct AutopilotCommand {
 };
 
 // ============================================================
-// Forward declaration
+// Forward declarations
 // ============================================================
 class BLEManager;
 
@@ -74,6 +76,7 @@ private:
 
 // ============================================================
 // Characteristic write callback — NimBLE 2.x API
+// Dispatches autopilot commands directly to SeatalkManager.
 // ============================================================
 class AutopilotCmdCallbacks : public NimBLECharacteristicCallbacks {
 public:
@@ -93,7 +96,15 @@ public:
     BLEManager();
     ~BLEManager();
 
-    void init(const BLEConfig& config, BoatState* state);
+    /**
+     * @param config      BLE configuration (name, PIN, enabled flag).
+     * @param state       Shared boat state for data notifications.
+     * @param stMgr       SeatalkManager used to forward AP commands received
+     *                    via the AutopilotCmd BLE characteristic.
+     *                    May be nullptr (commands are then silently ignored).
+     */
+    void init(const BLEConfig& config, BoatState* state,
+              SeatalkManager* stMgr = nullptr);
     void start();
     void stop();
     void update();
@@ -105,9 +116,6 @@ public:
     BLEConfig getConfig()           const { return config; }
     bool      isAdvertising()       const { return advertising; }
     uint32_t  getConnectedDevices() const { return connectedDevices; }
-
-    bool             hasAutopilotCommand();
-    AutopilotCommand getAutopilotCommand();
 
     friend class MarineServerCallbacks;
     friend class AutopilotCmdCallbacks;
@@ -139,15 +147,12 @@ private:
     AutopilotCmdCallbacks* autopilotCmdCallbacks;
 
     // ── State ───────────────────────────────────────────────────
-    BLEConfig  config;
-    BoatState* boatState;
-    bool       initialized;
-    bool       advertising;
-    uint32_t   connectedDevices;
-
-    // ── Autopilot command queue ─────────────────────────────────
-    AutopilotCommand  pendingCommand;
-    SemaphoreHandle_t commandMutex;
+    BLEConfig      config;
+    BoatState*     boatState;
+    SeatalkManager* seatalkManager;   // ← new: used by AutopilotCmdCallbacks
+    bool           initialized;
+    bool           advertising;
+    uint32_t       connectedDevices;
 
     // ── FreeRTOS update task ────────────────────────────────────
     TaskHandle_t   updateTaskHandle;

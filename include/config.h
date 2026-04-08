@@ -40,8 +40,8 @@
 
 // --- Configuration SeaTalk1 ---
 
-#define ST1_RX_PIN          GPIO_NUM_8
-#define ST1_TX_PIN          GPIO_NUM_7
+#define ST1_RX_PIN          GPIO_NUM_7
+#define ST1_TX_PIN          GPIO_NUM_8
 #define ST1_RX_CHANNEL      RMT_CHANNEL_4
 #define ST1_TX_CHANNEL      RMT_CHANNEL_1
 #define ST1_ENABLED         true

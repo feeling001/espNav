@@ -7,7 +7,7 @@
 #include "config_manager.h"
 #include "wifi_manager.h"
 #include "ble_manager.h"
-#include "seatalk_rmt.h"
+#include "seatalk_manager.h"   // ← replaced seatalk_rmt.h
 
 // Forward declarations
 class TCPServer;
@@ -23,7 +23,8 @@ void registerProgmemRoutes(AsyncWebServer* server);
 class WebServer {
 public:
     WebServer(ConfigManager* cm, WiFiManager* wm, TCPServer* tcp, UARTHandler* uart,
-              NMEAParser* nmea, BoatState* bs, BLEManager* ble, SeatalkRMT* seatalk);
+              NMEAParser* nmea, BoatState* bs, BLEManager* ble,
+              SeatalkManager* stMgr);   // ← SeatalkManager instead of SeatalkRMT
 
     void init();
     void start();
@@ -61,7 +62,7 @@ private:
     void handleStartWiFiScan(AsyncWebServerRequest* request);
     void handleGetWiFiScanResults(AsyncWebServerRequest* request);
 
-    // Autopilot handler
+    // Autopilot handler — now delegates to SeatalkManager
     void handlePostAutopilotCommand(AsyncWebServerRequest* request, uint8_t* data, size_t len);
 
     // WebSocket handlers
@@ -78,7 +79,7 @@ private:
     NMEAParser*     nmeaParser;
     BoatState*      boatState;
     BLEManager*     bleManager;
-    SeatalkRMT*     seatalkRMT;
+    SeatalkManager* seatalkManager;   // ← was SeatalkRMT*
     bool            running;
 };
 

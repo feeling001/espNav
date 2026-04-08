@@ -61,6 +61,10 @@ void MarineServerCallbacks::onAuthenticationComplete(NimBLEConnInfo& connInfo) {
 
 // ============================================================
 // AutopilotCmdCallbacks — NimBLE 2.x signature
+//
+// Parses the incoming JSON command and forwards it directly to
+// SeatalkManager::sendAutopilotCommand().  No pending-command
+// queue needed: SeatalkManager handles serialisation internally.
 // ============================================================
 
 void AutopilotCmdCallbacks::onWrite(NimBLECharacteristic* pChar, NimBLEConnInfo& connInfo) {
@@ -79,24 +83,18 @@ void AutopilotCmdCallbacks::onWrite(NimBLECharacteristic* pChar, NimBLEConnInfo&
     }
 
     const char* cmd = doc["command"] | "";
-    AutopilotCommand command;
-    command.timestamp = millis();
-
-    if      (strcmp(cmd, "enable")    == 0) command.type = AutopilotCommand::ENABLE;
-    else if (strcmp(cmd, "disable")   == 0) command.type = AutopilotCommand::DISABLE;
-    else if (strcmp(cmd, "adjust+10") == 0) command.type = AutopilotCommand::ADJUST_PLUS_10;
-    else if (strcmp(cmd, "adjust-10") == 0) command.type = AutopilotCommand::ADJUST_MINUS_10;
-    else if (strcmp(cmd, "adjust+1")  == 0) command.type = AutopilotCommand::ADJUST_PLUS_1;
-    else if (strcmp(cmd, "adjust-1")  == 0) command.type = AutopilotCommand::ADJUST_MINUS_1;
-    else {
-        serialPrintf("[BLE] Unknown command: %s\n", cmd);
+    if (cmd[0] == '\0') {
+        serialPrintf("[BLE] Missing command field\n");
         return;
     }
 
-    xSemaphoreTake(manager->commandMutex, portMAX_DELAY);
-    manager->pendingCommand = command;
-    xSemaphoreGive(manager->commandMutex);
-    serialPrintf("[BLE] Command queued: type=%d\n", command.type);
+    // Delegate to SeatalkManager — all datagram knowledge lives there.
+    if (manager->seatalkManager) {
+        bool ok = manager->seatalkManager->sendAutopilotCommand(cmd);
+        serialPrintf("[BLE] Autopilot cmd '%s' → %s\n", cmd, ok ? "OK" : "FAILED");
+    } else {
+        serialPrintf("[BLE] SeatalkManager not set — command '%s' dropped\n", cmd);
+    }
 }
 
 // ============================================================
@@ -110,15 +108,13 @@ BLEManager::BLEManager()
       pAutopilotService(nullptr),   pAutopilotDataChar(nullptr), pAutopilotCmdChar(nullptr),
       pPerformanceService(nullptr), pPerformanceDataChar(nullptr),
       serverCallbacks(nullptr), autopilotCmdCallbacks(nullptr),
-      boatState(nullptr), initialized(false), advertising(false),
+      boatState(nullptr), seatalkManager(nullptr),
+      initialized(false), advertising(false),
       connectedDevices(0), updateTaskHandle(nullptr) {
-
-    commandMutex = xSemaphoreCreateMutex();
 }
 
 BLEManager::~BLEManager() {
     stop();
-    if (commandMutex)           vSemaphoreDelete(commandMutex);
     if (serverCallbacks)        delete serverCallbacks;
     if (autopilotCmdCallbacks)  delete autopilotCmdCallbacks;
 }
@@ -127,16 +123,18 @@ BLEManager::~BLEManager() {
 // init
 // ============================================================
 
-void BLEManager::init(const BLEConfig& cfg, BoatState* state) {
+void BLEManager::init(const BLEConfig& cfg, BoatState* state, SeatalkManager* stMgr) {
     if (initialized) return;
 
-    config    = cfg;
-    boatState = state;
+    config         = cfg;
+    boatState      = state;
+    seatalkManager = stMgr;
 
     serialPrintf("[BLE] Initializing NimBLE 2.x stack\n");
-    serialPrintf("[BLE]   Device name : %s\n", config.device_name);
-    serialPrintf("[BLE]   PIN code    : %s\n", config.pin_code);
-    serialPrintf("[BLE]   Enabled     : %s\n", config.enabled ? "yes" : "no");
+    serialPrintf("[BLE]   Device name    : %s\n", config.device_name);
+    serialPrintf("[BLE]   PIN code       : %s\n", config.pin_code);
+    serialPrintf("[BLE]   Enabled        : %s\n", config.enabled ? "yes" : "no");
+    serialPrintf("[BLE]   SeatalkManager : %s\n", seatalkManager ? "yes" : "no (AP commands disabled)");
 
     NimBLEDevice::init(config.device_name);
     NimBLEDevice::setPower(9);
@@ -289,7 +287,6 @@ void BLEManager::startAdvertising() {
 
     NimBLEAdvertisementData scanData;
     scanData.addServiceUUID(BLE_SERVICE_NAVIGATION_UUID);
-    // Also advertise the performance service UUID so scanners can filter on it
     scanData.addServiceUUID(BLE_SERVICE_PERFORMANCE_UUID);
 
     pAdvertising->setAdvertisementData(advData);
@@ -328,7 +325,7 @@ void BLEManager::setDeviceName(const char* name) {
         stop();
         NimBLEDevice::deinit(true);
         initialized = false;
-        init(config, boatState);
+        init(config, boatState, seatalkManager);
         start();
     }
 }
@@ -341,27 +338,6 @@ void BLEManager::setPinCode(const char* pin) {
         uint32_t passkey = (uint32_t)atoi(config.pin_code);
         NimBLEDevice::setSecurityPasskey(passkey);
     }
-}
-
-// ============================================================
-// Autopilot command queue
-// ============================================================
-
-bool BLEManager::hasAutopilotCommand() {
-    bool has = false;
-    xSemaphoreTake(commandMutex, portMAX_DELAY);
-    has = (pendingCommand.type != AutopilotCommand::NONE);
-    xSemaphoreGive(commandMutex);
-    return has;
-}
-
-AutopilotCommand BLEManager::getAutopilotCommand() {
-    AutopilotCommand cmd;
-    xSemaphoreTake(commandMutex, portMAX_DELAY);
-    cmd = pendingCommand;
-    pendingCommand.type = AutopilotCommand::NONE;
-    xSemaphoreGive(commandMutex);
-    return cmd;
 }
 
 // ============================================================
@@ -452,36 +428,15 @@ String BLEManager::buildAutopilotJSON() {
     return out;
 }
 
-/**
- * @brief Build the Sail Performance JSON payload.
- *
- * Fields:
- *   vmg         float | null   VMG in knots. Positive = upwind, negative = downwind.
- *   polar_pct   float | null   Current STW as % of polar target. null if no polar loaded.
- *   target_stw  float | null   Polar target STW in knots.        null if no polar loaded.
- *   polar_loaded bool          True when a polar file is loaded on the device.
- *
- * Example (polar loaded, sailing upwind at 85 % efficiency):
- *   {"vmg":4.2,"polar_pct":85.3,"target_stw":7.1,"polar_loaded":true}
- *
- * Example (no polar loaded):
- *   {"vmg":4.2,"polar_pct":null,"target_stw":null,"polar_loaded":false}
- */
 String BLEManager::buildPerformanceJSON() {
     JsonDocument doc;
 
     PerformanceData perf = boatState->getPerformance();
     WindData        wind = boatState->getWind();
 
-    // ── VMG ────────────────────────────────────────────────────
     SET_JSON_DP(doc, "vmg", perf.vmg);
-
-    // ── Polar % ────────────────────────────────────────────────
     SET_JSON_DP(doc, "polar_pct", perf.polarPct);
 
-    // ── Target STW ─────────────────────────────────────────────
-    // Recompute directly from the polar so we always have the raw target
-    // alongside the percentage, without storing it as a separate DataPoint.
     bool polarLoaded = boatState->polar.isLoaded();
     doc["polar_loaded"] = polarLoaded;
 
