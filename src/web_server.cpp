@@ -14,6 +14,7 @@
 // External variables from main.cpp for monitoring
 extern volatile uint32_t g_nmeaQueueOverflows;
 extern volatile uint32_t g_nmeaQueueFullEvents;
+extern QueueHandle_t nmeaQueue;
 
 // ── Constructor ───────────────────────────────────────────────────────────────
 
@@ -603,6 +604,18 @@ void WebServer::handlePostSerialConfig(AsyncWebServerRequest* request, uint8_t* 
 void WebServer::handleGetStatus(AsyncWebServerRequest* request) {
     JsonDocument doc;
 
+    // ── Firmware version ──────────────────────────────────────
+    /*
+    const esp_partition_t* runningPart = esp_ota_get_running_partition();
+    esp_app_desc_t appDesc;
+    if (runningPart && esp_ota_get_partition_description(runningPart, &appDesc) == ESP_OK) {
+        doc["version"] = appDesc.version;
+    } else {
+        doc["version"] = VERSION;
+    }
+        */
+    doc["version"] = VERSION;
+
     doc["uptime"] = millis() / 1000;
 
     JsonObject heap = doc["heap"].to<JsonObject>();
@@ -655,58 +668,31 @@ void WebServer::handleGetStatus(AsyncWebServerRequest* request) {
     configManager->getSerialConfig(serialConfig);
     uart["baud"] = serialConfig.baudRate;
 
+    // ── NMEA buffer / queue status ────────────────────────────
     JsonObject nmeaBuffer = doc["nmea_buffer"].to<JsonObject>();
     nmeaBuffer["queue_size"]         = NMEA_QUEUE_SIZE;
     nmeaBuffer["overflow_total"]     = g_nmeaQueueOverflows;
     nmeaBuffer["full_events_recent"] = g_nmeaQueueFullEvents;
     nmeaBuffer["has_overflow"]       = (g_nmeaQueueFullEvents > 0);
 
-    // CPU estimate
-    JsonObject cpu = doc["cpu"].to<JsonObject>();
-    static uint32_t lastCheckTime     = 0;
-    static uint32_t lastSentenceCount = 0;
-    static uint32_t lastHeapFree      = 0;
-    uint32_t now                      = millis();
-    uint32_t currentSentences         = uartHandler->getSentencesReceived();
-    uint32_t currentHeapFree          = ESP.getFreeHeap();
-
-    if (lastCheckTime > 0 && (now - lastCheckTime) >= 5000) {
-        uint32_t deltaTime      = now - lastCheckTime;
-        uint32_t deltaSentences = currentSentences - lastSentenceCount;
-        float sentPerSec        = (float)(deltaSentences * 1000) / deltaTime;
-
-        uint32_t cpuEst = 0;
-        if      (sentPerSec < 2.0f)  cpuEst = (uint32_t)(sentPerSec * 8);
-        else if (sentPerSec < 5.0f)  cpuEst = 16 + (uint32_t)((sentPerSec - 2.0f) * 8);
-        else if (sentPerSec < 10.0f) cpuEst = 40 + (uint32_t)((sentPerSec - 5.0f) * 6);
-        else                          cpuEst = 70 + (uint32_t)(min((sentPerSec - 10.0f) * 3, 30.0f));
-
-        cpuEst += tcpServer->getClientCount() * 2;
-        if (bleManager->isEnabled() && bleManager->getConnectedDevices() > 0) cpuEst += 5;
-        cpuEst = min(cpuEst, (uint32_t)100);
-
-        cpu["usage_percent"]     = cpuEst;
-        cpu["sentences_per_sec"] = (uint32_t)(sentPerSec * 10) / 10.0f;
-        cpu["method"]            = "composite";
-
-        lastSentenceCount = currentSentences;
-        lastHeapFree      = currentHeapFree;
-        lastCheckTime     = now;
-    } else {
-        if (lastCheckTime == 0) {
-            lastCheckTime     = now;
-            lastSentenceCount = currentSentences;
-            lastHeapFree      = currentHeapFree;
-        }
-        cpu["usage_percent"]     = 0;
-        cpu["sentences_per_sec"] = 0;
-        cpu["method"]            = "initializing";
+    // Current number of messages waiting in the queue
+    UBaseType_t queueWaiting = 0;
+    if (nmeaQueue != NULL) {
+        queueWaiting = uxQueueMessagesWaiting(nmeaQueue);
     }
+    nmeaBuffer["queue_waiting"]  = (uint32_t)queueWaiting;
+    // Load as a percentage of queue capacity (0–100)
+    nmeaBuffer["queue_load_pct"] = (NMEA_QUEUE_SIZE > 0)
+        ? (uint8_t)((queueWaiting * 100) / NMEA_QUEUE_SIZE)
+        : 0;
 
     JsonObject ble = doc["ble"].to<JsonObject>();
     ble["enabled"]           = bleManager->isEnabled();
     ble["advertising"]       = bleManager->isAdvertising();
     ble["connected_devices"] = bleManager->getConnectedDevices();
+
+    String deviceName = bleManager->getConfig().device_name;
+    ble["device_name"] = deviceName;
 
     String response;
     serializeJson(doc, response);
