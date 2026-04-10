@@ -7,6 +7,9 @@
 #include "polar.h"
 #include "functions.h"
 #include <ArduinoJson.h>
+#include <Update.h>
+#include <esp_ota_ops.h>
+#include <esp_partition.h>
 
 // External variables from main.cpp for monitoring
 extern volatile uint32_t g_nmeaQueueOverflows;
@@ -19,7 +22,9 @@ WebServer::WebServer(ConfigManager* cm, WiFiManager* wm, TCPServer* tcp, UARTHan
                      SeatalkManager* stMgr)
     : configManager(cm), wifiManager(wm), tcpServer(tcp), uartHandler(uart),
       nmeaParser(nmea), boatState(bs), bleManager(ble),
-      seatalkManager(stMgr), running(false) {
+      seatalkManager(stMgr), running(false),
+      otaInProgress(false), otaSuccess(false),
+      otaExpectedSize(0), otaBytesWritten(0) {
     server = new AsyncWebServer(WEB_SERVER_PORT);
     wsNMEA = new AsyncWebSocket("/ws/nmea");
 }
@@ -28,7 +33,6 @@ WebServer::WebServer(ConfigManager* cm, WiFiManager* wm, TCPServer* tcp, UARTHan
 
 void WebServer::init() {
     serialPrintf("[Web] Initializing Web Server\n");
-    serialPrintf("[Web] Using already-mounted LittleFS\n");
 
     wsNMEA->onEvent([this](AsyncWebSocket* server, AsyncWebSocketClient* client,
                            AwsEventType type, void* arg, uint8_t* data, size_t len) {
@@ -48,29 +52,7 @@ void WebServer::start() {
 
     serialPrintf("[Web] ═══════════════════════════════════════\n");
     serialPrintf("[Web] Server started on port 80\n");
-    serialPrintf("[Web] Available endpoints:\n");
-    serialPrintf("[Web]   Configuration:\n");
-    serialPrintf("[Web]   - GET  /api/config/wifi\n");
-    serialPrintf("[Web]   - POST /api/config/wifi\n");
-    serialPrintf("[Web]   - GET  /api/config/serial\n");
-    serialPrintf("[Web]   - POST /api/config/serial\n");
-    serialPrintf("[Web]   - GET  /api/status\n");
-    serialPrintf("[Web]   - POST /api/restart\n");
-    serialPrintf("[Web]   - POST /api/wifi/scan\n");
-    serialPrintf("[Web]   - GET  /api/wifi/scan\n");
-    serialPrintf("[Web]   Polar:\n");
-    serialPrintf("[Web]   - GET  /api/polar/status\n");
-    serialPrintf("[Web]   - POST /api/polar/upload\n");
-    serialPrintf("[Web]   Boat Data:\n");
-    serialPrintf("[Web]   - GET  /api/boat/navigation\n");
-    serialPrintf("[Web]   - GET  /api/boat/wind\n");
-    serialPrintf("[Web]   - GET  /api/boat/ais\n");
-    serialPrintf("[Web]   - GET  /api/boat/state\n");
-    serialPrintf("[Web]   - GET  /api/boat/performance\n");
-    serialPrintf("[Web]   Autopilot:\n");
-    serialPrintf("[Web]   - POST /api/autopilot/command\n");
-    serialPrintf("[Web]   WebSocket:\n");
-    serialPrintf("[Web]   - WS   /ws/nmea\n");
+    serialPrintf("[Web] OTA + Storage endpoints registered\n");
     serialPrintf("[Web] ═══════════════════════════════════════\n");
 }
 
@@ -186,24 +168,54 @@ void WebServer::registerRoutes() {
         }
     );
 
+    // ── OTA Update ─────────────────────────────────────────────
+    server->on("/api/ota/status", HTTP_GET, [this](AsyncWebServerRequest* request) {
+        this->handleGetOTAStatus(request);
+    });
+
+    server->on("/api/ota/upload", HTTP_POST,
+        [this](AsyncWebServerRequest* request) {
+            this->handleOTAUploadComplete(request);
+        },
+        [this](AsyncWebServerRequest* request, const String& filename,
+               size_t index, uint8_t* data, size_t len, bool final) {
+            this->handleOTAUpload(request, filename, index, data, len, final);
+        }
+    );
+
+    // ── Storage (LittleFS) ─────────────────────────────────────
+    server->on("/api/storage/info", HTTP_GET, [this](AsyncWebServerRequest* request) {
+        this->handleGetStorageInfo(request);
+    });
+
+    server->on("/api/storage/files", HTTP_GET, [this](AsyncWebServerRequest* request) {
+        this->handleListFiles(request);
+    });
+
+    server->on("/api/storage/delete", HTTP_DELETE,
+        [this](AsyncWebServerRequest* request) {
+            this->handleDeleteFile(request);
+        }
+    );
+
+    server->on("/api/storage/format", HTTP_POST,
+        [this](AsyncWebServerRequest* request) {
+            this->handleFormatStorage(request);
+        }
+    );
+
     serialPrintf("[Web]   ✓ All API routes registered\n");
 
     // ── SPA fallback routes ────────────────────────────────────
-    server->on("/instruments", HTTP_GET, [](AsyncWebServerRequest* request) {
-        request->send(LittleFS, "/www/index.html", "text/html");
-    });
-    server->on("/autopilot", HTTP_GET, [](AsyncWebServerRequest* request) {
-        request->send(LittleFS, "/www/index.html", "text/html");
-    });
-    server->on("/performance", HTTP_GET, [](AsyncWebServerRequest* request) {
-        request->send(LittleFS, "/www/index.html", "text/html");
-    });
-    server->on("/config", HTTP_GET, [](AsyncWebServerRequest* request) {
-        request->send(LittleFS, "/www/index.html", "text/html");
-    });
-    server->on("/nmea", HTTP_GET, [](AsyncWebServerRequest* request) {
-        request->send(LittleFS, "/www/index.html", "text/html");
-    });
+    const char* spaRoutes[] = {
+        "/instruments", "/autopilot", "/performance",
+        "/config", "/nmea", nullptr
+    };
+    for (int i = 0; spaRoutes[i] != nullptr; i++) {
+        server->on(spaRoutes[i], HTTP_GET, [](AsyncWebServerRequest* request) {
+            request->send(LittleFS, "/www/index.html", "text/html");
+        });
+    }
 
     // ── Static files ───────────────────────────────────────────
 #ifdef WEB_UI_PROGMEM
@@ -259,6 +271,257 @@ void WebServer::broadcastNMEA(const char* sentence) {
     lastSend = now;
 
     wsNMEA->textAll(sentence);
+}
+
+// ── OTA Handlers ─────────────────────────────────────────────────────────────
+
+void WebServer::handleGetOTAStatus(AsyncWebServerRequest* request) {
+    JsonDocument doc;
+
+    // Running partition info
+    const esp_partition_t* running = esp_ota_get_running_partition();
+    const esp_partition_t* next    = esp_ota_get_next_update_partition(NULL);
+
+    doc["running_partition"] = running ? running->label : "unknown";
+    doc["next_partition"]    = next    ? next->label    : "unknown";
+
+    // App description of the running firmware
+    esp_app_desc_t appDesc;
+    if (esp_ota_get_partition_description(running, &appDesc) == ESP_OK) {
+        doc["version"]       = appDesc.version;
+        doc["compile_date"]  = appDesc.date;
+        doc["compile_time"]  = appDesc.time;
+        doc["idf_version"]   = appDesc.idf_ver;
+    }
+
+    // OTA partition sizes
+    if (running) {
+        doc["partition_size"] = (uint32_t)running->size;
+    }
+
+    doc["ota_in_progress"]  = otaInProgress;
+    doc["last_ota_success"] = otaSuccess;
+    if (!otaErrorMessage.isEmpty()) {
+        doc["last_ota_error"] = otaErrorMessage;
+    }
+
+    String response;
+    serializeJson(doc, response);
+    request->send(200, "application/json", response);
+}
+
+void WebServer::handleOTAUpload(AsyncWebServerRequest* request, const String& filename,
+                                 size_t index, uint8_t* data, size_t len, bool final) {
+    if (index == 0) {
+        // ── Begin OTA ──────────────────────────────────────────
+        serialPrintf("[OTA] Upload started: %s  total=%u B\n",
+                      filename.c_str(), request->contentLength());
+
+        otaInProgress  = true;
+        otaSuccess     = false;
+        otaErrorMessage = "";
+        otaExpectedSize = request->contentLength();
+        otaBytesWritten = 0;
+
+        // Determine update partition
+        const esp_partition_t* updatePart = esp_ota_get_next_update_partition(NULL);
+        if (!updatePart) {
+            otaErrorMessage = "No OTA partition available";
+            serialPrintf("[OTA] ✗ %s\n", otaErrorMessage.c_str());
+            return;
+        }
+
+        serialPrintf("[OTA] Writing to partition: %s (offset=0x%x, size=%u B)\n",
+                      updatePart->label,
+                      updatePart->address,
+                      (uint32_t)updatePart->size);
+
+        // Check firmware fits
+        if (otaExpectedSize > 0 && otaExpectedSize > updatePart->size) {
+            otaErrorMessage = "Firmware too large for OTA partition";
+            serialPrintf("[OTA] ✗ %s\n", otaErrorMessage.c_str());
+            Update.abort();
+            return;
+        }
+
+        if (!Update.begin(otaExpectedSize > 0 ? otaExpectedSize : UPDATE_SIZE_UNKNOWN,
+                          U_FLASH)) {
+            otaErrorMessage = Update.errorString();
+            serialPrintf("[OTA] ✗ Update.begin failed: %s\n", otaErrorMessage.c_str());
+            return;
+        }
+
+        serialPrintf("[OTA] Update.begin() OK\n");
+    }
+
+    // ── Write chunk ────────────────────────────────────────────
+    if (otaInProgress && !otaErrorMessage.isEmpty()) {
+        // A previous chunk already failed — skip the rest
+        return;
+    }
+
+    if (Update.isRunning() && len > 0) {
+        size_t written = Update.write(data, len);
+        otaBytesWritten += written;
+
+        if (written != len) {
+            otaErrorMessage = Update.errorString();
+            serialPrintf("[OTA] ✗ Write error at byte %u: %s\n",
+                          (uint32_t)index, otaErrorMessage.c_str());
+            Update.abort();
+            otaInProgress = false;
+            return;
+        }
+    }
+
+    // ── Finalise ───────────────────────────────────────────────
+    if (final) {
+        if (!Update.isRunning()) {
+            // Was never started (e.g. partition error above)
+            if (otaErrorMessage.isEmpty()) {
+                otaErrorMessage = "Update stream was not started";
+            }
+            otaInProgress = false;
+            return;
+        }
+
+        if (Update.end(true)) {
+            otaSuccess    = true;
+            otaInProgress = false;
+            serialPrintf("[OTA] ✓ Update complete — %u bytes written\n",
+                          (uint32_t)otaBytesWritten);
+            serialPrintf("[OTA] Reboot required to activate new firmware\n");
+        } else {
+            otaErrorMessage = Update.errorString();
+            otaInProgress   = false;
+            serialPrintf("[OTA] ✗ Update.end() failed: %s\n", otaErrorMessage.c_str());
+        }
+    }
+}
+
+void WebServer::handleOTAUploadComplete(AsyncWebServerRequest* request) {
+    // This handler fires after the multipart upload is fully received.
+    if (otaSuccess) {
+        request->send(200, "application/json",
+                      "{\"success\":true,"
+                      "\"message\":\"Firmware flashed successfully. Rebooting in 3 seconds...\"}");
+        serialPrintf("[OTA] Scheduling reboot in 3 s\n");
+
+        // Reboot after a short delay so the HTTP response has time to be sent
+        xTaskCreate([](void*) {
+            vTaskDelay(pdMS_TO_TICKS(3000));
+            esp_restart();
+        }, "OTA_reboot", 2048, NULL, 1, NULL);
+
+    } else {
+        JsonDocument doc;
+        doc["success"] = false;
+        doc["error"]   = otaErrorMessage.isEmpty()
+                         ? "Unknown OTA error" : otaErrorMessage;
+        String body;
+        serializeJson(doc, body);
+        request->send(500, "application/json", body);
+    }
+}
+
+// ── Storage Handlers ──────────────────────────────────────────────────────────
+
+void WebServer::handleGetStorageInfo(AsyncWebServerRequest* request) {
+    JsonDocument doc;
+
+    size_t total = LittleFS.totalBytes();
+    size_t used  = LittleFS.usedBytes();
+
+    doc["total_bytes"] = (uint32_t)total;
+    doc["used_bytes"]  = (uint32_t)used;
+    doc["free_bytes"]  = (uint32_t)(total - used);
+    doc["used_pct"]    = total > 0 ? (uint8_t)((used * 100) / total) : 0;
+
+    String response;
+    serializeJson(doc, response);
+    request->send(200, "application/json", response);
+}
+
+void WebServer::handleListFiles(AsyncWebServerRequest* request) {
+    JsonDocument doc;
+    JsonArray files = doc["files"].to<JsonArray>();
+
+    // Recursive helper — list all files under a directory
+    std::function<void(const char*)> listDir = [&](const char* path) {
+        File dir = LittleFS.open(path);
+        if (!dir || !dir.isDirectory()) return;
+
+        File entry = dir.openNextFile();
+        while (entry) {
+            if (entry.isDirectory()) {
+                listDir(entry.path());
+            } else {
+                JsonObject f = files.add<JsonObject>();
+                f["path"] = String(entry.path());
+                f["size"] = (uint32_t)entry.size();
+            }
+            entry = dir.openNextFile();
+        }
+    };
+
+    listDir("/");
+
+    doc["count"] = files.size();
+
+    String response;
+    serializeJson(doc, response);
+    request->send(200, "application/json", response);
+}
+
+void WebServer::handleDeleteFile(AsyncWebServerRequest* request) {
+    if (!request->hasParam("path")) {
+        request->send(400, "application/json",
+                      "{\"error\":\"Missing 'path' parameter\"}");
+        return;
+    }
+
+    String path = request->getParam("path")->value();
+
+    // Basic safety: do not allow deleting directories or escaping root
+    if (path.isEmpty() || path == "/" || path.indexOf("..") >= 0) {
+        request->send(400, "application/json",
+                      "{\"error\":\"Invalid path\"}");
+        return;
+    }
+
+    if (!LittleFS.exists(path)) {
+        request->send(404, "application/json",
+                      "{\"error\":\"File not found\"}");
+        return;
+    }
+
+    if (LittleFS.remove(path)) {
+        serialPrintf("[Storage] Deleted: %s\n", path.c_str());
+        request->send(200, "application/json",
+                      "{\"success\":true,\"message\":\"File deleted\"}");
+    } else {
+        request->send(500, "application/json",
+                      "{\"error\":\"Failed to delete file\"}");
+    }
+}
+
+void WebServer::handleFormatStorage(AsyncWebServerRequest* request) {
+    serialPrintf("[Storage] Formatting LittleFS...\n");
+
+    // Format runs synchronously and takes a few hundred ms
+    bool ok = LittleFS.format();
+
+    if (ok) {
+        // Re-mount after format
+        LittleFS.begin(false, "/littlefs", 10, "littlefs");
+        serialPrintf("[Storage] ✓ LittleFS formatted and remounted\n");
+        request->send(200, "application/json",
+                      "{\"success\":true,\"message\":\"Storage formatted successfully\"}");
+    } else {
+        serialPrintf("[Storage] ✗ Format failed\n");
+        request->send(500, "application/json",
+                      "{\"error\":\"Format failed\"}");
+    }
 }
 
 // ── Configuration handlers ────────────────────────────────────────────────────
@@ -617,14 +880,6 @@ void WebServer::handleUploadPolar(AsyncWebServerRequest* request,
 
 // ── Autopilot handler ─────────────────────────────────────────────────────────
 
-/**
- * POST /api/autopilot/command
- *
- * Body: { "command": "<cmd>" }
- *
- * Delegates entirely to SeatalkManager::sendAutopilotCommand().
- * No datagram knowledge lives here anymore.
- */
 void WebServer::handlePostAutopilotCommand(AsyncWebServerRequest* request,
                                             uint8_t* data, size_t len) {
     JsonDocument doc;
@@ -688,35 +943,23 @@ void WebServer::handleGetNavigation(AsyncWebServerRequest* request) {
         position["age"]       = nullptr;
     }
 
-    if (gps.sog.valid && !gps.sog.isStale()) {
-        doc["sog"]["value"] = gps.sog.value;
-        doc["sog"]["unit"]  = gps.sog.unit;
-        doc["sog"]["age"]   = (millis() - gps.sog.timestamp) / 1000.0;
-    } else { doc["sog"]["value"] = nullptr; doc["sog"]["unit"] = "kn"; doc["sog"]["age"] = nullptr; }
+    auto addDP = [&](const char* key, const DataPoint& dp, const char* unit) {
+        if (dp.valid && !dp.isStale()) {
+            doc[key]["value"] = dp.value;
+            doc[key]["unit"]  = dp.unit;
+            doc[key]["age"]   = (millis() - dp.timestamp) / 1000.0;
+        } else {
+            doc[key]["value"] = nullptr;
+            doc[key]["unit"]  = unit;
+            doc[key]["age"]   = nullptr;
+        }
+    };
 
-    if (gps.cog.valid && !gps.cog.isStale()) {
-        doc["cog"]["value"] = gps.cog.value;
-        doc["cog"]["unit"]  = gps.cog.unit;
-        doc["cog"]["age"]   = (millis() - gps.cog.timestamp) / 1000.0;
-    } else { doc["cog"]["value"] = nullptr; doc["cog"]["unit"] = "deg"; doc["cog"]["age"] = nullptr; }
-
-    if (speed.stw.valid && !speed.stw.isStale()) {
-        doc["stw"]["value"] = speed.stw.value;
-        doc["stw"]["unit"]  = speed.stw.unit;
-        doc["stw"]["age"]   = (millis() - speed.stw.timestamp) / 1000.0;
-    } else { doc["stw"]["value"] = nullptr; doc["stw"]["unit"] = "kn"; doc["stw"]["age"] = nullptr; }
-
-    if (heading.true_heading.valid && !heading.true_heading.isStale()) {
-        doc["heading"]["value"] = heading.true_heading.value;
-        doc["heading"]["unit"]  = heading.true_heading.unit;
-        doc["heading"]["age"]   = (millis() - heading.true_heading.timestamp) / 1000.0;
-    } else { doc["heading"]["value"] = nullptr; doc["heading"]["unit"] = "deg"; doc["heading"]["age"] = nullptr; }
-
-    if (depth.below_transducer.valid && !depth.below_transducer.isStale()) {
-        doc["depth"]["value"] = depth.below_transducer.value;
-        doc["depth"]["unit"]  = depth.below_transducer.unit;
-        doc["depth"]["age"]   = (millis() - depth.below_transducer.timestamp) / 1000.0;
-    } else { doc["depth"]["value"] = nullptr; doc["depth"]["unit"] = "m"; doc["depth"]["age"] = nullptr; }
+    addDP("sog",     gps.sog,              "kn");
+    addDP("cog",     gps.cog,              "deg");
+    addDP("stw",     speed.stw,            "kn");
+    addDP("heading", heading.true_heading, "deg");
+    addDP("depth",   depth.below_transducer, "m");
 
     JsonObject quality = doc["gps_quality"].to<JsonObject>();
     if (gps.satellites.valid  && !gps.satellites.isStale())  quality["satellites"]  = (int)gps.satellites.value;  else quality["satellites"]  = nullptr;

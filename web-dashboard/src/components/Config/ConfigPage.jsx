@@ -1,13 +1,16 @@
 import { useState } from 'react';
-import { WiFiConfig } from './WiFiConfig';
-import { SerialConfig } from './SerialConfig';
-import { BLEConfig } from './BLEConfig';
-
+import { WiFiConfig }      from './WiFiConfig';
+import { SerialConfig }    from './SerialConfig';
+import { BLEConfig }       from './BLEConfig';
+import { OTAUpdate }       from './OTAUpdate';
+import { StorageManager }  from './StorageManager';
 
 const TABS = [
-  { id: 'wifi',    label: '📶 WiFi' },
-  { id: 'serial',  label: '🔌 Serial' },
+  { id: 'wifi',    label: '📶 WiFi'    },
+  { id: 'serial',  label: '🔌 Serial'  },
   { id: 'ble',     label: '🔵 Bluetooth' },
+  { id: 'ota',     label: '⬆ Firmware' },
+  { id: 'storage', label: '💾 Storage'  },
 ];
 
 export function ConfigPage() {
@@ -30,9 +33,11 @@ export function ConfigPage() {
       </div>
 
       <div className="tab-content">
-        {activeTab === 'wifi'   && <WiFiConfig />}
-        {activeTab === 'serial' && <SerialConfig />}
-        {activeTab === 'ble'    && <BLEConfig />}
+        {activeTab === 'wifi'    && <WiFiConfig />}
+        {activeTab === 'serial'  && <SerialConfig />}
+        {activeTab === 'ble'     && <BLEConfig />}
+        {activeTab === 'ota'     && <OTAUpdate />}
+        {activeTab === 'storage' && <StorageManager />}
       </div>
     </div>
   );

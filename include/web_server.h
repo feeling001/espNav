@@ -4,10 +4,11 @@
 #include <ESPAsyncWebServer.h>
 #include <AsyncWebSocket.h>
 #include <LittleFS.h>
+#include <Update.h>
 #include "config_manager.h"
 #include "wifi_manager.h"
 #include "ble_manager.h"
-#include "seatalk_manager.h"   // ← replaced seatalk_rmt.h
+#include "seatalk_manager.h"
 
 // Forward declarations
 class TCPServer;
@@ -24,7 +25,7 @@ class WebServer {
 public:
     WebServer(ConfigManager* cm, WiFiManager* wm, TCPServer* tcp, UARTHandler* uart,
               NMEAParser* nmea, BoatState* bs, BLEManager* ble,
-              SeatalkManager* stMgr);   // ← SeatalkManager instead of SeatalkRMT
+              SeatalkManager* stMgr);
 
     void init();
     void start();
@@ -34,7 +35,7 @@ public:
 private:
     void registerRoutes();
 
-    // REST API handlers - Configuration
+    // ── Configuration handlers ────────────────────────────────────────────────
     void handleGetWiFiConfig(AsyncWebServerRequest* request);
     void handlePostWiFiConfig(AsyncWebServerRequest* request, uint8_t* data, size_t len);
     void handleGetSerialConfig(AsyncWebServerRequest* request);
@@ -42,34 +43,46 @@ private:
     void handleGetStatus(AsyncWebServerRequest* request);
     void handleRestart(AsyncWebServerRequest* request);
 
-    // BLE handlers
+    // ── BLE handlers ──────────────────────────────────────────────────────────
     void handleGetBLEConfig(AsyncWebServerRequest* request);
     void handlePostBLEConfig(AsyncWebServerRequest* request, uint8_t* data, size_t len);
 
-    // Polar handlers
+    // ── Polar handlers ────────────────────────────────────────────────────────
     void handleGetPolarStatus(AsyncWebServerRequest* request);
     void handleUploadPolar(AsyncWebServerRequest* request, const String& filename,
                            size_t index, uint8_t* data, size_t len, bool final);
 
-    // Boat data handlers
+    // ── Boat data handlers ────────────────────────────────────────────────────
     void handleGetNavigation(AsyncWebServerRequest* request);
     void handleGetWind(AsyncWebServerRequest* request);
     void handleGetAIS(AsyncWebServerRequest* request);
     void handleGetBoatState(AsyncWebServerRequest* request);
     void handleGetPerformance(AsyncWebServerRequest* request);
 
-    // WiFi scan handlers
+    // ── WiFi scan handlers ────────────────────────────────────────────────────
     void handleStartWiFiScan(AsyncWebServerRequest* request);
     void handleGetWiFiScanResults(AsyncWebServerRequest* request);
 
-    // Autopilot handler — now delegates to SeatalkManager
+    // ── Autopilot handler ─────────────────────────────────────────────────────
     void handlePostAutopilotCommand(AsyncWebServerRequest* request, uint8_t* data, size_t len);
 
-    // WebSocket handlers
-    void handleWebSocketEvent(AsyncWebSocket* server, AsyncWebSocketClient* client,
-                             AwsEventType type, void* arg, uint8_t* data, size_t len);
+    // ── OTA handlers ──────────────────────────────────────────────────────────
+    void handleGetOTAStatus(AsyncWebServerRequest* request);
+    void handleOTAUpload(AsyncWebServerRequest* request, const String& filename,
+                         size_t index, uint8_t* data, size_t len, bool final);
+    void handleOTAUploadComplete(AsyncWebServerRequest* request);
 
-    // Members
+    // ── Storage (LittleFS) handlers ───────────────────────────────────────────
+    void handleGetStorageInfo(AsyncWebServerRequest* request);
+    void handleListFiles(AsyncWebServerRequest* request);
+    void handleDeleteFile(AsyncWebServerRequest* request);
+    void handleFormatStorage(AsyncWebServerRequest* request);
+
+    // ── WebSocket handlers ────────────────────────────────────────────────────
+    void handleWebSocketEvent(AsyncWebSocket* server, AsyncWebSocketClient* client,
+                              AwsEventType type, void* arg, uint8_t* data, size_t len);
+
+    // ── Members ───────────────────────────────────────────────────────────────
     AsyncWebServer* server;
     AsyncWebSocket* wsNMEA;
     ConfigManager*  configManager;
@@ -79,8 +92,15 @@ private:
     NMEAParser*     nmeaParser;
     BoatState*      boatState;
     BLEManager*     bleManager;
-    SeatalkManager* seatalkManager;   // ← was SeatalkRMT*
+    SeatalkManager* seatalkManager;
     bool            running;
+
+    // ── OTA state ─────────────────────────────────────────────────────────────
+    bool     otaInProgress;
+    bool     otaSuccess;
+    String   otaErrorMessage;
+    size_t   otaExpectedSize;
+    size_t   otaBytesWritten;
 };
 
 #endif // WEB_SERVER_H

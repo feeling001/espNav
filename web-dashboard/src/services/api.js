@@ -79,26 +79,100 @@ export const api = {
     return response.json();
   },
 
-  // ── Autopilot ─────────────────────────────────────────────────
+  // ── OTA Update ────────────────────────────────────────────────
 
   /**
-   * Send an autopilot command over the SeaTalk1 bus.
+   * Returns current firmware info and OTA partition status.
+   * @returns {Promise<{running_partition, next_partition, version, compile_date,
+   *                    compile_time, idf_version, partition_size}>}
+   */
+  async getOTAStatus() {
+    const response = await fetch(`${API_BASE}/ota/status`);
+    if (!response.ok) throw new Error('Failed to get OTA status');
+    return response.json();
+  },
+
+  /**
+   * Upload a firmware binary and flash it to the next OTA partition.
+   * Uses XHR so that upload progress events are available.
    *
-   * Accepted command strings:
-   *   'standby'      — Standby mode
-   *   'auto'         — Auto (compass) mode
-   *   'wind'         — Wind vane mode
-   *   'track'        — Track (GPS) mode
-   *   'adjust-1'     — Course −1°
-   *   'adjust-10'    — Course −10°
-   *   'adjust+1'     — Course +1°
-   *   'adjust+10'    — Course +10°
-   *   'tack-port'    — Port tack (wind mode)
-   *   'tack-starboard' — Starboard tack (wind mode)
-   *
-   * @param {string} command
+   * @param {File}     file         The firmware .bin file.
+   * @param {Function} onProgress   Called with (percent: number) during upload.
    * @returns {Promise<{success: boolean, message?: string, error?: string}>}
    */
+  async uploadFirmware(file, onProgress) {
+    return new Promise((resolve, reject) => {
+      const xhr  = new XMLHttpRequest();
+      const form = new FormData();
+      form.append('firmware', file, file.name);
+
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable && onProgress) {
+          onProgress(Math.round((e.loaded / e.total) * 100));
+        }
+      };
+
+      xhr.onload = () => {
+        try {
+          resolve(JSON.parse(xhr.responseText));
+        } catch {
+          resolve({ success: xhr.status < 300 });
+        }
+      };
+
+      xhr.onerror = () => reject(new Error('Upload failed'));
+
+      xhr.open('POST', `${API_BASE}/ota/upload`);
+      xhr.send(form);
+    });
+  },
+
+  // ── Storage (LittleFS) ────────────────────────────────────────
+
+  /**
+   * Returns filesystem usage statistics.
+   * @returns {Promise<{total_bytes, used_bytes, free_bytes, used_pct}>}
+   */
+  async getStorageInfo() {
+    const response = await fetch(`${API_BASE}/storage/info`);
+    if (!response.ok) throw new Error('Failed to get storage info');
+    return response.json();
+  },
+
+  /**
+   * Returns the list of all files on LittleFS.
+   * @returns {Promise<{count: number, files: Array<{path: string, size: number}>}>}
+   */
+  async listStorageFiles() {
+    const response = await fetch(`${API_BASE}/storage/files`);
+    if (!response.ok) throw new Error('Failed to list storage files');
+    return response.json();
+  },
+
+  /**
+   * Delete a single file by path.
+   * @param {string} path  Full file path, e.g. "/polar.pol"
+   * @returns {Promise<{success: boolean, message?: string, error?: string}>}
+   */
+  async deleteStorageFile(path) {
+    const url = `${API_BASE}/storage/delete?path=${encodeURIComponent(path)}`;
+    const response = await fetch(url, { method: 'DELETE' });
+    if (!response.ok) throw new Error(`Failed to delete ${path}`);
+    return response.json();
+  },
+
+  /**
+   * Format the entire LittleFS partition.
+   * WARNING: destroys all stored files.
+   * @returns {Promise<{success: boolean, message?: string, error?: string}>}
+   */
+  async formatStorage() {
+    const response = await fetch(`${API_BASE}/storage/format`, { method: 'POST' });
+    if (!response.ok) throw new Error('Failed to format storage');
+    return response.json();
+  },
+
+  // ── Autopilot ─────────────────────────────────────────────────
   async sendAutopilotCommand(command) {
     const response = await fetch(`${API_BASE}/autopilot/command`, {
       method: 'POST',
@@ -110,22 +184,12 @@ export const api = {
   },
 
   // ── Polar / Performance ───────────────────────────────────────
-
-  /**
-   * Returns polar status: { loaded, file_size, tws_count, twa_count, tws_list, file_exists }
-   */
   async getPolarStatus() {
     const response = await fetch(`${API_BASE}/polar/status`);
     if (!response.ok) throw new Error('Failed to get polar status');
     return response.json();
   },
 
-  /**
-   * Upload a polar file (.pol / .csv) to the ESP32.
-   * @param {File}     file
-   * @param {function} onProgress  called with (percent: number) during upload
-   * @returns {Promise<{success, message?, error?}>}
-   */
   async uploadPolar(file, onProgress) {
     return new Promise((resolve, reject) => {
       const xhr  = new XMLHttpRequest();
@@ -153,16 +217,13 @@ export const api = {
     });
   },
 
-  /**
-   * Returns performance data: { vmg: {value, unit, age}, polar_pct: {...}, polar_loaded }
-   */
   async getPerformance() {
     const response = await fetch(`${API_BASE}/boat/performance`);
     if (!response.ok) throw new Error('Failed to get performance data');
     return response.json();
   },
 
-  // ── Boat data endpoints ───────────────────────────────────────
+  // ── Boat data ─────────────────────────────────────────────────
   async getBoatNavigation() {
     const response = await fetch(`${API_BASE}/boat/navigation`);
     if (!response.ok) throw new Error('Failed to get navigation data');
@@ -246,7 +307,6 @@ export const api = {
     if (!response.ok) throw new Error('Failed to get AIS data');
     const data = await response.json();
 
-    // Flatten proximity sub-object so Instruments.jsx can use target.distance etc.
     const targets = (data.targets || []).map(t => ({
       mmsi:     t.mmsi,
       name:     t.name,
