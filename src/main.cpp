@@ -1,3 +1,17 @@
+/**
+ * @file main.cpp
+ * @brief Marine Gateway — ESP32-S3 firmware entry point.
+ *
+ * Initialises all subsystems (WiFi, UART, SeaTalk, TCP, BLE, SD card, Web)
+ * and creates the FreeRTOS task set.
+ *
+ * Task layout:
+ *   Core 0 — uartReaderTask  (priority 5): reads NMEA from UART, parses, enqueues
+ *   Core 0 — seatalkTask     (priority 5): drives SeatalkRMT pump
+ *   Core 1 — processorTask   (priority 3): dequeues NMEA, broadcasts to TCP + WS
+ *   Core 1 — wifiTask        (priority 2): monitors WiFi state machine
+ */
+
 #include <Arduino.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -13,27 +27,30 @@
 #include "wifi_manager.h"
 #include "uart_handler.h"
 #include "seatalk_rmt.h"
-#include "seatalk_manager.h"   // ← new
+#include "seatalk_manager.h"
 #include "nmea_parser.h"
 #include "tcp_server.h"
 #include "web_server.h"
 #include "ble_manager.h"
 #include "polar.h"
+#include "sd_manager.h"
 
 // ── Global instances ──────────────────────────────────────────────────────────
-ConfigManager configManager;
-BoatState     boatState;
-WiFiManager   wifiManager;
-UARTHandler   uartHandler;
-SeatalkRMT    seatalkHandler;
-SeatalkManager seatalkManager(&seatalkHandler, &boatState);   // ← new
-TCPServer     tcpServer;
-BLEManager    bleManager;
-NMEAParser    nmeaParser(&boatState);
+ConfigManager  configManager;
+BoatState      boatState;
+WiFiManager    wifiManager;
+UARTHandler    uartHandler;
+SeatalkRMT     seatalkHandler;
+SeatalkManager seatalkManager(&seatalkHandler, &boatState);
+TCPServer      tcpServer;
+BLEManager     bleManager;
+NMEAParser     nmeaParser(&boatState);
+SDManager      sdManager;
 
-// WebServer now receives SeatalkManager instead of SeatalkRMT.
+// WebServer receives all subsystem pointers including SDManager.
 WebServer webServer(&configManager, &wifiManager, &tcpServer, &uartHandler,
-                    &nmeaParser, &boatState, &bleManager, &seatalkManager);
+                    &nmeaParser, &boatState, &bleManager, &seatalkManager,
+                    &sdManager);
 
 // Message queue for NMEA sentences
 QueueHandle_t nmeaQueue;
@@ -61,7 +78,7 @@ SemaphoreHandle_t g_serialMutex = nullptr;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-void listLittleFSFiles(const char* dirname, uint8_t levels) {
+static void listLittleFSFiles(const char* dirname, uint8_t levels) {
     serialPrintf("[LittleFS] Listing directory: %s\n", dirname);
 
     File root = LittleFS.open(dirname);
@@ -71,7 +88,7 @@ void listLittleFSFiles(const char* dirname, uint8_t levels) {
     }
 
     File file = root.openNextFile();
-    int fileCount = 0;
+    int    fileCount = 0;
     size_t totalSize = 0;
 
     while (file) {
@@ -104,7 +121,7 @@ void setup() {
     serialPrintf("   Dual-Core Optimized \n");
     serialPrintf("======================================\n");
 
-    // Mount LittleFS
+    // ── LittleFS ──────────────────────────────────────────────
     serialPrintf("[LittleFS] Initializing filesystem...\n");
     if (!LittleFS.begin(false, "/littlefs", 10, "littlefs")) {
         serialPrintf("[LittleFS] Mount failed, attempting format...\n");
@@ -127,14 +144,14 @@ void setup() {
 
     serialPrintf("\n======================================\n\n");
 
-    // Config manager
+    // ── Config manager ────────────────────────────────────────
     serialPrintf("[Config] Initializing...\n");
     configManager.init();
 
-    // Boat state
+    // ── Boat state ────────────────────────────────────────────
     boatState.init();
 
-    // Polar diagram
+    // ── Polar diagram ─────────────────────────────────────────
     serialPrintf("\n[Polar] Loading polar diagram...\n");
     if (LittleFS.exists(POLAR_FILE_PATH)) {
         if (boatState.polar.loadFromFile()) {
@@ -142,8 +159,6 @@ void setup() {
                           boatState.polar.twaCount(),
                           boatState.polar.twsCount(),
                           POLAR_FILE_PATH);
-            serialPrintf("[Polar]   Wind speeds: %s kn\n",
-                          boatState.polar.twsString().c_str());
         } else {
             serialPrintf("[Polar] ✗ Failed to parse polar file\n");
         }
@@ -151,49 +166,48 @@ void setup() {
         serialPrintf("[Polar] No polar file at %s\n", POLAR_FILE_PATH);
     }
 
-    // WiFi config
+    // ── SD card ───────────────────────────────────────────────
+    // Initialised before WiFi so that the SD status is available immediately
+    // in the web dashboard without waiting for network bring-up.
+    serialPrintf("\n[SD] Initializing SD card...\n");
+    sdManager.init();
+
+    // ── WiFi ──────────────────────────────────────────────────
     WiFiConfig wifiConfig;
     configManager.getWiFiConfig(wifiConfig);
-    serialPrintf("\n[Config] WiFi: %s (%s mode)(channel %d)(max clients %d)\n",
+    serialPrintf("\n[Config] WiFi: %s (%s mode)\n",
                   wifiConfig.ssid,
-                  wifiConfig.mode == 0 ? "Station" : "AP",
-                  wifiConfig.channel,
-                  wifiConfig.maxconn);
+                  wifiConfig.mode == 0 ? "Station" : "AP");
 
-    // Serial config
     UARTConfig serialConfig;
     configManager.getSerialConfig(serialConfig);
     serialPrintf("[Config] UART: %u baud\n", serialConfig.baudRate);
 
-    // BLE config
     BLEConfigData bleConfig;
     configManager.getBLEConfig(bleConfig);
     serialPrintf("[Config] BLE: %s (%s)\n",
                   bleConfig.device_name,
                   bleConfig.enabled ? "Enabled" : "Disabled");
 
-    // WiFi
     serialPrintf("\n[WiFi] Initializing...\n");
     wifiManager.init(wifiConfig);
     wifiManager.start();
 
-    // UART
+    // ── UART ──────────────────────────────────────────────────
     serialPrintf("\n[UART] Initializing...\n");
     uartHandler.init(serialConfig);
     uartHandler.start();
 
-    // SeaTalk RMT low-level init
+    // ── SeaTalk ───────────────────────────────────────────────
     serialPrintf("\n[SeaTalk] Initializing RMT...\n");
     seatalkHandler.init(ST1_RX_PIN, ST1_TX_PIN, ST1_RX_CHANNEL, ST1_TX_CHANNEL);
-    // SeatalkManager was constructed at global scope with pointers to
-    // seatalkHandler and boatState — nothing extra to init here.
     serialPrintf("[SeaTalk] ✓ SeatalkManager ready\n");
 
-    // TCP server
+    // ── TCP server ────────────────────────────────────────────
     serialPrintf("\n[TCP] Initializing...\n");
     tcpServer.init(TCP_PORT);
 
-    // BLE Manager — pass SeatalkManager so autopilot commands from watch work
+    // ── BLE Manager ───────────────────────────────────────────
     serialPrintf("\n[BLE] Initializing...\n");
     BLEConfig bleManagerConfig;
     bleManagerConfig.enabled = bleConfig.enabled;
@@ -201,17 +215,17 @@ void setup() {
             sizeof(bleManagerConfig.device_name) - 1);
     strncpy(bleManagerConfig.pin_code, bleConfig.pin_code,
             sizeof(bleManagerConfig.pin_code) - 1);
-    bleManager.init(bleManagerConfig, &boatState, &seatalkManager);   // ← pass seatalkManager
+    bleManager.init(bleManagerConfig, &boatState, &seatalkManager);
 
     if (bleConfig.enabled) {
         bleManager.start();
     }
 
-    // Web server
+    // ── Web server ────────────────────────────────────────────
     serialPrintf("\n[Web] Initializing...\n");
     webServer.init();
 
-    // NMEA queue
+    // ── NMEA queue ────────────────────────────────────────────
     serialPrintf("\n[NMEA] Creating queue...\n");
     nmeaQueue = xQueueCreate(NMEA_QUEUE_SIZE, sizeof(NMEASentence));
     if (nmeaQueue == NULL) {
@@ -220,7 +234,7 @@ void setup() {
         serialPrintf("[NMEA] ✓ Queue created (size: %d)\n", NMEA_QUEUE_SIZE);
     }
 
-    // FreeRTOS tasks
+    // ── FreeRTOS tasks ────────────────────────────────────────
     serialPrintf("\n[Tasks] Creating dual-core FreeRTOS tasks...\n");
 
     BaseType_t readerResult    = xTaskCreatePinnedToCore(uartReaderTask, "UART_Reader", 4096, NULL, 5, &uartReaderTaskHandle, 0);
@@ -237,11 +251,10 @@ void setup() {
     if (wifiResult      == pdPASS) serialPrintf("[Tasks] ✓ WiFi task created (Core 1)\n");
     else                           serialPrintf("[Tasks] ❌ WiFi task failed\n");
 
-    // Wait for WiFi
+    // Wait for WiFi before starting servers
     serialPrintf("\n[WiFi] Waiting for connection...\n");
     delay(5000);
 
-    // Start servers
     serialPrintf("\n[TCP] Starting server...\n");
     tcpServer.start();
 
@@ -259,11 +272,19 @@ void setup() {
     } else {
         serialPrintf("WiFi not connected — check configuration\n");
     }
+
+    // Log SD card summary
+    serialPrintf("\n[SD] Status: %s\n", sdManager.isMounted() ? "Card mounted ✓" : "No card detected");
+    if (sdManager.isMounted()) {
+        SDStorageInfo sdInfo = sdManager.getStorageInfo();
+        serialPrintf("[SD] Type: %s  Total: %llu MB  Free: %llu MB\n",
+                      sdInfo.cardType.c_str(),
+                      (unsigned long long)(sdInfo.totalBytes / (1024ULL * 1024ULL)),
+                      (unsigned long long)(sdInfo.freeBytes  / (1024ULL * 1024ULL)));
+    }
 }
 
 // ── loop ──────────────────────────────────────────────────────────────────────
-// BLE autopilot commands are now dispatched directly by AutopilotCmdCallbacks
-// via SeatalkManager — no pending-command polling needed here.
 
 void loop() {
     vTaskDelay(pdMS_TO_TICKS(100));
@@ -314,7 +335,6 @@ void uartReaderTask(void* parameter) {
 }
 
 // ── CORE 0: SeaTalk Task ──────────────────────────────────────────────────────
-// Calls SeatalkManager::update() which drives SeatalkRMT::task() internally.
 
 void seatalkTask(void* parameter) {
     serialPrintf("[SeaTalk] Task started on Core 0\n");
@@ -353,7 +373,6 @@ void processorTask(void* parameter) {
             serialPrintf("[Processor]   invalid total : %u\n", nmeaParser.getInvalidSentences());
             serialPrintf("[Processor]   queue overflow: %u\n", (uint32_t)g_nmeaQueueOverflows);
             serialPrintf("[Processor]   free heap     : %u B\n", ESP.getFreeHeap());
-            serialPrintf("[Processor] ════════════════════\n");
             lastStatsTime     = millis();
             messagesProcessed = 0;
         }

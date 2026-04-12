@@ -11,20 +11,23 @@
  * Responsibilities:
  *   1. Translate semantic autopilot commands ("auto", "adjust+1", …) into
  *      SeaTalk1 datagrams and call SeatalkRMT::sendDatagram().
- *   2. Parse incoming SeaTalk1 frames (autopilot status, heading locked,
+ *   2. Translate extra utility commands ("lamp:0"…"lamp:3", "alarm-ack",
+ *      "beep") into their respective datagrams.
+ *   3. Parse incoming SeaTalk1 frames (autopilot status, heading locked,
  *      rudder angle …) and update BoatState accordingly.
  *
  * Usage:
  *   Instantiate once in main.cpp.  Pass a pointer to both WebServer and
- *   BLEManager so each can call sendAutopilotCommand() without duplicating
- *   the datagram logic.
+ *   BLEManager so each can call sendAutopilotCommand() / sendExtraCommand()
+ *   without duplicating the datagram logic.
  *
  * Thread safety:
- *   sendAutopilotCommand() can be called from different tasks/cores.
- *   A FreeRTOS mutex serialises access to SeatalkRMT::sendDatagram().
+ *   sendAutopilotCommand() and sendExtraCommand() can be called from
+ *   different tasks/cores.  A FreeRTOS mutex serialises access to
+ *   SeatalkRMT::sendDatagram().
  */
 
-// ── Accepted command strings ──────────────────────────────────────────────────
+// ── Accepted autopilot command strings ───────────────────────────────────────
 // "standby"        → disengage (ST4000+ key 0x02)
 // "auto"           → compass lock (0x01)
 // "wind"           → wind vane mode (0x23)
@@ -36,6 +39,14 @@
 // "tack-port"      → port tack (0x21)
 // "tack-starboard" → starboard tack (0x22)
 
+// ── Accepted extra command strings ───────────────────────────────────────────
+// "lamp:0"         → Set lamp intensity off     (datagram 30 00 00)
+// "lamp:1"         → Set lamp intensity level 1 (datagram 30 00 04)
+// "lamp:2"         → Set lamp intensity level 2 (datagram 30 00 08)
+// "lamp:3"         → Set lamp intensity level 3 (datagram 30 00 0C)
+// "alarm-ack"      → Acknowledge alarm (ST40 keystroke 68 41 15 00)
+// "beep"           → Trigger a key beep via Disp keystroke (86 21 04 FB)
+
 class SeatalkManager {
 public:
     /**
@@ -46,31 +57,49 @@ public:
     SeatalkManager(SeatalkRMT* rmt, BoatState* boatState = nullptr);
     ~SeatalkManager();
 
-    // ── Command dispatch ──────────────────────────────────────────────────────
+    // ── Autopilot command dispatch ────────────────────────────────────────────
 
     /**
      * @brief Send a semantic autopilot command over the SeaTalk1 bus.
      *
-     * @param command  One of the command strings listed above.
+     * @param command  One of the autopilot command strings listed above.
      * @return true on successful transmission, false on unknown command or
      *         transmission failure (collision after retries).
      */
     bool sendAutopilotCommand(const char* command);
+
+    // ── Extra command dispatch ────────────────────────────────────────────────
+
+    /**
+     * @brief Send a utility / instrument command over the SeaTalk1 bus.
+     *
+     * Supported commands:
+     *   "lamp:0"   — lamp off         (datagram 0x30 0x00 0x00)
+     *   "lamp:1"   — lamp level 1     (datagram 0x30 0x00 0x04)
+     *   "lamp:2"   — lamp level 2     (datagram 0x30 0x00 0x08)
+     *   "lamp:3"   — lamp level 3     (datagram 0x30 0x00 0x0C)
+     *   "alarm-ack"— acknowledge alarm (datagram 0x68 0x41 0x15 0x00)
+     *   "beep"     — key beep via Disp keystroke (datagram 0x86 0x21 0x04 0xFB)
+     *
+     * @param command  One of the extra command strings listed above.
+     * @return true on successful transmission, false on unknown command or
+     *         transmission failure.
+     */
+    bool sendExtraCommand(const char* command);
 
     // ── Incoming frame processing ─────────────────────────────────────────────
 
     /**
      * @brief Process pending bytes from SeatalkRMT and update BoatState.
      *
-     * Call this regularly from the SeaTalk FreeRTOS task (replaces the direct
-     * seatalkHandler.task() call).  Internally calls SeatalkRMT::task() then
-     * inspects any complete frame that was assembled.
+     * Call this regularly from the SeaTalk FreeRTOS task.  Internally calls
+     * SeatalkRMT::task() then inspects any complete frame that was assembled.
      */
     void update();
 
 private:
-    SeatalkRMT*  rmt;
-    BoatState*   boatState;
+    SeatalkRMT*       rmt;
+    BoatState*        boatState;
     SemaphoreHandle_t txMutex;
 
     // ── Low-level helpers ─────────────────────────────────────────────────────
@@ -81,6 +110,15 @@ private:
      * Datagram layout: 0x86  0x21  keyCode  (0xFF ^ keyCode)
      */
     bool sendCmd86(uint8_t keyCode);
+
+    /**
+     * @brief Send an arbitrary raw datagram, acquiring the TX mutex.
+     *
+     * @param buf   Datagram bytes (already fully formed).
+     * @param len   Number of bytes (3–18).
+     * @return true on successful transmission.
+     */
+    bool sendRaw(uint8_t* buf, uint8_t len);
 
     // ── Incoming frame parser ─────────────────────────────────────────────────
 

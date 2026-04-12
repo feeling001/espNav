@@ -2,7 +2,7 @@
 #include "functions.h"
 #include <math.h>
 
-// ── Command → key-code table (ST4000+, command 0x86, X=2) ────────────────────
+// ── Autopilot command → key-code table (ST4000+, command 0x86, X=2) ──────────
 // Reference: http://www.thomasknauf.de/rap/seatalk2.htm
 struct CmdEntry {
     const char* name;
@@ -21,6 +21,17 @@ static const CmdEntry CMD_TABLE[] = {
     { "tack-port",       0x21 },
     { "tack-starboard",  0x22 },
     { nullptr,           0x00 },   // sentinel
+};
+
+// ── Lamp intensity nibbles (datagram 0x30 0x00 0x0X) ─────────────────────────
+// X=0: off, X=4: L1, X=8: L2, X=C: L3
+// Reference: datagram 30  00  0X
+static const struct { const char* name; uint8_t nibble; } LAMP_TABLE[] = {
+    { "lamp:0", 0x00 },
+    { "lamp:1", 0x04 },
+    { "lamp:2", 0x08 },
+    { "lamp:3", 0x0C },
+    { nullptr,  0x00 },
 };
 
 // ── Constructor / Destructor ──────────────────────────────────────────────────
@@ -54,62 +65,125 @@ bool SeatalkManager::sendAutopilotCommand(const char* command) {
     }
 
     if (!found) {
-        serialPrintf("[ST1Mgr] Unknown command: %s\n", command);
+        serialPrintf("[ST1Mgr] Unknown autopilot command: %s\n", command);
         return false;
     }
 
-    serialPrintf("[ST1Mgr] → %s (0x%02X)\n", command, keyCode);
+    serialPrintf("[ST1Mgr] → autopilot %s (key=0x%02X)\n", command, keyCode);
     return sendCmd86(keyCode);
+}
+
+// ── Public: sendExtraCommand ──────────────────────────────────────────────────
+
+bool SeatalkManager::sendExtraCommand(const char* command) {
+    if (!command || command[0] == '\0') {
+        serialPrintf("[ST1Mgr] Empty extra command\n");
+        return false;
+    }
+
+    serialPrintf("[ST1Mgr] → extra command: %s\n", command);
+
+    // ── Lamp intensity: "lamp:0" … "lamp:3" ──────────────────────────────────
+    // Datagram 30  00  0X  (3 bytes)
+    // Ref: "30  00  0X  Set lamp Intensity; X=0: L0, X=4: L1, X=8: L2, X=C: L3"
+    for (int i = 0; LAMP_TABLE[i].name != nullptr; i++) {
+        if (strcmp(command, LAMP_TABLE[i].name) == 0) {
+            uint8_t buf[3] = { 0x30, 0x00, LAMP_TABLE[i].nibble };
+            serialPrintf("[ST1Mgr]   lamp datagram: 30 00 %02X\n", buf[2]);
+            return sendRaw(buf, 3);
+        }
+    }
+
+    // ── Alarm acknowledge ─────────────────────────────────────────────────────
+    // Datagram 68  41  15  00  (from ST40 Wind Instrument — generic acknowledge)
+    // Ref: "68  41  15  00  Alarm acknowledgment keystroke (from ST40 Wind Instrument)"
+    if (strcmp(command, "alarm-ack") == 0) {
+        uint8_t buf[4] = { 0x68, 0x41, 0x15, 0x00 };
+        serialPrintf("[ST1Mgr]   alarm-ack datagram: 68 41 15 00\n");
+        return sendRaw(buf, 4);
+    }
+
+    // ── Beep: trigger via "Disp" keystroke (0x04) ────────────────────────────
+    // The ST4000+ emits an audible beep on every valid keystroke reception.
+    // We send the "Disp/page" key (0x04) which produces a single beep without
+    // changing autopilot state.
+    // Datagram 86  21  04  FB  (command 0x86, X=2, key=0x04, checksum=0xFF^0x04)
+    // Ref: "X1  04  FB  disp (in display mode or page in auto chapter = advance)"
+    if (strcmp(command, "beep_on") == 0) {
+        serialPrintf("[ST1Mgr]   beep on datagram: A8  53  80 00 00 D3\n");
+        //return sendCmd86(0x04);
+        uint8_t buf[6] = {
+            0xA8,
+            0x53,
+            0x80,
+            0x00,
+            0x00,
+            0xD3
+            };
+        return sendRaw(buf, 6);
+    }
+
+    if (strcmp(command, "beep_off") == 0) {
+        serialPrintf("[ST1Mgr]   beep off datagram: A8  43  80 00 00 C3\n");
+        //return sendCmd86(0x04);
+        uint8_t buf[6] = {
+            0xA8,
+            0x43,
+            0x80,
+            0x00,
+            0x00,
+            0xC3
+            };
+        return sendRaw(buf, 6);
+    }
+
+    serialPrintf("[ST1Mgr] Unknown extra command: %s\n", command);
+    return false;
 }
 
 // ── Public: update ────────────────────────────────────────────────────────────
 
 void SeatalkManager::update() {
-    // Drive the RMT low-level reception.
-    // SeatalkRMT::task() assembles frames and calls handleframe() which currently
-    // just logs them.  To intercept assembled frames we rely on the fact that
-    // SeatalkRMT exposes the last assembled frame via public members _frame /
-    // _framelen — but that requires patching seatalk_rmt.h.
-    //
-    // For now we simply drive the RMT pump; full frame parsing can be wired in
-    // once SeatalkRMT exposes a callback or the frame buffer publicly.
     if (rmt) rmt->task();
 }
 
 // ── Private: sendCmd86 ────────────────────────────────────────────────────────
 
 bool SeatalkManager::sendCmd86(uint8_t keyCode) {
-    if (!rmt) {
-        serialPrintf("[ST1Mgr] No RMT — command dropped\n");
-        return false;
-    }
-
     uint8_t buf[4] = {
         0x86,
         0x21,
         keyCode,
         static_cast<uint8_t>(0xFF ^ keyCode)
     };
+    return sendRaw(buf, 4);
+}
+
+// ── Private: sendRaw ─────────────────────────────────────────────────────────
+
+bool SeatalkManager::sendRaw(uint8_t* buf, uint8_t len) {
+    if (!rmt) {
+        serialPrintf("[ST1Mgr] No RMT — datagram dropped\n");
+        return false;
+    }
 
     bool ok = false;
     if (xSemaphoreTake(txMutex, pdMS_TO_TICKS(200)) == pdTRUE) {
-        ok = rmt->sendDatagram(buf, sizeof(buf));
+        ok = rmt->sendDatagram(buf, len);
         xSemaphoreGive(txMutex);
     } else {
-        serialPrintf("[ST1Mgr] TX mutex timeout — command dropped\n");
+        serialPrintf("[ST1Mgr] TX mutex timeout — datagram dropped\n");
     }
 
     if (ok) {
-        serialPrintf("[ST1Mgr] ✓ cmd86 sent (key=0x%02X)\n", keyCode);
+        serialPrintf("[ST1Mgr] ✓ datagram sent (%u bytes)\n", len);
     } else {
-        serialPrintf("[ST1Mgr] ✗ cmd86 failed (key=0x%02X)\n", keyCode);
+        serialPrintf("[ST1Mgr] ✗ datagram failed (%u bytes)\n", len);
     }
     return ok;
 }
 
 // ── Private: parseFrame ───────────────────────────────────────────────────────
-// SeaTalk1 frame format: byte[0]=CMD, byte[1]=ATTR (upper nibble=X, lower=length-3),
-// byte[2..] = data bytes.
 
 void SeatalkManager::parseFrame(const uint8_t* frame, uint8_t len) {
     if (!boatState || !frame || len < 3) return;
@@ -119,14 +193,10 @@ void SeatalkManager::parseFrame(const uint8_t* frame, uint8_t len) {
     switch (cmd) {
 
         // ── 0x84: Autopilot heading, mode, status ─────────────────────────
-        // Format: 84  X6  VW  AP  AR  AM  xx  yy  MV  TH  AL
-        // (11-byte datagram, X=1 → len byte = 6, so total = 3+8=11 bytes)
         case 0x84: {
             if (len < 11) break;
 
-            // Autopilot mode byte (AM)
             uint8_t am = frame[5];
-            // Mode bits: bit0=standby, bit1=auto, bit2=wind, bit3=track
             const char* mode = "standby";
             if      (am & 0x08) mode = "track";
             else if (am & 0x04) mode = "wind";
@@ -134,28 +204,20 @@ void SeatalkManager::parseFrame(const uint8_t* frame, uint8_t len) {
 
             boatState->setAutopilotMode(String(mode));
 
-            // Target heading (TH) – bytes 9-10, 1/10 degree units
-            // TH = (byte9 & 0x03)<<8 | byte10   (in 1/10°, 0-359.9)
             uint16_t thRaw = ((uint16_t)(frame[9] & 0x03) << 8) | frame[10];
             float targetHeading = thRaw / 10.0f;
             boatState->setAutopilotHeadingTarget(targetHeading);
 
-            // Rudder angle (AR): signed, in degrees
             int8_t rudder = (int8_t)frame[4];
             boatState->setAutopilotRudderAngle((float)rudder);
 
-            // Status
             uint8_t ar = frame[3];
             bool offCourse = (ar & 0x10) != 0;
             boatState->setAutopilotStatus(offCourse ? String("alarm") : String("engaged"));
-
             break;
         }
 
         // ── 0x9C: Compass heading + rudder position ───────────────────────
-        // Format: 9C  X1  HH  HR  RR
-        // Heading = ((HH & 0x03)<<8 | HR) / 2  degrees
-        // Rudder  = (signed) (RR - 0x80) or similar vendor encoding
         case 0x9C: {
             if (len < 5) break;
 
@@ -165,15 +227,12 @@ void SeatalkManager::parseFrame(const uint8_t* frame, uint8_t len) {
                 boatState->setMagneticHeading(heading);
             }
 
-            // Rudder: frame[4] encodes signed rudder, 0x00=0°, positive=stbd
-            // Some AP versions encode as offset from 0x00 or 0x80; treat as signed
             int8_t rudder = (int8_t)frame[4];
             boatState->setAutopilotRudderAngle((float)rudder);
             break;
         }
 
         // ── 0x10: Speed Through Water ─────────────────────────────────────
-        // Format: 10  01  SS  SS  (SS = speed in 1/10 knot, 16-bit)
         case 0x10: {
             if (len < 4) break;
             uint16_t stwRaw = ((uint16_t)frame[2] << 8) | frame[3];
@@ -185,19 +244,11 @@ void SeatalkManager::parseFrame(const uint8_t* frame, uint8_t len) {
         }
 
         // ── 0x20: Apparent Wind Angle ─────────────────────────────────────
-        // Format: 20  01  AW  AW
-        // AWA = ((AW_hi & 0x3)<<8 | AW_lo) / 2  (0–359.5°, then normalise to ±180)
         case 0x20: {
             if (len < 4) break;
             uint16_t awaRaw = ((uint16_t)(frame[2] & 0x03) << 8) | frame[3];
             float awa = awaRaw / 2.0f;
-            // Normalise to ±180°
             if (awa > 180.0f) awa -= 360.0f;
-            // setApparentWind expects (speed, angle); speed unknown here → skip if 0 
-            // We'll update only wind.awa via a dedicated setter path
-            // For now update the boat state wind field directly through setTrueWind
-            // using current AWS if valid, or simply update awa only via a workaround:
-            // call setApparentWind with the current AWS value if available.
             WindData w = boatState->getWind();
             float aws = w.aws.valid ? w.aws.value : 0.0f;
             boatState->setApparentWind(aws, awa);
@@ -205,13 +256,9 @@ void SeatalkManager::parseFrame(const uint8_t* frame, uint8_t len) {
         }
 
         // ── 0x11: Apparent Wind Speed ─────────────────────────────────────
-        // Format: 11  01  SS  0x0x
-        // AWS = SS (integer knots) + (x/10) from low nibble of byte4?
-        // Simplified: integer knots in byte[2]
         case 0x11: {
             if (len < 4) break;
             float aws = (float)frame[2];
-            // fractional part in upper nibble of frame[3]
             uint8_t frac = (frame[3] >> 4) & 0x0F;
             aws += frac * 0.1f;
             WindData w = boatState->getWind();
@@ -221,7 +268,6 @@ void SeatalkManager::parseFrame(const uint8_t* frame, uint8_t len) {
         }
 
         default:
-            // Unknown or unhandled sentence — silently ignore
             break;
     }
 }

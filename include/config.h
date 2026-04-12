@@ -82,4 +82,28 @@
 #define TASK_STACK_WEB           8192
 #define TASK_STACK_WIFI          4096
 
+// ─────────────────────────────────────────────────────────────────────────────
+// SD Card Configuration (SPI bus, optional)
+//
+// Available pins on ESP32-S3-Zero (not used by other peripherals):
+//   GPIO 1, 2, 9, 10, 11, 12, 13
+//
+// Pin assignment:
+//   SD_MOSI → GPIO 11
+//   SD_MISO → GPIO 13
+//   SD_SCK  → GPIO 12
+//   SD_CS   → GPIO 10
+//
+// The SD card is mounted at boot but its presence is optional.
+// Check SDManager::isMounted() before any file operations.
+// ─────────────────────────────────────────────────────────────────────────────
+#define SD_MOSI_PIN         GPIO_NUM_11
+#define SD_MISO_PIN         GPIO_NUM_13
+#define SD_SCK_PIN          GPIO_NUM_12
+#define SD_CS_PIN           GPIO_NUM_10
+#define SD_SPI_FREQ_HZ      4000000     // 4 MHz — conservative, works with most cards
+#define SD_SPI_HOST         SPI3_HOST   // VSPI / SPI3 — leaves HSPI free for other uses
+#define SD_MOUNT_POINT      "/sdcard"
+#define SD_MAX_FILES        10          // max simultaneously open files on FAT
+
 #endif // CONFIG_H

@@ -80,26 +80,12 @@ export const api = {
   },
 
   // ── OTA Update ────────────────────────────────────────────────
-
-  /**
-   * Returns current firmware info and OTA partition status.
-   * @returns {Promise<{running_partition, next_partition, version, compile_date,
-   *                    compile_time, idf_version, partition_size}>}
-   */
   async getOTAStatus() {
     const response = await fetch(`${API_BASE}/ota/status`);
     if (!response.ok) throw new Error('Failed to get OTA status');
     return response.json();
   },
 
-  /**
-   * Upload a firmware binary and flash it to the next OTA partition.
-   * Uses XHR so that upload progress events are available.
-   *
-   * @param {File}     file         The firmware .bin file.
-   * @param {Function} onProgress   Called with (percent: number) during upload.
-   * @returns {Promise<{success: boolean, message?: string, error?: string}>}
-   */
   async uploadFirmware(file, onProgress) {
     return new Promise((resolve, reject) => {
       const xhr  = new XMLHttpRequest();
@@ -113,47 +99,29 @@ export const api = {
       };
 
       xhr.onload = () => {
-        try {
-          resolve(JSON.parse(xhr.responseText));
-        } catch {
-          resolve({ success: xhr.status < 300 });
-        }
+        try { resolve(JSON.parse(xhr.responseText)); }
+        catch { resolve({ success: xhr.status < 300 }); }
       };
 
       xhr.onerror = () => reject(new Error('Upload failed'));
-
       xhr.open('POST', `${API_BASE}/ota/upload`);
       xhr.send(form);
     });
   },
 
-  // ── Storage (LittleFS) ────────────────────────────────────────
-
-  /**
-   * Returns filesystem usage statistics.
-   * @returns {Promise<{total_bytes, used_bytes, free_bytes, used_pct}>}
-   */
+  // ── LittleFS Storage ──────────────────────────────────────────
   async getStorageInfo() {
     const response = await fetch(`${API_BASE}/storage/info`);
     if (!response.ok) throw new Error('Failed to get storage info');
     return response.json();
   },
 
-  /**
-   * Returns the list of all files on LittleFS.
-   * @returns {Promise<{count: number, files: Array<{path: string, size: number}>}>}
-   */
   async listStorageFiles() {
     const response = await fetch(`${API_BASE}/storage/files`);
     if (!response.ok) throw new Error('Failed to list storage files');
     return response.json();
   },
 
-  /**
-   * Delete a single file by path.
-   * @param {string} path  Full file path, e.g. "/polar.pol"
-   * @returns {Promise<{success: boolean, message?: string, error?: string}>}
-   */
   async deleteStorageFile(path) {
     const url = `${API_BASE}/storage/delete?path=${encodeURIComponent(path)}`;
     const response = await fetch(url, { method: 'DELETE' });
@@ -161,14 +129,100 @@ export const api = {
     return response.json();
   },
 
-  /**
-   * Format the entire LittleFS partition.
-   * WARNING: destroys all stored files.
-   * @returns {Promise<{success: boolean, message?: string, error?: string}>}
-   */
   async formatStorage() {
     const response = await fetch(`${API_BASE}/storage/format`, { method: 'POST' });
     if (!response.ok) throw new Error('Failed to format storage');
+    return response.json();
+  },
+
+  // ── SD Card ───────────────────────────────────────────────────
+
+  /**
+   * GET /api/sd/status
+   * Returns SD card mount status and storage statistics.
+   * @returns {Promise<{enabled, mounted, card_type, total_mb, free_mb, used_pct}>}
+   */
+  async getSDStatus() {
+    const response = await fetch(`${API_BASE}/sd/status`);
+    if (!response.ok) throw new Error('Failed to get SD status');
+    return response.json();
+  },
+
+  /**
+   * GET /api/sd/files?dir=<path>
+   * Returns a recursive listing of files on the SD card.
+   * @param {string} dir  Root directory to list (default "/")
+   * @returns {Promise<{dir, count, files: Array<{path, size, isDir}>}>}
+   */
+  async listSDFiles(dir = '/') {
+    const url = `${API_BASE}/sd/files?dir=${encodeURIComponent(dir)}`;
+    const response = await fetch(url);
+    if (!response.ok) throw new Error('Failed to list SD files');
+    return response.json();
+  },
+
+  /**
+   * GET /api/sd/download?path=<file>
+   * Returns the download URL for a file.  The caller may set window.location
+   * or create a temporary <a> element to trigger the browser download.
+   * @param {string} path  Absolute file path on the SD card.
+   * @returns {string}  URL that, when fetched, streams the file.
+   */
+  getSDDownloadURL(path) {
+    return `${API_BASE}/sd/download?path=${encodeURIComponent(path)}`;
+  },
+
+  /**
+   * DELETE /api/sd/delete?path=<file>
+   * @param {string} path  Absolute file path.
+   * @returns {Promise<{success, message?, error?}>}
+   */
+  async deleteSDFile(path) {
+    const url = `${API_BASE}/sd/delete?path=${encodeURIComponent(path)}`;
+    const response = await fetch(url, { method: 'DELETE' });
+    if (!response.ok) throw new Error(`Failed to delete SD file: ${path}`);
+    return response.json();
+  },
+
+  /**
+   * POST /api/sd/mkdir  body: {path}
+   * @param {string} path  Directory to create, e.g. "/logs"
+   */
+  async mkdirSD(path) {
+    const response = await fetch(`${API_BASE}/sd/mkdir`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path })
+    });
+    if (!response.ok) throw new Error('Failed to create directory');
+    return response.json();
+  },
+
+  /**
+   * POST /api/sd/format — erase all files on the SD card.
+   * WARNING: destructive.
+   */
+  async formatSD() {
+    const response = await fetch(`${API_BASE}/sd/format`, { method: 'POST' });
+    if (!response.ok) throw new Error('Failed to format SD card');
+    return response.json();
+  },
+
+  /**
+   * POST /api/sd/mount — (re-)mount the SD card.
+   */
+  async mountSD() {
+    const response = await fetch(`${API_BASE}/sd/mount`, { method: 'POST' });
+    if (!response.ok) throw new Error('Failed to mount SD card');
+    return response.json();
+  },
+
+  /**
+   * POST /api/sd/unmount — safely unmount the SD card before removal.
+   */
+  async unmountSD() {
+    const response = await fetch(`${API_BASE}/sd/unmount`, { method: 'POST' });
+    if (!response.ok) throw new Error('Failed to unmount SD card');
     return response.json();
   },
 
@@ -203,15 +257,11 @@ export const api = {
       };
 
       xhr.onload = () => {
-        try {
-          resolve(JSON.parse(xhr.responseText));
-        } catch {
-          resolve({ success: xhr.status < 300 });
-        }
+        try { resolve(JSON.parse(xhr.responseText)); }
+        catch { resolve({ success: xhr.status < 300 }); }
       };
 
       xhr.onerror = () => reject(new Error('Upload failed'));
-
       xhr.open('POST', `${API_BASE}/polar/upload`);
       xhr.send(form);
     });

@@ -1,3 +1,12 @@
+/**
+ * @file web_server.cpp
+ * @brief Async HTTP + WebSocket server implementation for the Marine Gateway.
+ *
+ * All API endpoints are registered in registerRoutes().
+ * SD card endpoints (/api/sd/*) delegate to SDManager and gracefully
+ * return HTTP 503 when no card is present or SDManager is nullptr.
+ */
+
 #include "web_server.h"
 #include "config_manager.h"
 #include "wifi_manager.h"
@@ -20,10 +29,10 @@ extern QueueHandle_t nmeaQueue;
 
 WebServer::WebServer(ConfigManager* cm, WiFiManager* wm, TCPServer* tcp, UARTHandler* uart,
                      NMEAParser* nmea, BoatState* bs, BLEManager* ble,
-                     SeatalkManager* stMgr)
+                     SeatalkManager* stMgr, SDManager* sdMgr)
     : configManager(cm), wifiManager(wm), tcpServer(tcp), uartHandler(uart),
       nmeaParser(nmea), boatState(bs), bleManager(ble),
-      seatalkManager(stMgr), running(false),
+      seatalkManager(stMgr), sdManager(sdMgr), running(false),
       otaInProgress(false), otaSuccess(false),
       otaExpectedSize(0), otaBytesWritten(0) {
     server = new AsyncWebServer(WEB_SERVER_PORT);
@@ -53,7 +62,8 @@ void WebServer::start() {
 
     serialPrintf("[Web] ═══════════════════════════════════════\n");
     serialPrintf("[Web] Server started on port 80\n");
-    serialPrintf("[Web] OTA + Storage endpoints registered\n");
+    serialPrintf("[Web] OTA + LittleFS + SD card endpoints registered\n");
+    serialPrintf("[Web] SD manager: %s\n", sdManager ? "present" : "not configured");
     serialPrintf("[Web] ═══════════════════════════════════════\n");
 }
 
@@ -184,7 +194,7 @@ void WebServer::registerRoutes() {
         }
     );
 
-    // ── Storage (LittleFS) ─────────────────────────────────────
+    // ── LittleFS Storage ───────────────────────────────────────
     server->on("/api/storage/info", HTTP_GET, [this](AsyncWebServerRequest* request) {
         this->handleGetStorageInfo(request);
     });
@@ -204,6 +214,46 @@ void WebServer::registerRoutes() {
             this->handleFormatStorage(request);
         }
     );
+
+    // ── SD Card ────────────────────────────────────────────────
+    server->on("/api/sd/status", HTTP_GET, [this](AsyncWebServerRequest* request) {
+        this->handleGetSDStatus(request);
+    });
+
+    server->on("/api/sd/files", HTTP_GET, [this](AsyncWebServerRequest* request) {
+        this->handleListSDFiles(request);
+    });
+
+    server->on("/api/sd/download", HTTP_GET, [this](AsyncWebServerRequest* request) {
+        this->handleDownloadSDFile(request);
+    });
+
+    server->on("/api/sd/delete", HTTP_DELETE,
+        [this](AsyncWebServerRequest* request) {
+            this->handleDeleteSDFile(request);
+        }
+    );
+
+    server->on("/api/sd/mkdir", HTTP_POST,
+        [](AsyncWebServerRequest* request) {},
+        NULL,
+        [this](AsyncWebServerRequest* request, uint8_t* data, size_t len,
+               size_t index, size_t total) {
+            this->handleMkdirSD(request, data, len);
+        }
+    );
+
+    server->on("/api/sd/format", HTTP_POST, [this](AsyncWebServerRequest* request) {
+        this->handleFormatSD(request);
+    });
+
+    server->on("/api/sd/mount", HTTP_POST, [this](AsyncWebServerRequest* request) {
+        this->handleMountSD(request);
+    });
+
+    server->on("/api/sd/unmount", HTTP_POST, [this](AsyncWebServerRequest* request) {
+        this->handleUnmountSD(request);
+    });
 
     serialPrintf("[Web]   ✓ All API routes registered\n");
 
@@ -279,14 +329,12 @@ void WebServer::broadcastNMEA(const char* sentence) {
 void WebServer::handleGetOTAStatus(AsyncWebServerRequest* request) {
     JsonDocument doc;
 
-    // Running partition info
     const esp_partition_t* running = esp_ota_get_running_partition();
     const esp_partition_t* next    = esp_ota_get_next_update_partition(NULL);
 
     doc["running_partition"] = running ? running->label : "unknown";
     doc["next_partition"]    = next    ? next->label    : "unknown";
 
-    // App description of the running firmware
     esp_app_desc_t appDesc;
     if (esp_ota_get_partition_description(running, &appDesc) == ESP_OK) {
         doc["version"]       = appDesc.version;
@@ -295,7 +343,6 @@ void WebServer::handleGetOTAStatus(AsyncWebServerRequest* request) {
         doc["idf_version"]   = appDesc.idf_ver;
     }
 
-    // OTA partition sizes
     if (running) {
         doc["partition_size"] = (uint32_t)running->size;
     }
@@ -314,7 +361,6 @@ void WebServer::handleGetOTAStatus(AsyncWebServerRequest* request) {
 void WebServer::handleOTAUpload(AsyncWebServerRequest* request, const String& filename,
                                  size_t index, uint8_t* data, size_t len, bool final) {
     if (index == 0) {
-        // ── Begin OTA ──────────────────────────────────────────
         serialPrintf("[OTA] Upload started: %s  total=%u B\n",
                       filename.c_str(), request->contentLength());
 
@@ -324,7 +370,6 @@ void WebServer::handleOTAUpload(AsyncWebServerRequest* request, const String& fi
         otaExpectedSize = request->contentLength();
         otaBytesWritten = 0;
 
-        // Determine update partition
         const esp_partition_t* updatePart = esp_ota_get_next_update_partition(NULL);
         if (!updatePart) {
             otaErrorMessage = "No OTA partition available";
@@ -332,12 +377,6 @@ void WebServer::handleOTAUpload(AsyncWebServerRequest* request, const String& fi
             return;
         }
 
-        serialPrintf("[OTA] Writing to partition: %s (offset=0x%x, size=%u B)\n",
-                      updatePart->label,
-                      updatePart->address,
-                      (uint32_t)updatePart->size);
-
-        // Check firmware fits
         if (otaExpectedSize > 0 && otaExpectedSize > updatePart->size) {
             otaErrorMessage = "Firmware too large for OTA partition";
             serialPrintf("[OTA] ✗ %s\n", otaErrorMessage.c_str());
@@ -351,15 +390,9 @@ void WebServer::handleOTAUpload(AsyncWebServerRequest* request, const String& fi
             serialPrintf("[OTA] ✗ Update.begin failed: %s\n", otaErrorMessage.c_str());
             return;
         }
-
-        serialPrintf("[OTA] Update.begin() OK\n");
     }
 
-    // ── Write chunk ────────────────────────────────────────────
-    if (otaInProgress && !otaErrorMessage.isEmpty()) {
-        // A previous chunk already failed — skip the rest
-        return;
-    }
+    if (otaInProgress && !otaErrorMessage.isEmpty()) return;
 
     if (Update.isRunning() && len > 0) {
         size_t written = Update.write(data, len);
@@ -375,10 +408,8 @@ void WebServer::handleOTAUpload(AsyncWebServerRequest* request, const String& fi
         }
     }
 
-    // ── Finalise ───────────────────────────────────────────────
     if (final) {
         if (!Update.isRunning()) {
-            // Was never started (e.g. partition error above)
             if (otaErrorMessage.isEmpty()) {
                 otaErrorMessage = "Update stream was not started";
             }
@@ -391,7 +422,6 @@ void WebServer::handleOTAUpload(AsyncWebServerRequest* request, const String& fi
             otaInProgress = false;
             serialPrintf("[OTA] ✓ Update complete — %u bytes written\n",
                           (uint32_t)otaBytesWritten);
-            serialPrintf("[OTA] Reboot required to activate new firmware\n");
         } else {
             otaErrorMessage = Update.errorString();
             otaInProgress   = false;
@@ -401,19 +431,14 @@ void WebServer::handleOTAUpload(AsyncWebServerRequest* request, const String& fi
 }
 
 void WebServer::handleOTAUploadComplete(AsyncWebServerRequest* request) {
-    // This handler fires after the multipart upload is fully received.
     if (otaSuccess) {
         request->send(200, "application/json",
                       "{\"success\":true,"
                       "\"message\":\"Firmware flashed successfully. Rebooting in 3 seconds...\"}");
-        serialPrintf("[OTA] Scheduling reboot in 3 s\n");
-
-        // Reboot after a short delay so the HTTP response has time to be sent
         xTaskCreate([](void*) {
             vTaskDelay(pdMS_TO_TICKS(3000));
             esp_restart();
         }, "OTA_reboot", 2048, NULL, 1, NULL);
-
     } else {
         JsonDocument doc;
         doc["success"] = false;
@@ -425,7 +450,7 @@ void WebServer::handleOTAUploadComplete(AsyncWebServerRequest* request) {
     }
 }
 
-// ── Storage Handlers ──────────────────────────────────────────────────────────
+// ── LittleFS Storage Handlers ─────────────────────────────────────────────────
 
 void WebServer::handleGetStorageInfo(AsyncWebServerRequest* request) {
     JsonDocument doc;
@@ -447,7 +472,6 @@ void WebServer::handleListFiles(AsyncWebServerRequest* request) {
     JsonDocument doc;
     JsonArray files = doc["files"].to<JsonArray>();
 
-    // Recursive helper — list all files under a directory
     std::function<void(const char*)> listDir = [&](const char* path) {
         File dir = LittleFS.open(path);
         if (!dir || !dir.isDirectory()) return;
@@ -483,16 +507,13 @@ void WebServer::handleDeleteFile(AsyncWebServerRequest* request) {
 
     String path = request->getParam("path")->value();
 
-    // Basic safety: do not allow deleting directories or escaping root
     if (path.isEmpty() || path == "/" || path.indexOf("..") >= 0) {
-        request->send(400, "application/json",
-                      "{\"error\":\"Invalid path\"}");
+        request->send(400, "application/json", "{\"error\":\"Invalid path\"}");
         return;
     }
 
     if (!LittleFS.exists(path)) {
-        request->send(404, "application/json",
-                      "{\"error\":\"File not found\"}");
+        request->send(404, "application/json", "{\"error\":\"File not found\"}");
         return;
     }
 
@@ -509,20 +530,258 @@ void WebServer::handleDeleteFile(AsyncWebServerRequest* request) {
 void WebServer::handleFormatStorage(AsyncWebServerRequest* request) {
     serialPrintf("[Storage] Formatting LittleFS...\n");
 
-    // Format runs synchronously and takes a few hundred ms
     bool ok = LittleFS.format();
 
     if (ok) {
-        // Re-mount after format
         LittleFS.begin(false, "/littlefs", 10, "littlefs");
         serialPrintf("[Storage] ✓ LittleFS formatted and remounted\n");
         request->send(200, "application/json",
                       "{\"success\":true,\"message\":\"Storage formatted successfully\"}");
     } else {
         serialPrintf("[Storage] ✗ Format failed\n");
-        request->send(500, "application/json",
-                      "{\"error\":\"Format failed\"}");
+        request->send(500, "application/json", "{\"error\":\"Format failed\"}");
     }
+}
+
+// ── SD Card Handlers ──────────────────────────────────────────────────────────
+
+/**
+ * Helper: return a 503 response when the SD subsystem is unavailable.
+ */
+static inline void sdNotAvailable(AsyncWebServerRequest* request,
+                                   const char* reason = "SD card not mounted") {
+    JsonDocument doc;
+    doc["error"]   = reason;
+    doc["mounted"] = false;
+    String body;
+    serializeJson(doc, body);
+    request->send(503, "application/json", body);
+}
+
+void WebServer::handleGetSDStatus(AsyncWebServerRequest* request) {
+    JsonDocument doc;
+
+    if (!sdManager) {
+        doc["enabled"] = false;
+        doc["mounted"] = false;
+        doc["error"]   = "SD manager not configured";
+        String body;
+        serializeJson(doc, body);
+        request->send(200, "application/json", body);
+        return;
+    }
+
+    SDStorageInfo info = sdManager->getStorageInfo();
+
+    doc["enabled"]      = true;
+    doc["mounted"]      = info.mounted;
+    doc["card_type"]    = info.cardType;
+    doc["total_bytes"]  = (uint32_t)(info.totalBytes & 0xFFFFFFFF);
+    doc["used_bytes"]   = (uint32_t)(info.usedBytes  & 0xFFFFFFFF);
+    doc["free_bytes"]   = (uint32_t)(info.freeBytes   & 0xFFFFFFFF);
+    doc["used_pct"]     = info.usedPct;
+    // Also expose high 32 bits for cards > 4 GB
+    doc["total_mb"]     = (uint32_t)(info.totalBytes / (1024ULL * 1024ULL));
+    doc["free_mb"]      = (uint32_t)(info.freeBytes  / (1024ULL * 1024ULL));
+
+    String response;
+    serializeJson(doc, response);
+    request->send(200, "application/json", response);
+}
+
+void WebServer::handleListSDFiles(AsyncWebServerRequest* request) {
+    if (!sdManager || !sdManager->isMounted()) {
+        sdNotAvailable(request);
+        return;
+    }
+
+    const char* dir = "/";
+    if (request->hasParam("dir")) {
+        dir = request->getParam("dir")->value().c_str();
+    }
+
+    std::vector<SDFileInfo> files = sdManager->listFiles(dir, 4);
+
+    JsonDocument doc;
+    doc["dir"]   = dir;
+    doc["count"] = files.size();
+    JsonArray arr = doc["files"].to<JsonArray>();
+
+    for (const auto& f : files) {
+        JsonObject obj = arr.add<JsonObject>();
+        obj["path"]  = f.path;
+        obj["size"]  = f.size;
+        obj["isDir"] = f.isDir;
+    }
+
+    String response;
+    serializeJson(doc, response);
+    request->send(200, "application/json", response);
+}
+
+void WebServer::handleDownloadSDFile(AsyncWebServerRequest* request) {
+    if (!sdManager || !sdManager->isMounted()) {
+        sdNotAvailable(request);
+        return;
+    }
+
+    if (!request->hasParam("path")) {
+        request->send(400, "application/json",
+                      "{\"error\":\"Missing 'path' parameter\"}");
+        return;
+    }
+
+    String path = request->getParam("path")->value();
+
+    // Basic path sanitation
+    if (path.isEmpty() || path.indexOf("..") >= 0) {
+        request->send(400, "application/json", "{\"error\":\"Invalid path\"}");
+        return;
+    }
+
+    if (!sdManager->exists(path.c_str())) {
+        request->send(404, "application/json", "{\"error\":\"File not found\"}");
+        return;
+    }
+
+    File f = sdManager->openForRead(path.c_str());
+    if (!f || f.isDirectory()) {
+        request->send(400, "application/json", "{\"error\":\"Not a file\"}");
+        return;
+    }
+
+    // Determine MIME type from extension
+    String ext = path.substring(path.lastIndexOf('.') + 1);
+    ext.toLowerCase();
+    const char* mime = "application/octet-stream";
+    if      (ext == "csv")  mime = "text/csv";
+    else if (ext == "txt")  mime = "text/plain";
+    else if (ext == "nmea") mime = "text/plain";
+    else if (ext == "json") mime = "application/json";
+    else if (ext == "log")  mime = "text/plain";
+
+    // Extract filename for Content-Disposition
+    String filename = path.substring(path.lastIndexOf('/') + 1);
+
+    AsyncWebServerResponse* response =
+        request->beginResponse(SD, path, mime);
+    response->addHeader("Content-Disposition",
+                        String("attachment; filename=\"") + filename + "\"");
+    response->addHeader("Cache-Control", "no-cache");
+    request->send(response);
+
+    serialPrintf("[SD] Download: %s (%u B)\n", path.c_str(), (uint32_t)f.size());
+    f.close();
+}
+
+void WebServer::handleDeleteSDFile(AsyncWebServerRequest* request) {
+    if (!sdManager || !sdManager->isMounted()) {
+        sdNotAvailable(request);
+        return;
+    }
+
+    if (!request->hasParam("path")) {
+        request->send(400, "application/json",
+                      "{\"error\":\"Missing 'path' parameter\"}");
+        return;
+    }
+
+    String path = request->getParam("path")->value();
+
+    if (path.isEmpty() || path == "/" || path.indexOf("..") >= 0) {
+        request->send(400, "application/json", "{\"error\":\"Invalid path\"}");
+        return;
+    }
+
+    bool ok = sdManager->deleteFile(path.c_str());
+
+    if (ok) {
+        request->send(200, "application/json",
+                      "{\"success\":true,\"message\":\"File deleted\"}");
+    } else {
+        request->send(500, "application/json",
+                      "{\"success\":false,\"error\":\"Delete failed or file not found\"}");
+    }
+}
+
+void WebServer::handleMkdirSD(AsyncWebServerRequest* request,
+                               uint8_t* data, size_t len) {
+    if (!sdManager || !sdManager->isMounted()) {
+        sdNotAvailable(request);
+        return;
+    }
+
+    JsonDocument doc;
+    if (deserializeJson(doc, (char*)data, len)) {
+        request->send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
+        return;
+    }
+
+    const char* path = doc["path"] | "";
+    if (path[0] == '\0' || String(path).indexOf("..") >= 0) {
+        request->send(400, "application/json", "{\"error\":\"Invalid path\"}");
+        return;
+    }
+
+    bool ok = sdManager->mkdir(path);
+
+    JsonDocument resp;
+    resp["success"] = ok;
+    resp["path"]    = path;
+    if (!ok) resp["error"] = "Failed to create directory";
+    String body;
+    serializeJson(resp, body);
+    request->send(ok ? 200 : 500, "application/json", body);
+}
+
+void WebServer::handleFormatSD(AsyncWebServerRequest* request) {
+    if (!sdManager) {
+        sdNotAvailable(request, "SD manager not configured");
+        return;
+    }
+    if (!sdManager->isMounted()) {
+        sdNotAvailable(request);
+        return;
+    }
+
+    serialPrintf("[SD] Format requested via web API\n");
+    bool ok = sdManager->format();
+
+    if (ok) {
+        request->send(200, "application/json",
+                      "{\"success\":true,\"message\":\"SD card formatted (all files removed)\"}");
+    } else {
+        request->send(500, "application/json",
+                      "{\"success\":false,\"error\":\"Format failed\"}");
+    }
+}
+
+void WebServer::handleMountSD(AsyncWebServerRequest* request) {
+    if (!sdManager) {
+        sdNotAvailable(request, "SD manager not configured");
+        return;
+    }
+
+    bool ok = sdManager->mount();
+
+    JsonDocument doc;
+    doc["success"] = ok;
+    doc["mounted"] = sdManager->isMounted();
+    doc["message"] = ok ? "SD card mounted" : "No SD card found";
+    String body;
+    serializeJson(doc, body);
+    request->send(ok ? 200 : 503, "application/json", body);
+}
+
+void WebServer::handleUnmountSD(AsyncWebServerRequest* request) {
+    if (!sdManager) {
+        sdNotAvailable(request, "SD manager not configured");
+        return;
+    }
+
+    sdManager->unmount();
+    request->send(200, "application/json",
+                  "{\"success\":true,\"message\":\"SD card unmounted safely\"}");
 }
 
 // ── Configuration handlers ────────────────────────────────────────────────────
@@ -604,19 +863,8 @@ void WebServer::handlePostSerialConfig(AsyncWebServerRequest* request, uint8_t* 
 void WebServer::handleGetStatus(AsyncWebServerRequest* request) {
     JsonDocument doc;
 
-    // ── Firmware version ──────────────────────────────────────
-    /*
-    const esp_partition_t* runningPart = esp_ota_get_running_partition();
-    esp_app_desc_t appDesc;
-    if (runningPart && esp_ota_get_partition_description(runningPart, &appDesc) == ESP_OK) {
-        doc["version"] = appDesc.version;
-    } else {
-        doc["version"] = VERSION;
-    }
-        */
     doc["version"] = VERSION;
-
-    doc["uptime"] = millis() / 1000;
+    doc["uptime"]  = millis() / 1000;
 
     JsonObject heap = doc["heap"].to<JsonObject>();
     heap["free"]     = ESP.getFreeHeap();
@@ -624,8 +872,8 @@ void WebServer::handleGetStatus(AsyncWebServerRequest* request) {
     heap["min_free"] = ESP.getMinFreeHeap();
 
     JsonObject wifi = doc["wifi"].to<JsonObject>();
-    WiFiState state    = wifiManager->getState();
-    wl_status_t wlStat = WiFi.status();
+    WiFiState   state   = wifiManager->getState();
+    wl_status_t wlStat  = WiFi.status();
     const char* modeStr = "Unknown";
     String ssid = "";
     int8_t rssi = 0;
@@ -675,13 +923,11 @@ void WebServer::handleGetStatus(AsyncWebServerRequest* request) {
     nmeaBuffer["full_events_recent"] = g_nmeaQueueFullEvents;
     nmeaBuffer["has_overflow"]       = (g_nmeaQueueFullEvents > 0);
 
-    // Current number of messages waiting in the queue
     UBaseType_t queueWaiting = 0;
     if (nmeaQueue != NULL) {
         queueWaiting = uxQueueMessagesWaiting(nmeaQueue);
     }
     nmeaBuffer["queue_waiting"]  = (uint32_t)queueWaiting;
-    // Load as a percentage of queue capacity (0–100)
     nmeaBuffer["queue_load_pct"] = (NMEA_QUEUE_SIZE > 0)
         ? (uint8_t)((queueWaiting * 100) / NMEA_QUEUE_SIZE)
         : 0;
@@ -690,9 +936,22 @@ void WebServer::handleGetStatus(AsyncWebServerRequest* request) {
     ble["enabled"]           = bleManager->isEnabled();
     ble["advertising"]       = bleManager->isAdvertising();
     ble["connected_devices"] = bleManager->getConnectedDevices();
+    ble["device_name"]       = bleManager->getConfig().device_name;
 
-    String deviceName = bleManager->getConfig().device_name;
-    ble["device_name"] = deviceName;
+    // ── SD card summary ───────────────────────────────────────
+    JsonObject sd = doc["sd"].to<JsonObject>();
+    if (sdManager) {
+        SDStorageInfo sdInfo = sdManager->getStorageInfo();
+        sd["enabled"]    = true;
+        sd["mounted"]    = sdInfo.mounted;
+        sd["card_type"]  = sdInfo.cardType;
+        sd["total_mb"]   = (uint32_t)(sdInfo.totalBytes / (1024ULL * 1024ULL));
+        sd["free_mb"]    = (uint32_t)(sdInfo.freeBytes  / (1024ULL * 1024ULL));
+        sd["used_pct"]   = sdInfo.usedPct;
+    } else {
+        sd["enabled"] = false;
+        sd["mounted"] = false;
+    }
 
     String response;
     serializeJson(doc, response);
@@ -857,9 +1116,6 @@ void WebServer::handleUploadPolar(AsyncWebServerRequest* request,
         bool ok = boatState->polar.loadFromFile(POLAR_FILE_PATH);
         if (ok) {
             boatState->updatePerformance();
-            serialPrintf("[Web] ✓ Polar reloaded and performance updated\n");
-        } else {
-            serialPrintf("[Web] ✗ Polar parse failed after upload\n");
         }
     }
 }
@@ -880,8 +1136,6 @@ void WebServer::handlePostAutopilotCommand(AsyncWebServerRequest* request,
         request->send(400, "application/json", "{\"error\":\"Missing command field\"}");
         return;
     }
-
-    serialPrintf("[Web] Autopilot command: %s\n", command);
 
     if (!seatalkManager) {
         request->send(503, "application/json",
@@ -941,10 +1195,10 @@ void WebServer::handleGetNavigation(AsyncWebServerRequest* request) {
         }
     };
 
-    addDP("sog",     gps.sog,              "kn");
-    addDP("cog",     gps.cog,              "deg");
-    addDP("stw",     speed.stw,            "kn");
-    addDP("heading", heading.true_heading, "deg");
+    addDP("sog",     gps.sog,                "kn");
+    addDP("cog",     gps.cog,                "deg");
+    addDP("stw",     speed.stw,              "kn");
+    addDP("heading", heading.true_heading,   "deg");
     addDP("depth",   depth.below_transducer, "m");
 
     JsonObject quality = doc["gps_quality"].to<JsonObject>();
