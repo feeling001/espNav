@@ -4,6 +4,7 @@
 #include "driver/rmt.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/ringbuf.h"
+#include "log_manager.h"
 
 #include "esp_rom_gpio.h"
 #include "soc/gpio_sig_map.h"
@@ -20,7 +21,7 @@ typedef void (*seatalk_rx_callback_t)(uint16_t data);
 
 class SeatalkRMT {
 public:
-    SeatalkRMT();
+    SeatalkRMT(LogManager* logManager);
 
     void init(gpio_num_t rxPin, gpio_num_t txPin,
                rmt_channel_t rxChannel = RMT_CHANNEL_4,
@@ -57,6 +58,9 @@ private:
     uint8_t             _itemcount0;
     uint8_t             _itemtransitions;
     uint8_t             _itemlastlevel;
+
+    
+    LogManager*         _logManager;
 
     /*TX METHODS*/
     void addItemBit(uint8_t bit, uint8_t closeframe=0);

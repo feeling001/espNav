@@ -15,6 +15,8 @@
 #include "nmea_parser.h"
 #include "polar.h"
 #include "functions.h"
+#include "log_manager.h"
+
 #include <ArduinoJson.h>
 #include <Update.h>
 #include <esp_ota_ops.h>
@@ -29,7 +31,7 @@ extern QueueHandle_t nmeaQueue;
 
 WebServer::WebServer(ConfigManager* cm, WiFiManager* wm, TCPServer* tcp, UARTHandler* uart,
                      NMEAParser* nmea, BoatState* bs, BLEManager* ble,
-                     SeatalkManager* stMgr, SDManager* sdMgr)
+                     SeatalkManager* stMgr, LogManager* logManager, SDManager* sdMgr)
     : configManager(cm), wifiManager(wm), tcpServer(tcp), uartHandler(uart),
       nmeaParser(nmea), boatState(bs), bleManager(ble),
       seatalkManager(stMgr), sdManager(sdMgr), running(false),
@@ -233,6 +235,24 @@ void WebServer::registerRoutes() {
             this->handleDeleteSDFile(request);
         }
     );
+
+    // ── LogBook ────────────────────────────────────────────────
+    server->on("/api/log/config", HTTP_GET, [this](AsyncWebServerRequest* r) {
+        this->handleGetLogConfig(r);
+    });
+
+    server->on("/api/log/config", HTTP_POST, [](AsyncWebServerRequest*) {}, NULL, [this](AsyncWebServerRequest* r, uint8_t* d, size_t l, size_t, size_t) { 
+        this->handlePostLogConfig(r, d, l); }
+    );
+
+    server->on("/api/log/status", HTTP_GET, [this](AsyncWebServerRequest* r) {
+        this->handleGetLogStatus(r);
+    });
+ 
+    server->on("/api/log/new", HTTP_POST, [this](AsyncWebServerRequest* r) {
+        this->handlePostLogNewSession(r);
+    });
+
 
     server->on("/api/sd/mkdir", HTTP_POST,
         [](AsyncWebServerRequest* request) {},
@@ -1332,4 +1352,101 @@ void WebServer::handleGetPerformance(AsyncWebServerRequest* request) {
     String response;
     serializeJson(doc, response);
     request->send(200, "application/json", response);
+}
+
+
+void WebServer::handleGetLogConfig(AsyncWebServerRequest* request) {
+    if (!logManager) {
+        request->send(503, "application/json",
+                      "{\"error\":\"Log manager not configured\"}");
+        return;
+    }
+
+    LogConfig cfg = logManager->getConfig();
+    JsonDocument doc;
+    doc["nmea_enabled"]      = cfg.nmeaEnabled;
+    doc["seatalk_enabled"]   = cfg.seatalkEnabled;
+    doc["csv_enabled"]       = cfg.csvEnabled;
+    doc["csv_interval_min"]  = cfg.csvIntervalMin;
+
+    String body;
+    serializeJson(doc, body);
+    request->send(200, "application/json", body);
+}
+
+// POST /api/log/config
+void WebServer::handlePostLogConfig(AsyncWebServerRequest* request,
+                                     uint8_t* data, size_t len) {
+    if (!logManager) {
+        request->send(503, "application/json",
+                      "{\"error\":\"Log manager not configured\"}");
+        return;
+    }
+
+    JsonDocument doc;
+    if (deserializeJson(doc, (char*)data, len)) {
+        request->send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
+        return;
+    }
+
+    LogConfig cfg = logManager->getConfig();
+    if (doc["nmea_enabled"].is<bool>())     cfg.nmeaEnabled    = doc["nmea_enabled"];
+    if (doc["seatalk_enabled"].is<bool>())  cfg.seatalkEnabled = doc["seatalk_enabled"];
+    if (doc["csv_enabled"].is<bool>())      cfg.csvEnabled     = doc["csv_enabled"];
+    if (doc["csv_interval_min"].is<int>()) {
+        int ivl = doc["csv_interval_min"];
+        if (ivl < 1)    ivl = 1;
+        if (ivl > 1440) ivl = 1440;
+        cfg.csvIntervalMin = (uint16_t)ivl;
+    }
+
+    logManager->setConfig(cfg);
+    request->send(200, "application/json",
+                  "{\"success\":true,\"message\":\"Log config saved\"}");
+}
+
+// GET /api/log/status
+void WebServer::handleGetLogStatus(AsyncWebServerRequest* request) {
+    if (!logManager) {
+        request->send(503, "application/json",
+                      "{\"error\":\"Log manager not configured\"}");
+        return;
+    }
+
+    LogStats  st  = logManager->getStats();
+    LogConfig cfg = logManager->getConfig();
+
+    JsonDocument doc;
+    doc["running"]          = logManager->isRunning();
+    doc["has_open_files"]   = logManager->hasOpenFiles();
+    doc["open_files"]       = logManager->openFilePaths();
+    doc["session_name"]     = st.sessionName;
+    doc["session_uptime_s"] = (millis() - st.sessionStartMs) / 1000;
+    doc["nmea_lines"]       = st.nmeaLines;
+    doc["seatalk_lines"]    = st.seatalkLines;
+    doc["csv_snapshots"]    = st.csvSnapshots;
+    doc["dropped_entries"]  = st.droppedEntries;
+
+    // Also mirror config for convenience (dashboard needs one request).
+    doc["nmea_enabled"]     = cfg.nmeaEnabled;
+    doc["seatalk_enabled"]  = cfg.seatalkEnabled;
+    doc["csv_enabled"]      = cfg.csvEnabled;
+    doc["csv_interval_min"] = cfg.csvIntervalMin;
+
+    String body;
+    serializeJson(doc, body);
+    request->send(200, "application/json", body);
+}
+
+// POST /api/log/new
+void WebServer::handlePostLogNewSession(AsyncWebServerRequest* request) {
+    if (!logManager) {
+        request->send(503, "application/json",
+                      "{\"error\":\"Log manager not configured\"}");
+        return;
+    }
+
+    logManager->newSession();
+    request->send(200, "application/json",
+                  "{\"success\":true,\"message\":\"New log session started\"}");
 }

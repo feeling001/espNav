@@ -34,23 +34,28 @@
 #include "ble_manager.h"
 #include "polar.h"
 #include "sd_manager.h"
+#include "log_manager.h"
 
 // ── Global instances ──────────────────────────────────────────────────────────
 ConfigManager  configManager;
 BoatState      boatState;
 WiFiManager    wifiManager;
 UARTHandler    uartHandler;
-SeatalkRMT     seatalkHandler;
+SDManager      sdManager;
+LogManager     logManager(&sdManager, &boatState);
+SeatalkRMT     seatalkHandler(&logManager);
 SeatalkManager seatalkManager(&seatalkHandler, &boatState);
 TCPServer      tcpServer;
 BLEManager     bleManager;
 NMEAParser     nmeaParser(&boatState);
-SDManager      sdManager;
+
 
 // WebServer receives all subsystem pointers including SDManager.
 WebServer webServer(&configManager, &wifiManager, &tcpServer, &uartHandler,
-                    &nmeaParser, &boatState, &bleManager, &seatalkManager,
+                    &nmeaParser, &boatState, &bleManager, &seatalkManager, &logManager,
                     &sdManager);
+
+
 
 // Message queue for NMEA sentences
 QueueHandle_t nmeaQueue;
@@ -171,6 +176,9 @@ void setup() {
     // in the web dashboard without waiting for network bring-up.
     serialPrintf("\n[SD] Initializing SD card...\n");
     sdManager.init();
+
+    logManager.init();
+    logManager.start();
 
     // ── WiFi ──────────────────────────────────────────────────
     WiFiConfig wifiConfig;
@@ -306,6 +314,7 @@ void uartReaderTask(void* parameter) {
     while (true) {
         if (uartHandler.readLine(lineBuffer, sizeof(lineBuffer), pdMS_TO_TICKS(100))) {
             if (nmeaParser.parseLine(lineBuffer, sentence)) {
+                logManager.logNMEA(lineBuffer);
                 sentencesRead++;
                 g_messagesRead++;
 

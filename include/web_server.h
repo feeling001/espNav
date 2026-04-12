@@ -51,7 +51,7 @@ public:
      */
     WebServer(ConfigManager* cm, WiFiManager* wm, TCPServer* tcp, UARTHandler* uart,
               NMEAParser* nmea, BoatState* bs, BLEManager* ble,
-              SeatalkManager* stMgr, SDManager* sdMgr = nullptr);
+              SeatalkManager* stMgr, LogManager* logManager ,SDManager* sdMgr = nullptr);
 
     void init();
     void start();
@@ -78,6 +78,12 @@ private:
     void handleUploadPolar(AsyncWebServerRequest* request, const String& filename,
                            size_t index, uint8_t* data, size_t len, bool final);
 
+    // ── LogBook handlers ────────────────────────────────────────────────────
+    void handlePostLogNewSession(AsyncWebServerRequest* request);
+    void handleGetLogStatus(AsyncWebServerRequest* request);
+    void handlePostLogConfig(AsyncWebServerRequest* request, uint8_t* data, size_t len);
+    void handleGetLogConfig(AsyncWebServerRequest* request);
+    
     // ── Boat data handlers ────────────────────────────────────────────────────
     void handleGetNavigation(AsyncWebServerRequest* request);
     void handleGetWind(AsyncWebServerRequest* request);
@@ -134,6 +140,7 @@ private:
     void handleWebSocketEvent(AsyncWebSocket* server, AsyncWebSocketClient* client,
                               AwsEventType type, void* arg, uint8_t* data, size_t len);
 
+        
     // ── Members ───────────────────────────────────────────────────────────────
     AsyncWebServer* server;
     AsyncWebSocket* wsNMEA;
@@ -146,6 +153,7 @@ private:
     BLEManager*     bleManager;
     SeatalkManager* seatalkManager;
     SDManager*      sdManager;      ///< May be nullptr when SD is disabled
+    LogManager*     logManager;
     bool            running;
 
     // ── OTA state ─────────────────────────────────────────────────────────────

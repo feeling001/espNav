@@ -1,7 +1,9 @@
 #include "seatalk_rmt.h"
 #include "functions.h"
 
-SeatalkRMT::SeatalkRMT() {}
+SeatalkRMT::SeatalkRMT(LogManager* logManager) {
+    _logManager = logManager;
+}
 
 void SeatalkRMT::init(gpio_num_t rxPin, gpio_num_t txPin, rmt_channel_t rxChannel, rmt_channel_t txChannel) {
     _rxPin = rxPin;
@@ -74,6 +76,8 @@ void SeatalkRMT::handleframe() {
         serialPrintf("0x%02X ",_frame[i]);
     }
     serialPrintf("]\n");
+    
+    _logManager->logSeatalk(_frame, _framelen);
 }
 
 void SeatalkRMT::addchar() {
