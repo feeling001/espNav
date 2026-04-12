@@ -68,6 +68,7 @@ private:
     void handlePostSerialConfig(AsyncWebServerRequest* request, uint8_t* data, size_t len);
     void handleGetStatus(AsyncWebServerRequest* request);
     void handleRestart(AsyncWebServerRequest* request);
+    void handlePostSeatalkExtra(AsyncWebServerRequest* request, uint8_t* data, size_t len);
 
     // ── BLE handlers ──────────────────────────────────────────────────────────
     void handleGetBLEConfig(AsyncWebServerRequest* request);
@@ -83,7 +84,7 @@ private:
     void handleGetLogStatus(AsyncWebServerRequest* request);
     void handlePostLogConfig(AsyncWebServerRequest* request, uint8_t* data, size_t len);
     void handleGetLogConfig(AsyncWebServerRequest* request);
-    
+
     // ── Boat data handlers ────────────────────────────────────────────────────
     void handleGetNavigation(AsyncWebServerRequest* request);
     void handleGetWind(AsyncWebServerRequest* request);

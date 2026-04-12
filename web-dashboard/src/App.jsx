@@ -9,6 +9,7 @@ import { Instruments } from './components/Instruments/Instruments';
 import { ConfigPage } from './components/Config/ConfigPage';
 import { Performance } from './components/Performance/Performance';
 import { Autopilot } from './components/Autopilot/Autopilot';
+import { Logbook } from './components/Logbook/Logbook';
 
 import './styles/main.css';
 
@@ -23,6 +24,7 @@ function App() {
             <Route path="/instruments" element={<Instruments />} />
             <Route path="/autopilot"   element={<Autopilot />} />
             <Route path="/performance" element={<Performance />} />
+            <Route path="/logbook"     element={<Logbook />} />
             <Route path="/config"      element={<ConfigPage />} />
             <Route path="/nmea"        element={<NMEAMonitor />} />
           </Routes>

@@ -34,7 +34,7 @@ WebServer::WebServer(ConfigManager* cm, WiFiManager* wm, TCPServer* tcp, UARTHan
                      SeatalkManager* stMgr, LogManager* logManager, SDManager* sdMgr)
     : configManager(cm), wifiManager(wm), tcpServer(tcp), uartHandler(uart),
       nmeaParser(nmea), boatState(bs), bleManager(ble),
-      seatalkManager(stMgr), sdManager(sdMgr), running(false),
+      seatalkManager(stMgr), logManager(logManager), sdManager(sdMgr), running(false),
       otaInProgress(false), otaSuccess(false),
       otaExpectedSize(0), otaBytesWritten(0) {
     server = new AsyncWebServer(WEB_SERVER_PORT);
@@ -154,6 +154,23 @@ void WebServer::registerRoutes() {
         }
     );
 
+    // ── LogBook ────────────────────────────────────────────────
+    server->on("/api/log/config", HTTP_GET, [this](AsyncWebServerRequest* r) {
+        this->handleGetLogConfig(r);
+    });
+
+    server->on("/api/log/config", HTTP_POST, [](AsyncWebServerRequest*) {}, NULL, [this](AsyncWebServerRequest* r, uint8_t* d, size_t l, size_t, size_t) { 
+        this->handlePostLogConfig(r, d, l); }
+    );
+
+    server->on("/api/log/status", HTTP_GET, [this](AsyncWebServerRequest* r) {
+        this->handleGetLogStatus(r);
+    });
+ 
+    server->on("/api/log/new", HTTP_POST, [this](AsyncWebServerRequest* r) {
+        this->handlePostLogNewSession(r);
+    });
+        
     // ── Boat Data ──────────────────────────────────────────────
     server->on("/api/boat/navigation", HTTP_GET, [this](AsyncWebServerRequest* request) {
         this->handleGetNavigation(request);
@@ -178,6 +195,14 @@ void WebServer::registerRoutes() {
         [this](AsyncWebServerRequest* request, uint8_t* data, size_t len,
                size_t index, size_t total) {
             this->handlePostAutopilotCommand(request, data, len);
+        }
+    );
+    server->on("/api/seatalk/extra", HTTP_POST,
+        [](AsyncWebServerRequest* request) {},
+        NULL,
+        [this](AsyncWebServerRequest* request, uint8_t* data, size_t len,
+                size_t index, size_t total) {
+            this->handlePostSeatalkExtra(request, data, len);
         }
     );
 
@@ -235,23 +260,6 @@ void WebServer::registerRoutes() {
             this->handleDeleteSDFile(request);
         }
     );
-
-    // ── LogBook ────────────────────────────────────────────────
-    server->on("/api/log/config", HTTP_GET, [this](AsyncWebServerRequest* r) {
-        this->handleGetLogConfig(r);
-    });
-
-    server->on("/api/log/config", HTTP_POST, [](AsyncWebServerRequest*) {}, NULL, [this](AsyncWebServerRequest* r, uint8_t* d, size_t l, size_t, size_t) { 
-        this->handlePostLogConfig(r, d, l); }
-    );
-
-    server->on("/api/log/status", HTTP_GET, [this](AsyncWebServerRequest* r) {
-        this->handleGetLogStatus(r);
-    });
- 
-    server->on("/api/log/new", HTTP_POST, [this](AsyncWebServerRequest* r) {
-        this->handlePostLogNewSession(r);
-    });
 
 
     server->on("/api/sd/mkdir", HTTP_POST,
@@ -1449,4 +1457,35 @@ void WebServer::handlePostLogNewSession(AsyncWebServerRequest* request) {
     logManager->newSession();
     request->send(200, "application/json",
                   "{\"success\":true,\"message\":\"New log session started\"}");
+}
+
+
+void WebServer::handlePostSeatalkExtra(AsyncWebServerRequest* request,
+                                        uint8_t* data, size_t len) {
+    JsonDocument doc;
+    if (deserializeJson(doc, (char*)data, len)) {
+        request->send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
+        return;
+    }
+    const char* command = doc["command"] | "";
+    if (command[0] == '\0') {
+        request->send(400, "application/json", "{\"error\":\"Missing command field\"}");
+        return;
+    }
+    if (!seatalkManager) {
+        request->send(503, "application/json",
+                      "{\"success\":false,\"error\":\"SeaTalk manager not initialised\"}");
+        return;
+    }
+    bool ok = seatalkManager->sendExtraCommand(command);
+    if (ok) {
+        JsonDocument resp;
+        resp["success"] = true;
+        resp["message"] = String("Sent: ") + command;
+        String body; serializeJson(resp, body);
+        request->send(200, "application/json", body);
+    } else {
+        request->send(500, "application/json",
+                      "{\"success\":false,\"error\":\"Transmission failed or unknown command\"}");
+    }
 }

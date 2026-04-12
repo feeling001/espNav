@@ -237,6 +237,16 @@ export const api = {
     return response.json();
   },
 
+  async sendExtraCommand(command) {
+  const response = await fetch(`${API_BASE}/seatalk/extra`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ command }),
+  });
+  if (!response.ok) throw new Error('Failed to send extra command');
+  return response.json();
+},
+
   // ── Polar / Performance ───────────────────────────────────────
   async getPolarStatus() {
     const response = await fetch(`${API_BASE}/polar/status`);
