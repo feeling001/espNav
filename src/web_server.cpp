@@ -987,11 +987,11 @@ void WebServer::handleGetStatus(AsyncWebServerRequest* request) {
 }
 
 void WebServer::handleRestart(AsyncWebServerRequest* request) {
-    request->send(200, "application/json",
-                  "{\"success\":true,\"message\":\"Restarting in 2 seconds\"}");
-    serialPrintf("[Web] Restarting...\n");
-    delay(2000);
-    ESP.restart();
+    request->send(200, "application/json", "{\"success\":true,\"message\":\"Restarting in 2 seconds\"}");
+    xTaskCreate([](void*) {
+        vTaskDelay(pdMS_TO_TICKS(2000));
+        esp_restart();
+    }, "restart_task", 2048, nullptr, 1, nullptr);
 }
 
 // ── WiFi Scan ─────────────────────────────────────────────────────────────────

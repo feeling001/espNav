@@ -12,6 +12,13 @@
  *   - Suitable for the large sequential CSV / NMEA log files this gateway
  *     will produce.
  *   - Supported natively by the Arduino SD library.
+ *
+ * FIX: After a failed SD.begin(), SD.end() is now always called to ensure
+ * the SPI driver and CS pin are released cleanly. Without this, a failed
+ * mount leaves the SPI bus in a partially-initialised state which blocks
+ * FreeRTOS mutex acquisitions under load — causing POST requests (which
+ * involve body parsing and more CPU cycles) to time out while GET requests
+ * (fast path) still succeed.
  */
 
 #include "sd_manager.h"
@@ -53,6 +60,12 @@ void SDManager::init() {
     spi = new SPIClass(FSPI);
     spi->begin(SD_SCK_PIN, SD_MISO_PIN, SD_MOSI_PIN, SD_CS_PIN);
 
+    // Drive CS high explicitly before attempting mount so the SD card
+    // sees a clean idle state on the bus.
+    pinMode(SD_CS_PIN, OUTPUT);
+    digitalWrite(SD_CS_PIN, HIGH);
+    delay(10);
+
     if (mount()) {
         serialPrintf("[SD] ✓ Card mounted at boot\n");
     } else {
@@ -70,6 +83,7 @@ bool SDManager::mount() {
 
     // SD.begin() accepts (cs, spi, freq)
     bool ok = SD.begin(SD_CS_PIN, *spi, SD_SPI_FREQ_HZ);
+
     if (ok) {
         mounted = true;
         serialPrintf("[SD] Card type: %s  total: %llu MB\n",
@@ -78,6 +92,23 @@ bool SDManager::mount() {
                       (unsigned long long)(SD.totalBytes() / (1024ULL * 1024ULL)));
     } else {
         mounted = false;
+
+        // ── KEY FIX ──────────────────────────────────────────────────────────
+        // Always call SD.end() after a failed SD.begin().
+        // A failed begin() leaves the SD library's internal SDFS object in a
+        // partially-initialised state: the SPI driver is installed, the mutex
+        // inside the VFS layer may be held, and the CS pin may be asserted low.
+        // This manifests as FreeRTOS mutex timeouts under load — GET requests
+        // succeed (fast path, no body parsing) while POST requests fail because
+        // they spend more time in the task scheduler and hit the blocked mutex.
+        // Calling SD.end() tears down the driver cleanly and releases the CS pin.
+        // ─────────────────────────────────────────────────────────────────────
+        SD.end();
+
+        // Release CS pin back to idle-high so it doesn't interfere with the
+        // SPI bus if other devices share the same bus in the future.
+        pinMode(SD_CS_PIN, OUTPUT);
+        digitalWrite(SD_CS_PIN, HIGH);
     }
 
     unlock();
@@ -89,6 +120,11 @@ void SDManager::unmount() {
     if (mounted) {
         SD.end();
         mounted = false;
+
+        // Return CS to idle-high.
+        pinMode(SD_CS_PIN, OUTPUT);
+        digitalWrite(SD_CS_PIN, HIGH);
+
         serialPrintf("[SD] Card unmounted\n");
     }
     unlock();
@@ -113,9 +149,9 @@ SDStorageInfo SDManager::getStorageInfo() {
     info.usedPct    = (total > 0) ? (uint8_t)((used * 100ULL) / total) : 0;
 
     switch (SD.cardType()) {
-        case CARD_SD:   info.cardType = "SDSC";  break;
-        case CARD_SDHC: info.cardType = "SDHC";  break;
-        case CARD_NONE: info.cardType = "None";  break;
+        case CARD_SD:   info.cardType = "SDSC";    break;
+        case CARD_SDHC: info.cardType = "SDHC";    break;
+        case CARD_NONE: info.cardType = "None";    break;
         default:        info.cardType = "Unknown"; break;
     }
 
