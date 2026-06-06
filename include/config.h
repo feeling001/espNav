@@ -46,6 +46,9 @@
 #define ST1_TX_CHANNEL      RMT_CHANNEL_1
 #define ST1_ENABLED         true
 
+#define ST1_INVERT_RX       true   // hardware GPIO-matrix inversion on the RX pin
+#define ST1_INVERT_TX       false  // idle level + bit polarity inversion on TX
+
 
 // Delays (CDMA/CD)
 #define ST1_COLLISION_DELAY 3   // ms [cite: 51]

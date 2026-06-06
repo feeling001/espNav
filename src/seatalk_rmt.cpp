@@ -5,14 +5,17 @@ SeatalkRMT::SeatalkRMT(LogManager* logManager) {
     _logManager = logManager;
 }
 
-void SeatalkRMT::init(gpio_num_t rxPin, gpio_num_t txPin, rmt_channel_t rxChannel, rmt_channel_t txChannel) {
+void SeatalkRMT::init(gpio_num_t rxPin, gpio_num_t txPin, rmt_channel_t rxChannel, rmt_channel_t txChannel, bool invertRx, bool invertTx) {
     _rxPin = rxPin;
     _txPin = txPin;
     _rxChannel = rxChannel;
     _txChannel = txChannel;
 
+    _invertRx = invertRx;
+    _invertTx = invertTx;
 
-    serialPrintf("[SeaTalk] Initializing RMT RX on pin %d, channel %d \n",_rxPin,_rxChannel);
+
+    serialPrintf("[SeaTalk] Initializing RMT RX on pin %d, channel %d (invert = %i) \n",_rxPin,_rxChannel,_invertRx);
 
     pinMode(_rxPin, INPUT_PULLUP);
 
@@ -27,7 +30,7 @@ void SeatalkRMT::init(gpio_num_t rxPin, gpio_num_t txPin, rmt_channel_t rxChanne
     rmt_rx.rx_config.idle_threshold = IDLE_THRESHOLD_US;
     rmt_config(&rmt_rx);
     // INVERSION MATERIELLE (GPIO MATRIX)
-    esp_rom_gpio_connect_in_signal(_rxPin, RMT_SIG_IN0_IDX, true);
+    esp_rom_gpio_connect_in_signal(_rxPin, RMT_SIG_IN0_IDX, _invertRx);
     rmt_driver_install(rmt_rx.channel, 2048, 0);
     rmt_rx_start(_rxChannel, true);
 
@@ -35,7 +38,7 @@ void SeatalkRMT::init(gpio_num_t rxPin, gpio_num_t txPin, rmt_channel_t rxChanne
     _inframe = 0;
     _lasttransition = 0;
 
-    serialPrintf("[SeaTalk] Initializing RMT TX on pin %d, channel %d \n",_txPin,_txChannel);
+    serialPrintf("[SeaTalk] Initializing RMT TX on pin %d, channel %d (invert = %i)\n",_txPin,_txChannel,_invertTx);
 
     pinMode(_txPin, OUTPUT);
     digitalWrite(_txPin, HIGH); // BUS à 12V (Repos) selon ta logique
@@ -49,7 +52,7 @@ void SeatalkRMT::init(gpio_num_t rxPin, gpio_num_t txPin, rmt_channel_t rxChanne
     rmt_tx.clk_div = 80; 
     rmt_tx.tx_config.loop_en = false;
     rmt_tx.tx_config.idle_output_en = true;
-    rmt_tx.tx_config.idle_level = RMT_IDLE_LEVEL_HIGH;
+    rmt_tx.tx_config.idle_level = _invertTx ? RMT_IDLE_LEVEL_HIGH : RMT_IDLE_LEVEL_LOW;
     
     rmt_config(&rmt_tx);
 
@@ -57,7 +60,7 @@ void SeatalkRMT::init(gpio_num_t rxPin, gpio_num_t txPin, rmt_channel_t rxChanne
 
     // On force la liaison pour que le RMT reprenne le PIN après le digitalWrite
     // rmt_set_gpio(_txChannel, RMT_MODE_TX, _txPin, false);
-    rmt_set_idle_level(_txChannel, true, RMT_IDLE_LEVEL_HIGH);
+    rmt_set_idle_level(_txChannel, true, _invertTx ? RMT_IDLE_LEVEL_HIGH : RMT_IDLE_LEVEL_LOW);
     rmt_tx_stop(_txChannel);
     
 }
@@ -172,8 +175,8 @@ void SeatalkRMT::task() {
 void SeatalkRMT::addItemBit(uint8_t bit, uint8_t closeframe) {
     if( ( _itemlastlevel == 0 && bit == 1 ) | closeframe==1 ) {
             // NEW Transition to 1
-            _items[_itemtransitions].level0    = 0;  
-            _items[_itemtransitions].level1    = 1; 
+            _items[_itemtransitions].level0    = _invertTx ? 0 : 1;  
+            _items[_itemtransitions].level1    = _invertTx ? 1 :0;
             _items[_itemtransitions].duration0 = SEATALK_BIT_US * _itemcount1;
             _items[_itemtransitions].duration1 = SEATALK_BIT_US * _itemcount0;
             // serialPrintf("new transition %d [%d(%d)-%d(%d)]\n", _itemtransitions, _items[_itemtransitions].duration0, _itemcount1, _items[_itemtransitions].duration1,_itemcount0);

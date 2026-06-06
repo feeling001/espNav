@@ -208,7 +208,8 @@ void setup() {
 
     // ── SeaTalk ───────────────────────────────────────────────
     serialPrintf("\n[SeaTalk] Initializing RMT...\n");
-    seatalkHandler.init(ST1_RX_PIN, ST1_TX_PIN, ST1_RX_CHANNEL, ST1_TX_CHANNEL);
+    // seatalkHandler.init(ST1_RX_PIN, ST1_TX_PIN, ST1_RX_CHANNEL, ST1_TX_CHANNEL);
+    seatalkHandler.init(ST1_RX_PIN, ST1_TX_PIN, ST1_RX_CHANNEL, ST1_TX_CHANNEL, ST1_INVERT_RX, ST1_INVERT_TX);
     serialPrintf("[SeaTalk] ✓ SeatalkManager ready\n");
 
     // ── TCP server ────────────────────────────────────────────
