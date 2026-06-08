@@ -176,7 +176,7 @@ void SeatalkRMT::addItemBit(uint8_t bit, uint8_t closeframe) {
     if( ( _itemlastlevel == 0 && bit == 1 ) | closeframe==1 ) {
             // NEW Transition to 1
             _items[_itemtransitions].level0    = _invertTx ? 0 : 1;  
-            _items[_itemtransitions].level1    = _invertTx ? 1 :0;
+            _items[_itemtransitions].level1    = _invertTx ? 1 : 0;
             _items[_itemtransitions].duration0 = SEATALK_BIT_US * _itemcount1;
             _items[_itemtransitions].duration1 = SEATALK_BIT_US * _itemcount0;
             // serialPrintf("new transition %d [%d(%d)-%d(%d)]\n", _itemtransitions, _items[_itemtransitions].duration0, _itemcount1, _items[_itemtransitions].duration1,_itemcount0);

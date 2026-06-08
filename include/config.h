@@ -100,10 +100,14 @@
 // The SD card is mounted at boot but its presence is optional.
 // Check SDManager::isMounted() before any file operations.
 // ─────────────────────────────────────────────────────────────────────────────
-#define SD_MOSI_PIN         GPIO_NUM_11
-#define SD_MISO_PIN         GPIO_NUM_13
-#define SD_SCK_PIN          GPIO_NUM_12
+
+// OK on ZERO AND n16r8:
 #define SD_CS_PIN           GPIO_NUM_10
+#define SD_MOSI_PIN         GPIO_NUM_11
+#define SD_SCK_PIN          GPIO_NUM_12
+#define SD_MISO_PIN         GPIO_NUM_13
+
+
 #define SD_SPI_FREQ_HZ      4000000     // 4 MHz — conservative, works with most cards
 #define SD_SPI_HOST         SPI3_HOST   // VSPI / SPI3 — leaves HSPI free for other uses
 #define SD_MOUNT_POINT      "/sdcard"
