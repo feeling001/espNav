@@ -21,6 +21,9 @@
 
 #define DEBUG_SERIAL Serial0
 
+// LED  Configuration
+#define LED_PIN                 GPIO_NUM_48
+#define NUM_LEDS                1
 
 // WiFi Configuration
 #define WIFI_CONNECT_TIMEOUT_MS  30000

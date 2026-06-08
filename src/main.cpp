@@ -18,6 +18,7 @@
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
 #include <LittleFS.h>
+#include <Adafruit_NeoPixel.h>
 
 #include "config.h"
 #include "types.h"
@@ -49,6 +50,9 @@ TCPServer      tcpServer;
 BLEManager     bleManager;
 NMEAParser     nmeaParser(&boatState);
 
+
+Adafruit_NeoPixel strip(NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800);
+char rgb[3] = {100, 100, 100}; // Vert par défaut
 
 // WebServer receives all subsystem pointers including SDManager.
 WebServer webServer(&configManager, &wifiManager, &tcpServer, &uartHandler,
@@ -125,6 +129,11 @@ void setup() {
     serialPrintf("   Version: " VERSION " \n");
     serialPrintf("   Dual-Core Optimized \n");
     serialPrintf("======================================\n");
+
+
+    // ── LED initialization ───────────────────────────────────────────────
+    strip.begin();
+    strip.show();   // switch off
 
     // ── LittleFS ──────────────────────────────────────────────
     serialPrintf("[LittleFS] Initializing filesystem...\n");
@@ -362,6 +371,8 @@ void processorTask(void* parameter) {
     serialPrintf("[Processor] Started on Core 1\n");
 
     uint32_t lastStatsTime     = millis();
+    uint32_t lastLedTime       = millis();
+    bool     setLedOff         = true;
     uint32_t messagesProcessed = 0;
 
     while (true) {
@@ -387,6 +398,18 @@ void processorTask(void* parameter) {
             messagesProcessed = 0;
         }
 #endif
+
+        if (millis() - lastLedTime > 3000) {
+            strip.setPixelColor(0, strip.Color(rgb[0], rgb[1], rgb[2])); // vert
+            strip.show();
+            lastLedTime     = millis();
+            setLedOff       = true;
+        }
+        if(setLedOff && millis() - lastLedTime > 100) {
+            strip.setPixelColor(0, strip.Color(0, 0, 0)); // éteint
+            strip.show();
+            setLedOff = false;
+        }
     }
 }
 
@@ -403,19 +426,31 @@ void wifiTask(void* parameter) {
         if (currentState != lastState) {
             switch (currentState) {
                 case WIFI_CONNECTED_STA:
+                    rgb[0] = 0; rgb[1] = 100; rgb[2] = 0; // Vert pour station mode
                     serialPrintf("[WiFi] ✓ Connected to %s  IP: %s  RSSI: %d dBm\n",
                                  wifiManager.getSSID().c_str(),
                                  wifiManager.getIP().toString().c_str(),
                                  wifiManager.getRSSI());
                     break;
                 case WIFI_AP_MODE:
+                    rgb[0] = 0; rgb[1] = 0; rgb[2] = 100; // Bleu pour AP mode
                     serialPrintf("[WiFi] ✓ AP Mode: %s  IP: %s\n",
                                  wifiManager.getSSID().c_str(),
                                  wifiManager.getIP().toString().c_str());
                     break;
-                case WIFI_DISCONNECTED:  serialPrintf("[WiFi] Disconnected\n");   break;
-                case WIFI_CONNECTING:    serialPrintf("[WiFi] Connecting...\n");   break;
-                case WIFI_RECONNECTING:  serialPrintf("[WiFi] Reconnecting...\n"); break;
+                case WIFI_DISCONNECTED:  
+                    rgb[0] = 100; rgb[1] = 0; rgb[2] = 0; // Rouge pour déconnecté
+                    serialPrintf("[WiFi] Disconnected\n");   
+                    break;
+                    
+                case WIFI_CONNECTING:    
+                    rgb[0] = 100; rgb[1] = 100; rgb[2] = 0; // Jaune pour connexion
+                    serialPrintf("[WiFi] Connecting...\n");   
+                    break;
+                case WIFI_RECONNECTING:  
+                    rgb[0] = 100; rgb[1] = 50; rgb[2] = 0; // Orange pour reconnexion
+                    serialPrintf("[WiFi] Reconnecting...\n"); 
+                    break;
             }
             lastState = currentState;
         }
