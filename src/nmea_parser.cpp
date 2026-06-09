@@ -148,9 +148,9 @@ void NMEAParser::parseGGA(const char* line) {
     char buffer[32];
     char lat[16], ns[2], lon[16], ew[2];
 
-    parseField(line, 1, buffer, sizeof(buffer));
-    //float gpsTime = atof(buffer);
-    float gpsTime = 084646.000;  // onvert time string to float
+    // parseField(line, 1, buffer, sizeof(buffer));
+    // float gpsTime = atof(buffer);
+    // float gpsTime = 84646.000f;  // convert time string to float
 
     parseField(line, 2, lat, sizeof(lat));
     parseField(line, 3, ns,  sizeof(ns));
@@ -166,12 +166,16 @@ void NMEAParser::parseGGA(const char* line) {
     parseField(line, 8, buffer, sizeof(buffer));
     float hdop = atof(buffer);
 
+    // boatState->setGPSTime(gpsTime);
+
+    // serialPrintf("Parsed GGA: time=%.2f, lat=%s %s, lon=%s %s, fix=%d, sats=%d, hdop=%.1f\n", gpsTime, lat, ns, lon, ew, fixQuality, satellites, hdop);
+
     if (fixQuality > 0 && strlen(lat) > 0 && strlen(lon) > 0) {
         boatState->setGPSPosition(parseLatitude(lat, ns), parseLongitude(lon, ew));
         boatState->setGPSSatellites(satellites);
         boatState->setGPSFixQuality(fixQuality);
         boatState->setGPSHDOP(hdop);
-        boatState->setGPSTime(gpsTime);
+        
     }
 }
 
