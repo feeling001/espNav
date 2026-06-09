@@ -65,6 +65,7 @@ struct GPSData {
     DataPoint satellites;
     DataPoint fix_quality;
     DataPoint hdop;         // Horizontal Dilution of Precision
+    DataPoint time;         // GPS time (hhmmss.ss)
 };
 
 /**
@@ -272,6 +273,7 @@ public:
     void setGPSSatellites(int count);
     void setGPSFixQuality(int quality);
     void setGPSHDOP(float hdop);
+    void setGPSTime(float time);
     
     void setSTW(float stw);
     void setTrip(float trip);

@@ -49,8 +49,10 @@
 #define ST1_TX_CHANNEL      RMT_CHANNEL_1
 #define ST1_ENABLED         true
 
-#define ST1_INVERT_RX       true   // hardware GPIO-matrix inversion on the RX pin
-#define ST1_INVERT_TX       false  // idle level + bit polarity inversion on TX
+// hardware GPIO inversion on the RX pin  (true : to read signal from a lm393 comparator output, which is inverted compared to the original SeaTalk signal)
+#define ST1_INVERT_RX       true   
+// hardware GPIO inversion on the TX pin  (false : to pilot an NPN transistor pulling down to GND)
+#define ST1_INVERT_TX       false  
 
 
 // Delays (CDMA/CD)

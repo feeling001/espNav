@@ -148,6 +148,10 @@ void NMEAParser::parseGGA(const char* line) {
     char buffer[32];
     char lat[16], ns[2], lon[16], ew[2];
 
+    parseField(line, 1, buffer, sizeof(buffer));
+    //float gpsTime = atof(buffer);
+    float gpsTime = 084646.000;  // onvert time string to float
+
     parseField(line, 2, lat, sizeof(lat));
     parseField(line, 3, ns,  sizeof(ns));
     parseField(line, 4, lon, sizeof(lon));
@@ -167,6 +171,7 @@ void NMEAParser::parseGGA(const char* line) {
         boatState->setGPSSatellites(satellites);
         boatState->setGPSFixQuality(fixQuality);
         boatState->setGPSHDOP(hdop);
+        boatState->setGPSTime(gpsTime);
     }
 }
 

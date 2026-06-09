@@ -890,9 +890,12 @@ void WebServer::handlePostSerialConfig(AsyncWebServerRequest* request, uint8_t* 
 
 void WebServer::handleGetStatus(AsyncWebServerRequest* request) {
     JsonDocument doc;
+    GPSData     gps     = boatState->getGPS();
 
     doc["version"] = VERSION;
     doc["uptime"]  = millis() / 1000;
+    
+    doc["time"]    = gps.time.value;
 
     JsonObject heap = doc["heap"].to<JsonObject>();
     heap["free"]     = ESP.getFreeHeap();
