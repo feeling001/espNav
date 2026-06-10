@@ -895,7 +895,8 @@ void WebServer::handleGetStatus(AsyncWebServerRequest* request) {
     doc["version"] = VERSION;
     doc["uptime"]  = millis() / 1000;
     
-    doc["time"]    = gps.time.value;  
+    // doc["time"]    = gps.datetime.
+    doc["time"]     = "12346984321";
 
     JsonObject heap = doc["heap"].to<JsonObject>();
     heap["free"]     = ESP.getFreeHeap();

@@ -21,7 +21,6 @@ void BoatState::init() {
     gps.satellites.unit = "count";
     gps.fix_quality.unit = "";
     gps.hdop.unit = "";
-    gps.time.unit = "s";
     
     speed.stw.unit = "kn";
     speed.trip.unit = "nm";
@@ -168,9 +167,9 @@ void BoatState::setGPSHDOP(float hdop) {
     xSemaphoreGive(mutex);
 }
 
-void BoatState::setGPSTime(float time) {
+void BoatState::setGPSDateTime( uint16_t year, uint8_t month, uint8_t day, uint8_t hour, uint8_t minute, uint8_t second) {
     xSemaphoreTake(mutex, portMAX_DELAY);
-    gps.time.set(time, "s");
+    gps.datetime.set( year, month, day, hour, minute, second);
     xSemaphoreGive(mutex);
 }
 
@@ -516,7 +515,6 @@ String BoatState::toJSON() {
     addDataPointToJSON(gpsObj, "satellites", gps.satellites);
     addDataPointToJSON(gpsObj, "fix_quality", gps.fix_quality);
     addDataPointToJSON(gpsObj, "hdop", gps.hdop);
-    addDataPointToJSON(gpsObj, "time", gps.time);
     
     // Speed
     JsonObject speedObj = doc["speed"].to<JsonObject>();
@@ -616,7 +614,6 @@ String BoatState::getNavigationJSON() {
     addDataPointToJSON(root, "sog", gps.sog);
     addDataPointToJSON(root, "cog", gps.cog);
     addDataPointToJSON(root, "depth", depth.below_transducer);
-    addDataPointToJSON(root, "time", gps.time);
     xSemaphoreGive(mutex);
     
     String output;

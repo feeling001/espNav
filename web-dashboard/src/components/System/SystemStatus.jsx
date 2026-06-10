@@ -51,6 +51,14 @@ export function SystemStatus() {
     return `${secs}s`;
   };
 
+ const formatTime = (seconds) => {
+    const hours = Math.floor((seconds % 86400) / 3600);
+    const mins = Math.floor((seconds % 3600) / 60);
+    const secs = seconds % 60;
+
+    return `${hours}h ${mins}m ${secs}s`;
+  };
+
   const formatBytes = (bytes) => {
     if (bytes < 1024) return bytes + ' B';
     if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
@@ -111,6 +119,7 @@ export function SystemStatus() {
         <div className="status-card">
           <h3>Uptime</h3>
           <div className="value">{formatUptime(status.uptime)}</div>
+          <div className="label">date {formatTime(status.time)}</div>
         </div>
 
         {/* Free Heap */}

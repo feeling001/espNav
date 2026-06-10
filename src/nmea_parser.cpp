@@ -40,6 +40,7 @@ bool NMEAParser::parseLine(const char* line, NMEASentence& out) {
         if (boatState != nullptr) {
             if      (strstr(out.type, "GGA"))                          parseGGA(line);
             else if (strstr(out.type, "RMC"))                          parseRMC(line);
+            else if (strstr(out.type, "ZDA"))                          parseZDA(line);
             else if (strstr(out.type, "GLL"))                          parseGLL(line);
             else if (strstr(out.type, "VTG"))                          parseVTG(line);
             else if (strstr(out.type, "HDT"))                          parseHDT(line);
@@ -148,10 +149,6 @@ void NMEAParser::parseGGA(const char* line) {
     char buffer[32];
     char lat[16], ns[2], lon[16], ew[2];
 
-    // parseField(line, 1, buffer, sizeof(buffer));
-    // float gpsTime = atof(buffer);
-    // float gpsTime = 84646.000f;  // convert time string to float
-
     parseField(line, 2, lat, sizeof(lat));
     parseField(line, 3, ns,  sizeof(ns));
     parseField(line, 4, lon, sizeof(lon));
@@ -165,10 +162,6 @@ void NMEAParser::parseGGA(const char* line) {
 
     parseField(line, 8, buffer, sizeof(buffer));
     float hdop = atof(buffer);
-
-    // boatState->setGPSTime(gpsTime);
-
-    // serialPrintf("Parsed GGA: time=%.2f, lat=%s %s, lon=%s %s, fix=%d, sats=%d, hdop=%.1f\n", gpsTime, lat, ns, lon, ew, fixQuality, satellites, hdop);
 
     if (fixQuality > 0 && strlen(lat) > 0 && strlen(lon) > 0) {
         boatState->setGPSPosition(parseLatitude(lat, ns), parseLongitude(lon, ew));
@@ -353,6 +346,32 @@ void NMEAParser::parseVLW(const char* line) {
     if (total >= 0) boatState->setTotal(total);
     if (trip  >= 0) boatState->setTrip(trip);
 }
+
+// $GPZDA - UTC Date and Time
+void NMEAParser::parseZDA(const char* line) {
+    char buffer[32];
+
+    parseField(line, 2, buffer, sizeof(buffer));
+    int day = atoi(buffer);
+
+    parseField(line, 3, buffer, sizeof(buffer));
+    int month = atoi(buffer);
+
+    parseField(line, 4, buffer, sizeof(buffer));
+    int year = atoi(buffer);
+
+    parseField(line, 1, buffer, sizeof(buffer));
+    int hour = 0, minute = 0, second = 0;
+
+    if (strlen(buffer) >= 6) {
+        hour =   (buffer[0] - '0') * 10 + (buffer[1] - '0');
+        minute = (buffer[2] - '0') * 10 + (buffer[3] - '0');
+        second = (buffer[4] - '0') * 10 + (buffer[5] - '0');
+    }
+
+    boatState->setGPSDateTime(year, month, day, hour, minute, second);
+}
+
 
 // ============================================================
 // AIS Decoder

@@ -21,6 +21,7 @@ private:
     
     // NMEA 0183 sentence parsers
     void parseGGA(const char* line);  // GPS Fix Data
+    void parseZDA(const char* line);  // Date & Time
     void parseRMC(const char* line);  // Recommended Minimum
     void parseGLL(const char* line);  // Geographic Position
     void parseVTG(const char* line);  // Track Made Good and Ground Speed

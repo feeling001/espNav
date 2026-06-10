@@ -2,6 +2,7 @@
 #define BOAT_STATE_H
 
 #include "polar.h"
+#include <time.h>
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <freertos/FreeRTOS.h>
@@ -42,6 +43,58 @@ struct DataPoint {
     }
 };
 
+
+struct GPSDateTime {
+    uint16_t year;
+    uint8_t month;
+    uint8_t day;
+
+    uint8_t hour;
+    uint8_t minute;
+    uint8_t second;
+
+    unsigned long timestamp;
+    bool valid;
+
+    GPSDateTime()
+        : year(0), month(0), day(0),
+          hour(0), minute(0), second(0),
+          timestamp(0), valid(false) {}
+
+    void set(uint16_t y, uint8_t m, uint8_t d,
+             uint8_t h, uint8_t min, uint8_t s) {
+        year = y;
+        month = m;
+        day = d;
+        hour = h;
+        minute = min;
+        second = s;
+        timestamp = millis();
+        valid = true;
+    }
+
+    uint64_t getTimestamp() const {
+        if (!valid) return 0;
+
+        struct tm t = {};
+        t.tm_year = year - 1900;
+        t.tm_mon  = month - 1;
+        t.tm_mday = day;
+        t.tm_hour = hour;
+        t.tm_min  = minute;
+        t.tm_sec  = second;
+
+        // UTC
+
+        return (uint64_t)mktime(&t);
+    }
+
+    bool isStale(unsigned long timeout = DATA_TIMEOUT_DEFAULT) const {
+        if (!valid) return true;
+        return (millis() - timestamp) > timeout;
+    }
+};
+
 /**
  * GPS Position structure
  */
@@ -65,7 +118,7 @@ struct GPSData {
     DataPoint satellites;
     DataPoint fix_quality;
     DataPoint hdop;         // Horizontal Dilution of Precision
-    DataPoint time;         // GPS time (hhmmss.ss)
+    GPSDateTime datetime;
 };
 
 /**
@@ -273,7 +326,12 @@ public:
     void setGPSSatellites(int count);
     void setGPSFixQuality(int quality);
     void setGPSHDOP(float hdop);
-    void setGPSTime(float time);
+    void setGPSDateTime(uint16_t year,
+                    uint8_t month,
+                    uint8_t day,
+                    uint8_t hour,
+                    uint8_t minute,
+                    uint8_t second);
     
     void setSTW(float stw);
     void setTrip(float trip);
