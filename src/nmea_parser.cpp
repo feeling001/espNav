@@ -368,7 +368,7 @@ void NMEAParser::parseZDA(const char* line) {
         minute = (buffer[2] - '0') * 10 + (buffer[3] - '0');
         second = (buffer[4] - '0') * 10 + (buffer[5] - '0');
     }
-
+    
     boatState->setGPSDateTime(year, month, day, hour, minute, second);
 }
 

@@ -51,12 +51,18 @@ export function SystemStatus() {
     return `${secs}s`;
   };
 
- const formatTime = (seconds) => {
-    const hours = Math.floor((seconds % 86400) / 3600);
-    const mins = Math.floor((seconds % 3600) / 60);
-    const secs = seconds % 60;
-
-    return `${hours}h ${mins}m ${secs}s`;
+  const formatDateTime = (timestamp) => {
+    const date = new Date(timestamp * 1000); // Unix timestamp -> ms
+  
+    const yyyy = date.getUTCFullYear();
+    const mm = String(date.getUTCMonth() + 1).padStart(2, "0");
+    const dd = String(date.getUTCDate()).padStart(2, "0");
+ 
+    const hh = String(date.getUTCHours()).padStart(2, "0");
+    const mi = String(date.getUTCMinutes()).padStart(2, "0");
+    const ss = String(date.getUTCSeconds()).padStart(2, "0");
+  
+    return `${yyyy}-${mm}-${dd} ${hh}:${mi}:${ss} UTC`;
   };
 
   const formatBytes = (bytes) => {
@@ -119,7 +125,7 @@ export function SystemStatus() {
         <div className="status-card">
           <h3>Uptime</h3>
           <div className="value">{formatUptime(status.uptime)}</div>
-          <div className="label">date {formatTime(status.time)}</div>
+          <div className="label">date {formatDateTime(status.datetime)}</div>
         </div>
 
         {/* Free Heap */}
