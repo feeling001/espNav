@@ -6,9 +6,16 @@
  * @brief Non-blocking SD card logbook manager for the Marine Gateway.
  *
  * Supports three independent logging modes:
- *   1. Raw NMEA  — verbatim copy of incoming NMEA sentences.
+ *   1. Raw NMEA    — verbatim copy of incoming NMEA sentences.
  *   2. Raw SeaTalk — ST1 datagrams formatted as hex strings.
  *   3. Structured CSV — periodic snapshot of boatState (excl. AIS).
+ *
+ * GPS-aware behaviour:
+ *   No log file is created and no entry is enqueued until a valid GPS fix
+ *   is available (GPSDateTime::getTimestamp() > 1).  Once acquired, the
+ *   background task opens the log files automatically.  File names embed
+ *   the UTC date and time from the GPS fix (log_YYYYMMDD_HHmm.<ext>).
+ *   CSV snapshot rows use the GPS unix timestamp as their time column.
  *
  * Architecture:
  *   A dedicated FreeRTOS task (logTask) consumes a queue of LogEntry items
@@ -16,12 +23,13 @@
  *   touched from the hot data path — the queue decouples producers from the
  *   (slow) SD I/O.
  *
- *   Files are flushed every FLUSH_INTERVAL_MS milliseconds and synced to
- *   disk.  The flush period is a trade-off between crash safety and SD wear.
+ *   Files are flushed every LOG_FLUSH_INTERVAL_MS milliseconds.
+ *   The flush period is a trade-off between crash safety and SD wear.
  *
  * File naming:
- *   log_YYYYMMDD_HHMM_<type>.{nmea,st1,csv}
- *   If no GPS fix is available, falls back to log_session_<N>_<type>.ext
+ *   log_YYYYMMDD_HHmm.<ext>   (UTC from GPS fix)
+ *   Falls back to session_XXXX.<ext> if GPS is somehow unavailable at
+ *   file-open time (should not occur under normal conditions).
  *
  * Configuration persisted in NVS under namespace "logmgr":
  *   - nmea_en    (bool)   Raw NMEA logging enabled
@@ -44,13 +52,13 @@
 // Compile-time constants
 // ─────────────────────────────────────────────────────────────────────────────
 
-#define LOG_QUEUE_SIZE        128   // max pending log entries before drop
+#define LOG_QUEUE_SIZE        128   ///< Max pending log entries before drop
 #define LOG_TASK_STACK        6144
-#define LOG_TASK_PRIORITY     1     // lowest — behind all real-time tasks
-#define LOG_FLUSH_INTERVAL_MS 10000 // flush/sync every 10 seconds
+#define LOG_TASK_PRIORITY     1     ///< Lowest — behind all real-time tasks
+#define LOG_FLUSH_INTERVAL_MS 10000 ///< Flush/sync every 10 seconds
 #define LOG_NVS_NAMESPACE     "logmgr"
 #define LOG_CSV_HEADER \
-    "timestamp_ms,lat,lon,sog_kn,cog_deg,stw_kn,hdg_mag_deg,hdg_true_deg," \
+    "timestamp_utc,lat,lon,sog_kn,cog_deg,stw_kn,hdg_mag_deg,hdg_true_deg," \
     "depth_m,aws_kn,awa_deg,tws_kn,twa_deg,twd_deg,water_temp_c\n"
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -67,7 +75,7 @@ enum LogEntryType : uint8_t {
 /** Fixed-size queue entry — avoids heap allocation in ISR/task context. */
 struct LogEntry {
     LogEntryType type;
-    char         data[120]; ///< null-terminated payload
+    char         data[120]; ///< Null-terminated payload
 };
 
 /** Configuration held in RAM and persisted to NVS. */
@@ -89,7 +97,7 @@ struct LogStats {
     uint32_t csvSnapshots;
     uint32_t droppedEntries;
     uint32_t sessionStartMs;
-    char     sessionName[32]; ///< human-readable session identifier
+    char     sessionName[32]; ///< Human-readable session identifier
 
     LogStats() { memset(this, 0, sizeof(*this)); }
 };
@@ -102,17 +110,21 @@ class LogManager {
 public:
     /**
      * @param sdMgr     SD card manager (must outlive LogManager).
-     * @param boatState Shared boat state for CSV snapshots.
+     * @param boatState Shared boat state for GPS fix detection and CSV snapshots.
      */
     LogManager(SDManager* sdMgr, BoatState* boatState);
     ~LogManager();
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────
 
-    /** Load config from NVS, open log files if enabled, start background task. */
+    /** Load config from NVS and create the FreeRTOS queue. Does NOT open files. */
     void init();
 
-    /** Start the FreeRTOS logging task. Call after init(). */
+    /**
+     * @brief Start the FreeRTOS logging task.
+     *
+     * The task will open log files automatically once a GPS fix is acquired.
+     */
     void start();
 
     /** Flush and close all open log files, stop the task. */
@@ -121,9 +133,10 @@ public:
     // ── Session management ────────────────────────────────────────────────────
 
     /**
-     * @brief Close current log files and open new ones (new session).
+     * @brief Close current log files and start a new session.
      *
-     * Uses GPS date/time if available, otherwise an incremental session ID.
+     * Files are reopened immediately if a GPS fix is already available;
+     * otherwise the task's periodic check will open them once the fix arrives.
      */
     void newSession();
 
@@ -132,6 +145,7 @@ public:
     /**
      * @brief Enqueue a raw NMEA sentence for logging.
      *
+     * Silently discarded if no GPS fix is available yet.
      * Non-blocking — drops the entry and increments droppedEntries if the
      * queue is full.  Safe to call from any task/core.
      *
@@ -142,6 +156,7 @@ public:
     /**
      * @brief Enqueue a SeaTalk datagram for logging.
      *
+     * Silently discarded if no GPS fix is available yet.
      * The datagram is formatted as uppercase hex bytes separated by spaces,
      * e.g. "52 01 02 FF".
      *
@@ -168,16 +183,37 @@ public:
     String   openFilePaths() const;
 
 private:
+    // ── GPS fix guard ─────────────────────────────────────────────────────────
+
+    /**
+     * @brief Return true when a valid GPS datetime has been received.
+     *
+     * Condition: GPSDateTime::getTimestamp() > 1.
+     * This is the gate used by all logging entry points and by openFiles().
+     */
+    bool hasGPSFix() const;
+
     // ── Internal helpers ──────────────────────────────────────────────────────
 
     void loadConfig();
     void saveConfig();
 
-    /** Determine session name from GPS fix or incremental counter. */
+    /**
+     * @brief Build the session/file base name from GPS UTC date and time.
+     *
+     * Format: log_YYYYMMDD_HHmm  (requires a valid GPS fix)
+     * Fallback: session_XXXX
+     */
     void buildSessionName(char* out, size_t maxLen);
 
     /** Open (or re-open) log files according to current config. */
     void openFiles();
+
+    /**
+     * @brief Open files if not already open and a GPS fix is available.
+     * @return true if files are now open (or were already open).
+     */
+    bool tryOpenFiles();
 
     /** Flush + sync all open files. */
     void flushAll();
@@ -188,7 +224,12 @@ private:
     /** Process a single LogEntry dispatched from the queue. */
     void processEntry(const LogEntry& entry);
 
-    /** Write a CSV row for the current boatState snapshot. */
+    /**
+     * @brief Write a CSV row for the current boatState snapshot.
+     *
+     * Uses GPSDateTime::getTimestamp() as the time column.
+     * No-op if no GPS fix is available.
+     */
     void writeCSVSnapshot();
 
     // ── FreeRTOS task ─────────────────────────────────────────────────────────
@@ -204,8 +245,8 @@ private:
     LogConfig   config;
     LogStats    stats;
 
-    QueueHandle_t   queue;
-    TaskHandle_t    taskHandle;
+    QueueHandle_t     queue;
+    TaskHandle_t      taskHandle;
     SemaphoreHandle_t statsMutex;
 
     // Open file handles (one per type)

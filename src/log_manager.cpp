@@ -1,6 +1,13 @@
 /**
  * @file log_manager.cpp
  * @brief Non-blocking SD card logbook manager — implementation.
+ *
+ * GPS-aware logging: no file is created and no entry is queued until a valid
+ * GPS fix is available (datetime.getTimestamp() > 1).  Once the fix is
+ * acquired the task opens the log files automatically.
+ *
+ * File naming: log_YYYYMMDD_HHmm_<session>.<ext>  (UTC from GPS)
+ * CSV timestamp column: UTC unix timestamp from GPS instead of millis().
  */
 
 #include "log_manager.h"
@@ -8,6 +15,7 @@
 #include <ArduinoJson.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constructor / Destructor
@@ -27,6 +35,23 @@ LogManager::~LogManager() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Private helper: GPS fix guard
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * @brief Return true when a valid GPS datetime has been received.
+ *
+ * We use getTimestamp() > 1 as the validity test: the value is 0 when the
+ * struct has never been populated, and mktime() can theoretically return -1
+ * (cast to uint64, that is a very large number, so we use > 1 to be safe).
+ */
+bool LogManager::hasGPSFix() const {
+    if (!boatState) return false;
+    GPSData gps = boatState->getGPS();
+    return gps.datetime.getTimestamp() > 1;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Lifecycle
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -35,10 +60,8 @@ void LogManager::init() {
 
     statsMutex = xSemaphoreCreateMutex();
 
-    // Load config and session counter from NVS.
     loadConfig();
 
-    // Create the inter-task queue.
     queue = xQueueCreate(LOG_QUEUE_SIZE, sizeof(LogEntry));
     if (!queue) {
         serialPrintf("[Log] ❌ Failed to create log queue\n");
@@ -49,6 +72,7 @@ void LogManager::init() {
     serialPrintf("[Log] ✓ Initialized (nmea=%d st=%d csv=%d ivl=%umin)\n",
                   config.nmeaEnabled, config.seatalkEnabled,
                   config.csvEnabled, config.csvIntervalMin);
+    serialPrintf("[Log] Waiting for GPS fix before opening log files...\n");
 }
 
 void LogManager::start() {
@@ -57,7 +81,8 @@ void LogManager::start() {
     stats = LogStats();
     stats.sessionStartMs = millis();
 
-    openFiles();
+    // Files are NOT opened here: openFiles() is called from the task once a
+    // GPS fix has been acquired (see tryOpenFiles() below).
 
     xTaskCreatePinnedToCore(
         logTask,
@@ -66,7 +91,7 @@ void LogManager::start() {
         this,
         LOG_TASK_PRIORITY,
         &taskHandle,
-        1   // Core 1 — same as the processor task, lowest priority
+        1
     );
 
     running = true;
@@ -95,19 +120,39 @@ void LogManager::newSession() {
     flushAll();
     closeFiles();
 
-    // Increment persistent session counter.
     sessionCounter++;
     nvs.putUShort("session_ctr", sessionCounter);
 
-    // Reset statistics for the new session.
     if (xSemaphoreTake(statsMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
         stats = LogStats();
         stats.sessionStartMs = millis();
         xSemaphoreGive(statsMutex);
     }
 
+    // Open files only if we already have a fix; otherwise tryOpenFiles() will
+    // pick it up on the next periodic check in the task.
+    if (hasGPSFix()) {
+        openFiles();
+        serialPrintf("[Log] New session started: %s\n", stats.sessionName);
+    } else {
+        serialPrintf("[Log] New session requested, waiting for GPS fix...\n");
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Private helper: open files only when a GPS fix is available
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * @brief Open log files if not already open and a GPS fix is available.
+ * @return true if files are now open (or were already open).
+ */
+bool LogManager::tryOpenFiles() {
+    if (hasOpenFiles()) return true;   // already open — nothing to do
+    if (!hasGPSFix())   return false;  // still waiting
+
     openFiles();
-    serialPrintf("[Log] New session started: %s\n", stats.sessionName);
+    return hasOpenFiles();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -116,6 +161,7 @@ void LogManager::newSession() {
 
 void LogManager::logNMEA(const char* sentence) {
     if (!initialized || !config.nmeaEnabled || !sentence) return;
+    if (!hasGPSFix()) return;  // No fix yet — discard
 
     LogEntry entry;
     entry.type = LOG_NMEA;
@@ -132,11 +178,11 @@ void LogManager::logNMEA(const char* sentence) {
 
 void LogManager::logSeatalk(const uint8_t* data, uint8_t len) {
     if (!initialized || !config.seatalkEnabled || !data || len == 0) return;
+    if (!hasGPSFix()) return;  // No fix yet — discard
 
     LogEntry entry;
     entry.type = LOG_SEATALK;
 
-    // Format as uppercase hex: "52 01 02 FF"
     size_t pos = 0;
     for (uint8_t i = 0; i < len && pos + 3 < sizeof(entry.data); i++) {
         if (i > 0) entry.data[pos++] = ' ';
@@ -168,7 +214,8 @@ void LogManager::setConfig(const LogConfig& cfg) {
     if (needReopen && running) {
         flushAll();
         closeFiles();
-        openFiles();
+        // tryOpenFiles() in the task will reopen when fix is available
+        if (hasGPSFix()) openFiles();
     }
 
     serialPrintf("[Log] Config updated (nmea=%d st=%d csv=%d ivl=%umin)\n",
@@ -214,7 +261,6 @@ void LogManager::loadConfig() {
     config.csvIntervalMin = nvs.getUShort("csv_ivl",  5);
     sessionCounter        = nvs.getUShort("session_ctr", 0);
 
-    // Clamp interval to [1, 1440].
     if (config.csvIntervalMin < 1)    config.csvIntervalMin = 1;
     if (config.csvIntervalMin > 1440) config.csvIntervalMin = 1440;
 }
@@ -226,17 +272,37 @@ void LogManager::saveConfig() {
     nvs.putUShort("csv_ivl",  config.csvIntervalMin);
 }
 
+/**
+ * @brief Build a session name using GPS date/time when available.
+ *
+ * Format with GPS fix : log_YYYYMMDD_HHmm   (UTC)
+ * Fallback (no fix)   : session_XXXX
+ *
+ * The fallback should never be reached in practice because openFiles() is
+ * only called after hasGPSFix() returns true.
+ */
 void LogManager::buildSessionName(char* out, size_t maxLen) {
-    // Attempt to use GPS date/time for a meaningful filename.
     if (boatState) {
         GPSData gps = boatState->getGPS();
-        // GPS provides position but no direct date/time in DataPoint —
-        // use millis-based fallback.  A real implementation would store
-        // the parsed RMC UTC field in BoatState; for now use session counter.
-        (void)gps;
+        uint64_t ts = gps.datetime.getTimestamp();
+
+        if (ts > 1) {
+            time_t t = (time_t)ts;
+            struct tm tmBuf;
+            gmtime_r(&t, &tmBuf);  // UTC breakdown
+
+            snprintf(out, maxLen,
+                     "log_%04d%02d%02d_%02d%02d",
+                     tmBuf.tm_year + 1900,
+                     tmBuf.tm_mon  + 1,
+                     tmBuf.tm_mday,
+                     tmBuf.tm_hour,
+                     tmBuf.tm_min);
+            return;
+        }
     }
 
-    // Fallback: incremental session identifier.
+    // Fallback — should not be reached under normal conditions
     snprintf(out, maxLen, "session_%04u", (unsigned)sessionCounter);
 }
 
@@ -246,7 +312,6 @@ void LogManager::openFiles() {
         return;
     }
 
-    // Ensure /logs directory exists.
     if (!sdManager->exists("/logs")) {
         sdManager->mkdir("/logs");
     }
@@ -321,8 +386,16 @@ void LogManager::processEntry(const LogEntry& entry) {
 
         case LOG_SEATALK:
             if (seatalkFile) {
-                // Prefix with a millis timestamp for ordering.
-                seatalkFile.printf("%lu %s\n", (unsigned long)millis(), entry.data);
+                // Use GPS unix timestamp as prefix when available, else millis
+                uint64_t ts = 0;
+                if (boatState) {
+                    ts = boatState->getGPS().datetime.getTimestamp();
+                }
+                if (ts > 1) {
+                    seatalkFile.printf("%llu %s\n", (unsigned long long)ts, entry.data);
+                } else {
+                    seatalkFile.printf("%lu %s\n", (unsigned long)millis(), entry.data);
+                }
                 if (xSemaphoreTake(statsMutex, 0) == pdTRUE) {
                     stats.seatalkLines++;
                     xSemaphoreGive(statsMutex);
@@ -339,8 +412,15 @@ void LogManager::processEntry(const LogEntry& entry) {
     }
 }
 
+/**
+ * @brief Write one CSV row using GPS unix timestamp as the time column.
+ *
+ * Skips the snapshot silently if no GPS fix is available (should not happen
+ * in normal operation since logging only starts after a fix).
+ */
 void LogManager::writeCSVSnapshot() {
     if (!csvFile || !boatState) return;
+    if (!hasGPSFix()) return;  // Guard — do not write rows without a valid time
 
     GPSData     gps     = boatState->getGPS();
     SpeedData   speed   = boatState->getSpeed();
@@ -349,16 +429,16 @@ void LogManager::writeCSVSnapshot() {
     WindData    wind    = boatState->getWind();
     EnvironmentData env = boatState->getEnvironment();
 
-    // Helper lambda: emit float or empty field.
+    // Use the GPS unix timestamp for the time column
+    uint64_t gpsTs = gps.datetime.getTimestamp();
+
     auto fv = [](const DataPoint& dp) -> String {
         if (dp.valid && !dp.isStale()) return String(dp.value, 4);
         return "";
     };
 
-    // timestamp_ms, lat, lon, sog, cog, stw, hdg_mag, hdg_true,
-    // depth, aws, awa, tws, twa, twd, water_temp
-    csvFile.printf("%lu,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n",
-        (unsigned long)millis(),
+    csvFile.printf("%llu,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n",
+        (unsigned long long)gpsTs,
         gps.position.lat.valid && !gps.position.lat.isStale()
             ? String(gps.position.lat.value, 6).c_str() : "",
         gps.position.lon.valid && !gps.position.lon.isStale()
@@ -393,21 +473,36 @@ void LogManager::logTask(void* param) {
 
     serialPrintf("[Log] Task running on Core %d\n", (int)xPortGetCoreID());
 
+    uint32_t lastFixCheck = 0;  // Tracks when we last attempted to open files
+
     while (true) {
-        // Wait up to 500 ms for a queue entry.
-        if (xQueueReceive(self->queue, &entry, pdMS_TO_TICKS(500)) == pdTRUE) {
-            self->processEntry(entry);
+        // ── Deferred file open: wait for GPS fix ─────────────────────────────
+        // Check every 10 seconds until files are open.
+        uint32_t now = millis();
+        if (!self->hasOpenFiles() && (now - lastFixCheck >= 10000)) {
+            lastFixCheck = now;
+            if (self->tryOpenFiles()) {
+                serialPrintf("[Log] GPS fix acquired — log files opened: %s\n",
+                              self->openFilePaths().c_str());
+            }
         }
 
-        uint32_t now = millis();
+        // ── Drain the queue ──────────────────────────────────────────────────
+        if (xQueueReceive(self->queue, &entry, pdMS_TO_TICKS(500)) == pdTRUE) {
+            // Ensure files are open before processing (fix may have just arrived)
+            if (!self->hasOpenFiles()) self->tryOpenFiles();
+            if (self->hasOpenFiles()) self->processEntry(entry);
+        }
 
-        // Periodic flush — protects against data loss on power cut.
-        if (now - self->lastFlushMs >= LOG_FLUSH_INTERVAL_MS) {
+        now = millis();
+
+        // ── Periodic flush ───────────────────────────────────────────────────
+        if (self->hasOpenFiles() && now - self->lastFlushMs >= LOG_FLUSH_INTERVAL_MS) {
             self->flushAll();
         }
 
-        // Periodic CSV snapshot.
-        if (self->config.csvEnabled && self->csvFile) {
+        // ── Periodic CSV snapshot ────────────────────────────────────────────
+        if (self->config.csvEnabled && self->csvFile && self->hasGPSFix()) {
             uint32_t intervalMs = (uint32_t)self->config.csvIntervalMin * 60000UL;
             if (now - self->lastCsvSnapMs >= intervalMs) {
                 self->writeCSVSnapshot();
@@ -415,7 +510,6 @@ void LogManager::logTask(void* param) {
             }
         }
 
-        // Yield explicitly so lower-idle tasks can run.
         taskYIELD();
     }
 }
