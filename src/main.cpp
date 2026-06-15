@@ -133,7 +133,10 @@ void setup() {
 
     // ── LED initialization ───────────────────────────────────────────────
     strip.begin();
-    strip.show();   // switch off
+    strip.setPixelColor(0, strip.Color(100, 100, 100)); // blanc (init)
+    strip.show();  
+
+    delay(1000); // Wait for power stabilization
 
     // ── LittleFS ──────────────────────────────────────────────
     serialPrintf("[LittleFS] Initializing filesystem...\n");
