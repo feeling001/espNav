@@ -236,7 +236,8 @@ void setup() {
             sizeof(bleManagerConfig.device_name) - 1);
     strncpy(bleManagerConfig.pin_code, bleConfig.pin_code,
             sizeof(bleManagerConfig.pin_code) - 1);
-    bleManager.init(bleManagerConfig, &boatState, &seatalkManager);
+    bleManager.init(bleManagerConfig, &boatState, &seatalkManager, &configManager, &wifiManager);
+
 
     if (bleConfig.enabled) {
         bleManager.start();

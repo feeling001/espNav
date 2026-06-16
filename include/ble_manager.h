@@ -21,7 +21,11 @@
 #include <freertos/semphr.h>
 #include "ble_config.h"
 #include "boat_state.h"
-#include "seatalk_manager.h"   // ← new dependency
+#include "seatalk_manager.h"
+
+// Forward declarations for Admin service dependencies
+class ConfigManager;
+class WiFiManager;
 
 // ============================================================
 // BLE Configuration
@@ -75,12 +79,29 @@ private:
 };
 
 // ============================================================
-// Characteristic write callback — NimBLE 2.x API
-// Dispatches autopilot commands directly to SeatalkManager.
+// Autopilot command write callback — NimBLE 2.x API
 // ============================================================
 class AutopilotCmdCallbacks : public NimBLECharacteristicCallbacks {
 public:
     explicit AutopilotCmdCallbacks(BLEManager* mgr) : manager(mgr) {}
+
+    void onWrite(NimBLECharacteristic* pChar, NimBLEConnInfo& connInfo) override;
+
+private:
+    BLEManager* manager;
+};
+
+// ============================================================
+// Admin command write callback — NimBLE 2.x API
+//
+// Accepted JSON commands:
+//   { "command": "restart" }
+//   { "command": "wifi_sta", "ssid": "MyNet", "password": "secret" }
+//   { "command": "wifi_ap",  "ssid": "MyAP",  "password": "secret" }
+// ============================================================
+class AdminCmdCallbacks : public NimBLECharacteristicCallbacks {
+public:
+    explicit AdminCmdCallbacks(BLEManager* mgr) : manager(mgr) {}
 
     void onWrite(NimBLECharacteristic* pChar, NimBLEConnInfo& connInfo) override;
 
@@ -97,14 +118,16 @@ public:
     ~BLEManager();
 
     /**
-     * @param config      BLE configuration (name, PIN, enabled flag).
-     * @param state       Shared boat state for data notifications.
-     * @param stMgr       SeatalkManager used to forward AP commands received
-     *                    via the AutopilotCmd BLE characteristic.
-     *                    May be nullptr (commands are then silently ignored).
+     * @param config        BLE configuration (name, PIN, enabled flag).
+     * @param state         Shared boat state for data notifications.
+     * @param stMgr         SeatalkManager for AP commands (may be nullptr).
+     * @param configMgr     ConfigManager for WiFi config persistence (may be nullptr).
+     * @param wifiMgr       WiFiManager for applying WiFi changes (may be nullptr).
      */
     void init(const BLEConfig& config, BoatState* state,
-              SeatalkManager* stMgr = nullptr);
+              SeatalkManager* stMgr      = nullptr,
+              ConfigManager*  configMgr  = nullptr,
+              WiFiManager*    wifiMgr    = nullptr);
     void start();
     void stop();
     void update();
@@ -119,6 +142,7 @@ public:
 
     friend class MarineServerCallbacks;
     friend class AutopilotCmdCallbacks;
+    friend class AdminCmdCallbacks;
 
 private:
     // ── NimBLE objects ──────────────────────────────────────────
@@ -143,13 +167,22 @@ private:
     NimBLEService*        pPerformanceService;
     NimBLECharacteristic* pPerformanceDataChar;
 
+    // Admin service
+    NimBLEService*        pAdminService;
+    NimBLECharacteristic* pAdminDataChar;   // READ + NOTIFY
+    NimBLECharacteristic* pAdminCmdChar;    // WRITE
+
     MarineServerCallbacks* serverCallbacks;
     AutopilotCmdCallbacks* autopilotCmdCallbacks;
+    AdminCmdCallbacks*     adminCmdCallbacks;
 
     // ── State ───────────────────────────────────────────────────
-    BLEConfig      config;
-    BoatState*     boatState;
-    SeatalkManager* seatalkManager;   // ← new: used by AutopilotCmdCallbacks
+    BLEConfig       config;
+    BoatState*      boatState;
+    SeatalkManager* seatalkManager;
+    ConfigManager*  configManager;
+    WiFiManager*    wifiManager;
+
     bool           initialized;
     bool           advertising;
     uint32_t       connectedDevices;
@@ -168,11 +201,13 @@ private:
     void updateWindData();
     void updateAutopilotData();
     void updatePerformanceData();
+    void updateAdminData();
 
     String buildNavJSON();
     String buildWindJSON();
     String buildAutopilotJSON();
     String buildPerformanceJSON();
+    String buildAdminJSON();
 };
 
 #endif // BLE_MANAGER_H

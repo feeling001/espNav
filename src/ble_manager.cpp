@@ -1,6 +1,9 @@
 #include "ble_manager.h"
+#include "config_manager.h"
+#include "wifi_manager.h"
 #include "functions.h"
 #include <ArduinoJson.h>
+#include <esp_system.h>
 
 // ============================================================
 // Helper macro — ArduinoJson v7 null/value assignment.
@@ -61,10 +64,6 @@ void MarineServerCallbacks::onAuthenticationComplete(NimBLEConnInfo& connInfo) {
 
 // ============================================================
 // AutopilotCmdCallbacks — NimBLE 2.x signature
-//
-// Parses the incoming JSON command and forwards it directly to
-// SeatalkManager::sendAutopilotCommand().  No pending-command
-// queue needed: SeatalkManager handles serialisation internally.
 // ============================================================
 
 void AutopilotCmdCallbacks::onWrite(NimBLECharacteristic* pChar, NimBLEConnInfo& connInfo) {
@@ -88,13 +87,106 @@ void AutopilotCmdCallbacks::onWrite(NimBLECharacteristic* pChar, NimBLEConnInfo&
         return;
     }
 
-    // Delegate to SeatalkManager — all datagram knowledge lives there.
     if (manager->seatalkManager) {
         bool ok = manager->seatalkManager->sendAutopilotCommand(cmd);
         serialPrintf("[BLE] Autopilot cmd '%s' → %s\n", cmd, ok ? "OK" : "FAILED");
     } else {
         serialPrintf("[BLE] SeatalkManager not set — command '%s' dropped\n", cmd);
     }
+}
+
+// ============================================================
+// AdminCmdCallbacks — NimBLE 2.x signature
+//
+// Accepted commands:
+//   { "command": "restart" }
+//   { "command": "wifi_sta", "ssid": "...", "password": "..." }
+//   { "command": "wifi_ap",  "ssid": "...", "password": "..." }
+// ============================================================
+
+void AdminCmdCallbacks::onWrite(NimBLECharacteristic* pChar, NimBLEConnInfo& connInfo) {
+    std::string raw = pChar->getValue();
+    if (raw.empty()) return;
+
+    serialPrintf("[BLE Admin] Command from %s: %s\n",
+                  connInfo.getAddress().toString().c_str(),
+                  raw.c_str());
+
+    JsonDocument doc;
+    DeserializationError err = deserializeJson(doc, raw.c_str());
+    if (err) {
+        serialPrintf("[BLE Admin] JSON parse error: %s\n", err.c_str());
+        return;
+    }
+
+    const char* cmd = doc["command"] | "";
+    if (cmd[0] == '\0') {
+        serialPrintf("[BLE Admin] Missing command field\n");
+        return;
+    }
+
+    // ── restart ──────────────────────────────────────────────────────────────
+    if (strcmp(cmd, "restart") == 0) {
+        serialPrintf("[BLE Admin] Restart requested — rebooting in 2 s\n");
+        // Spawn a task so the response has time to be sent before reboot
+        xTaskCreate([](void*) {
+            vTaskDelay(pdMS_TO_TICKS(2000));
+            esp_restart();
+        }, "ble_restart", 2048, nullptr, 1, nullptr);
+        return;
+    }
+
+    // ── wifi_sta / wifi_ap ───────────────────────────────────────────────────
+    if (strcmp(cmd, "wifi_sta") == 0 || strcmp(cmd, "wifi_ap") == 0) {
+        if (!manager->configManager || !manager->wifiManager) {
+            serialPrintf("[BLE Admin] ConfigManager or WiFiManager not set — WiFi cmd ignored\n");
+            return;
+        }
+
+        const char* ssid     = doc["ssid"]     | "";
+        const char* password = doc["password"] | "";
+
+        if (ssid[0] == '\0') {
+            serialPrintf("[BLE Admin] wifi cmd missing ssid — ignored\n");
+            return;
+        }
+
+        WiFiConfig wifiConfig;
+        manager->configManager->getWiFiConfig(wifiConfig);   // load existing values
+
+        bool isAP = (strcmp(cmd, "wifi_ap") == 0);
+
+        if (isAP) {
+            wifiConfig.mode = 1;  // AP
+            strncpy(wifiConfig.ap_ssid, ssid, sizeof(wifiConfig.ap_ssid) - 1);
+            wifiConfig.ap_ssid[sizeof(wifiConfig.ap_ssid) - 1] = '\0';
+            strncpy(wifiConfig.ap_password, password, sizeof(wifiConfig.ap_password) - 1);
+            wifiConfig.ap_password[sizeof(wifiConfig.ap_password) - 1] = '\0';
+
+            serialPrintf("[BLE Admin] WiFi → AP mode, SSID='%s'\n", wifiConfig.ap_ssid);
+        } else {
+            wifiConfig.mode = 0;  // STA
+            strncpy(wifiConfig.ssid, ssid, sizeof(wifiConfig.ssid) - 1);
+            wifiConfig.ssid[sizeof(wifiConfig.ssid) - 1] = '\0';
+            strncpy(wifiConfig.password, password, sizeof(wifiConfig.password) - 1);
+            wifiConfig.password[sizeof(wifiConfig.password) - 1] = '\0';
+
+            serialPrintf("[BLE Admin] WiFi → STA mode, SSID='%s'\n", wifiConfig.ssid);
+        }
+
+        manager->configManager->setWiFiConfig(wifiConfig);
+
+        // Apply immediately by restarting the device — WiFi stack is complex
+        // to tear down and re-initialise at runtime; a reboot is safer.
+        serialPrintf("[BLE Admin] WiFi config saved — rebooting in 3 s to apply\n");
+        xTaskCreate([](void*) {
+            vTaskDelay(pdMS_TO_TICKS(3000));
+            esp_restart();
+        }, "ble_wifi_restart", 2048, nullptr, 1, nullptr);
+        return;
+    }
+
+    serialPrintf("[BLE Admin] Unknown command: '%s'\n", cmd);
 }
 
 // ============================================================
@@ -107,8 +199,10 @@ BLEManager::BLEManager()
       pWindService(nullptr),        pWindDataChar(nullptr),
       pAutopilotService(nullptr),   pAutopilotDataChar(nullptr), pAutopilotCmdChar(nullptr),
       pPerformanceService(nullptr), pPerformanceDataChar(nullptr),
-      serverCallbacks(nullptr), autopilotCmdCallbacks(nullptr),
+      pAdminService(nullptr),       pAdminDataChar(nullptr),     pAdminCmdChar(nullptr),
+      serverCallbacks(nullptr), autopilotCmdCallbacks(nullptr), adminCmdCallbacks(nullptr),
       boatState(nullptr), seatalkManager(nullptr),
+      configManager(nullptr), wifiManager(nullptr),
       initialized(false), advertising(false),
       connectedDevices(0), updateTaskHandle(nullptr) {
 }
@@ -117,24 +211,31 @@ BLEManager::~BLEManager() {
     stop();
     if (serverCallbacks)        delete serverCallbacks;
     if (autopilotCmdCallbacks)  delete autopilotCmdCallbacks;
+    if (adminCmdCallbacks)      delete adminCmdCallbacks;
 }
 
 // ============================================================
 // init
 // ============================================================
 
-void BLEManager::init(const BLEConfig& cfg, BoatState* state, SeatalkManager* stMgr) {
+void BLEManager::init(const BLEConfig& cfg, BoatState* state,
+                      SeatalkManager* stMgr,
+                      ConfigManager*  configMgr,
+                      WiFiManager*    wifiMgr) {
     if (initialized) return;
 
     config         = cfg;
     boatState      = state;
     seatalkManager = stMgr;
+    configManager  = configMgr;
+    wifiManager    = wifiMgr;
 
     serialPrintf("[BLE] Initializing NimBLE 2.x stack\n");
     serialPrintf("[BLE]   Device name    : %s\n", config.device_name);
     serialPrintf("[BLE]   PIN code       : %s\n", config.pin_code);
     serialPrintf("[BLE]   Enabled        : %s\n", config.enabled ? "yes" : "no");
     serialPrintf("[BLE]   SeatalkManager : %s\n", seatalkManager ? "yes" : "no (AP commands disabled)");
+    serialPrintf("[BLE]   ConfigManager  : %s\n", configManager  ? "yes" : "no (Admin WiFi cmd disabled)");
 
     NimBLEDevice::init(config.device_name);
     NimBLEDevice::setPower(9);
@@ -199,6 +300,7 @@ void BLEManager::update() {
     updateWindData();
     updateAutopilotData();
     updatePerformanceData();
+    updateAdminData();
 }
 
 void BLEManager::updateTask(void* param) {
@@ -267,6 +369,20 @@ void BLEManager::setupServices() {
         NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
     serialPrintf("[BLE]   ✓ Sail Performance service\n");
 
+    // ── Admin ──────────────────────────────────────────────────
+    pAdminService  = pServer->createService(BLE_SERVICE_ADMIN_UUID);
+
+    pAdminDataChar = pAdminService->createCharacteristic(
+        BLE_CHAR_ADMIN_DATA_UUID,
+        NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
+
+    adminCmdCallbacks = new AdminCmdCallbacks(this);
+    pAdminCmdChar = pAdminService->createCharacteristic(
+        BLE_CHAR_ADMIN_CMD_UUID,
+        NIMBLE_PROPERTY::WRITE);
+    pAdminCmdChar->setCallbacks(adminCmdCallbacks);
+    serialPrintf("[BLE]   ✓ Admin service\n");
+
     serialPrintf("[BLE] ✓ All services created\n");
 }
 
@@ -325,7 +441,7 @@ void BLEManager::setDeviceName(const char* name) {
         stop();
         NimBLEDevice::deinit(true);
         initialized = false;
-        init(config, boatState, seatalkManager);
+        init(config, boatState, seatalkManager, configManager, wifiManager);
         start();
     }
 }
@@ -370,6 +486,13 @@ void BLEManager::updatePerformanceData() {
     String json = buildPerformanceJSON();
     pPerformanceDataChar->setValue(json.c_str());
     pPerformanceDataChar->notify();
+}
+
+void BLEManager::updateAdminData() {
+    if (!pAdminDataChar) return;
+    String json = buildAdminJSON();
+    pAdminDataChar->setValue(json.c_str());
+    pAdminDataChar->notify();
 }
 
 // ============================================================
@@ -453,6 +576,55 @@ String BLEManager::buildPerformanceJSON() {
     } else {
         doc["target_stw"] = nullptr;
     }
+
+    String out;
+    serializeJson(doc, out);
+    return out;
+}
+
+String BLEManager::buildAdminJSON() {
+    JsonDocument doc;
+
+    // Uptime in seconds
+    doc["uptime_s"] = (uint32_t)(millis() / 1000UL);
+
+    // GPS-sourced UTC timestamp (unix epoch), null if not available
+    if (boatState) {
+        GPSData gps = boatState->getGPS();
+        uint64_t ts = gps.datetime.getTimestamp();
+        if (ts > 1) {
+            // ArduinoJson v7 handles uint64 — store as number
+            doc["datetime_utc"] = ts;
+        } else {
+            doc["datetime_utc"] = nullptr;
+        }
+    } else {
+        doc["datetime_utc"] = nullptr;
+    }
+
+    // WiFi state + IP address
+    if (configManager) {
+        WiFiConfig wifiCfg;
+        configManager->getWiFiConfig(wifiCfg);
+        bool isSTA = (wifiCfg.mode == 0);
+        doc["wifi_mode"] = isSTA ? "sta" : "ap";
+        doc["wifi_ssid"] = isSTA ? wifiCfg.ssid : wifiCfg.ap_ssid;
+
+        // Resolve actual IP from the active interface
+        IPAddress ip = isSTA ? WiFi.localIP() : WiFi.softAPIP();
+        if (ip != IPAddress(0, 0, 0, 0)) {
+            doc["ip"] = ip.toString();
+        } else {
+            doc["ip"] = nullptr;
+        }
+    } else {
+        doc["wifi_mode"] = nullptr;
+        doc["wifi_ssid"] = nullptr;
+        doc["ip"]        = nullptr;
+    }
+
+    // Free heap
+    doc["free_heap"] = (uint32_t)ESP.getFreeHeap();
 
     String out;
     serializeJson(doc, out);

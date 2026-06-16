@@ -2,7 +2,8 @@
 
 > This document describes the complete BLE protocol exposed by the Marine Gateway (ESP32).  
 > It contains all the information needed to develop a BLE client application
-> (iOS, Android, Flutter, React Native, etc.) that consumes the transmitted marine data.
+> (iOS, Android, Flutter, React Native, etc.) that consumes the transmitted marine data
+> and sends administration commands.
 
 ---
 
@@ -15,16 +16,18 @@
 5. [Wind Service](#5-wind-service)
 6. [Autopilot Service](#6-autopilot-service)
 7. [Sail Performance Service](#7-sail-performance-service)
-8. [Sending Autopilot Commands](#8-sending-autopilot-commands)
-9. [Behavior and Timing](#9-behavior-and-timing)
-10. [Integration Flow Example](#10-integration-flow-example)
-11. [UUID Reference Table](#11-uuid-reference-table)
+8. [Admin Service](#8-admin-service)
+9. [Sending Autopilot Commands](#9-sending-autopilot-commands)
+10. [Sending Admin Commands](#10-sending-admin-commands)
+11. [Behavior and Timing](#11-behavior-and-timing)
+12. [Integration Flow Example](#12-integration-flow-example)
+13. [UUID Reference Table](#13-uuid-reference-table)
 
 ---
 
 ## 1. Overview
 
-The Marine Gateway is an ESP32-based bridge that reads NMEA 0183 data from a serial port and exposes it over Bluetooth Low Energy (BLE). It implements a custom GATT profile organized into **4 services**:
+The Marine Gateway is an ESP32-based bridge that reads NMEA 0183 data from a serial port and exposes it over Bluetooth Low Energy (BLE). It implements a custom GATT profile organized into **5 services**:
 
 | Service | Purpose |
 |---|---|
@@ -32,6 +35,7 @@ The Marine Gateway is an ESP32-based bridge that reads NMEA 0183 data from a ser
 | Wind | Apparent wind and true wind |
 | Autopilot | Autopilot state + command input |
 | Sail Performance | VMG, polar efficiency, polar target speed |
+| **Admin** | **System status (uptime, datetime) + administration commands (restart, WiFi config)** |
 
 Data is encoded as **UTF-8 JSON** in each characteristic and updated at **1 Hz** (every second).
 
@@ -103,6 +107,14 @@ All UUIDs are 128-bit. The custom base is `4D475743-xxxx-4E41-5649-474154494F4E`
 | **Service** | `4d475743-0004-4e41-5649-474154494f4e` |
 | **PerformanceData Characteristic** | `4d475743-0401-4e41-5649-474154494f4e` |
 
+#### Admin Service
+
+| Element | UUID |
+|---|---|
+| **Service** | `4d475743-0005-4e41-5649-474154494f4e` |
+| **AdminData Characteristic** | `4d475743-0501-4e41-5649-474154494f4e` |
+| **AdminCmd Characteristic** | `4d475743-0502-4e41-5649-474154494f4e` |
+
 ### Characteristic Properties
 
 | Characteristic | READ | NOTIFY | WRITE |
@@ -112,6 +124,8 @@ All UUIDs are 128-bit. The custom base is `4D475743-xxxx-4E41-5649-474154494F4E`
 | AutopilotData | ✅ | ✅ | ❌ |
 | AutopilotCmd | ❌ | ❌ | ✅ |
 | PerformanceData | ✅ | ✅ | ❌ |
+| **AdminData** | **✅** | **✅** | **❌** |
+| **AdminCmd** | **❌** | **❌** | **✅** |
 
 > All `NOTIFY` characteristics include a **CCCD** (UUID `0x2902`).  
 > The client **must enable notifications** on each desired characteristic to receive updates.
@@ -236,36 +250,122 @@ This service exposes real-time sailing performance metrics derived from the boat
 | `target_stw` | float \| null | kn | The polar target boat speed for the current TWS and TWA. Interpolated bilinearly from the polar table. `null` if no polar is loaded or wind data is stale. |
 | `polar_loaded` | bool | — | `true` when a polar file is loaded on the device. |
 
-### Null Value Rules
-
-| Field | Null when |
-|---|---|
-| `vmg` | STW or TWA stale / invalid |
-| `polar_pct` | No polar loaded, or STW / TWS / TWA stale / invalid |
-| `target_stw` | No polar loaded, or TWS / TWA stale / invalid, or target ≤ 0.1 kn (e.g. dead upwind in a sparse polar) |
-
-### Typical Display Usage
-
-```
-VMG        +4.2 kn  ▲ upwind
-Polar         85 %
-Target STW   7.1 kn
-```
-
 ### Polar Upload
 
 A polar file is uploaded via the web dashboard at `http://<device_ip>/` → **Performance** page.  
-Accepted format: tab-delimited `.pol` / `.csv` file.  
-- Row 0, Col 0: label (e.g. `TWA\TWS`) — ignored  
-- Row 0, Col 1…N: TWS breakpoints in knots  
-- Row 1…M, Col 0: TWA breakpoints in degrees (0–180)  
-- Cells: target STW in knots  
-
-The file is persisted on the device (LittleFS) and reloaded automatically on reboot.
+Accepted format: tab-delimited `.pol` / `.csv` file.
 
 ---
 
-## 8. Sending Autopilot Commands
+## 8. Admin Service
+
+**Service UUID:** `4d475743-0005-4e41-5649-474154494f4e`
+
+The Admin service gives BLE clients access to system diagnostics and remote administration capabilities (restart, WiFi reconfiguration). It is split into two characteristics: a read-only status stream and a write-only command sink.
+
+### 8.1 AdminData Characteristic (READ + NOTIFY)
+
+**UUID:** `4d475743-0501-4e41-5649-474154494f4e`
+
+Updated at 1 Hz alongside all other service characteristics.
+
+#### Data Format
+
+```json
+{
+  "uptime_s": 3600,
+  "datetime_utc": 1718445600,
+  "wifi_mode": "sta",
+  "wifi_ssid": "MyNetwork",
+  "ip": "192.168.1.100",
+  "free_heap": 182344
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `uptime_s` | uint32 | Seconds elapsed since last boot. |
+| `datetime_utc` | uint64 \| null | Current UTC time as a Unix timestamp (seconds since epoch), sourced from the GPS fix. `null` if no GPS fix has been received yet. |
+| `wifi_mode` | `"sta"` \| `"ap"` \| null | Current WiFi operating mode. `null` if ConfigManager is unavailable. |
+| `wifi_ssid` | string \| null | SSID of the connected network (STA mode) or the broadcasted access point (AP mode). `null` if not configured. |
+| `ip` | string \| null | Current IP address of the device. In STA mode this is the address assigned by the router (e.g. `"192.168.1.100"`). In AP mode this is always `"192.168.4.1"`. `null` if WiFi is not yet connected/started. |
+| `free_heap` | uint32 | Free heap memory in bytes. Useful for remote diagnostics. |
+
+> `datetime_utc` is derived from GPS NMEA sentences (GGA, RMC, ZDA). It is only populated once the GPS receiver has acquired a fix and the first valid sentence with a time field has been parsed.
+
+---
+
+### 8.2 AdminCmd Characteristic (WRITE)
+
+**UUID:** `4d475743-0502-4e41-5649-474154494f4e`  
+**Property:** WRITE (no response expected)
+
+All commands are sent as UTF-8 JSON objects. The `"command"` field is mandatory. Unknown commands are silently ignored (logged on the serial console).
+
+#### Command: `restart`
+
+Triggers a soft reboot of the ESP32 approximately 2 seconds after the command is received. The delay allows the BLE stack to complete the write transaction before the system goes down.
+
+```json
+{ "command": "restart" }
+```
+
+The device will disconnect all BLE clients and restart. Bonded clients will reconnect automatically once advertising resumes after reboot.
+
+---
+
+#### Command: `wifi_sta`
+
+Configures the device to connect to an existing WiFi network (infrastructure / station mode) and saves the configuration to NVS. The device reboots approximately 3 seconds after the command to apply the new network settings.
+
+```json
+{
+  "command": "wifi_sta",
+  "ssid": "MyNetwork",
+  "password": "mysecretpassword"
+}
+```
+
+| Field | Type | Required | Constraints |
+|---|---|---|---|
+| `ssid` | string | **Yes** | 1–31 characters |
+| `password` | string | No | Empty string for open networks |
+
+> After reboot the device will attempt to connect to the specified network. If the connection fails within 30 seconds, it automatically falls back to Access Point mode.
+
+---
+
+#### Command: `wifi_ap`
+
+Configures the device to operate as a WiFi Access Point and saves the configuration to NVS. The device reboots approximately 3 seconds after the command to apply the new settings.
+
+```json
+{
+  "command": "wifi_ap",
+  "ssid": "MyGateway",
+  "password": "myappassword"
+}
+```
+
+| Field | Type | Required | Constraints |
+|---|---|---|---|
+| `ssid` | string | **Yes** | 1–31 characters |
+| `password` | string | No | Minimum 8 characters for WPA2. Empty string or < 8 characters will use the device default password (`marine123`). |
+
+> In AP mode the device IP address is always `192.168.4.1`. Connect to this address in a browser to reach the web dashboard.
+
+---
+
+#### Error Handling
+
+There is no write-response mechanism (the characteristic uses WRITE without response). The client should monitor the `AdminData` notification after issuing a `wifi_sta` or `wifi_ap` command:
+
+- If the command was accepted, `wifi_mode` and `wifi_ssid` in the next `AdminData` notification will reflect the new values **before** the reboot occurs.
+- The `uptime_s` field resetting to a low value (< 30) on reconnection confirms the device rebooted successfully.
+
+---
+
+## 9. Sending Autopilot Commands
 
 **Command Characteristic UUID:** `4d475743-0302-4e41-5649-474154494f4e`  
 **Property:** WRITE (no response expected)
@@ -289,26 +389,53 @@ The file is persisted on the device (LittleFS) and reloaded automatically on reb
 
 ---
 
-## 9. Behavior and Timing
+## 10. Sending Admin Commands
+
+**Command Characteristic UUID:** `4d475743-0502-4e41-5649-474154494f4e`  
+**Property:** WRITE (no response expected)
+
+### Command Summary
+
+| `command` value | Additional fields | Effect | Reboot? |
+|---|---|---|---|
+| `"restart"` | — | Soft reboot after 2 s | ✅ Yes |
+| `"wifi_sta"` | `ssid`, `password` | Switch to infrastructure mode, save config | ✅ Yes (3 s) |
+| `"wifi_ap"` | `ssid`, `password` | Switch to access point mode, save config | ✅ Yes (3 s) |
+
+### Examples
+
+```json
+{ "command": "restart" }
+
+{ "command": "wifi_sta", "ssid": "HomeNetwork", "password": "s3cr3t!" }
+
+{ "command": "wifi_ap", "ssid": "MarineGW", "password": "marine456" }
+```
+
+---
+
+## 11. Behavior and Timing
 
 | Parameter | Value |
 |---|---|
-| Update frequency | **1 Hz** (every 1000 ms) — all services |
+| Update frequency | **1 Hz** (every 1000 ms) — all services including Admin |
 | Max simultaneous connections | **3** devices |
 | NMEA data timeout | **10 seconds** (navigation, wind, performance, autopilot) |
 | AIS data timeout | **60 seconds** |
 | Reconnection | Automatic (advertising restarts after disconnection) |
+| Reboot delay after `restart` command | **2 seconds** |
+| Reboot delay after `wifi_sta` / `wifi_ap` command | **3 seconds** |
 
 ### Update Cycle
 
 Every second, the device:
-1. Reads the current `BoatState` (FreeRTOS mutex protected).
-2. Serializes all 4 characteristics to JSON.
+1. Reads the current `BoatState` and system status (FreeRTOS mutex protected).
+2. Serializes all 5 characteristics to JSON.
 3. Sends a BLE notification on each characteristic to all subscribed clients.
 
 ---
 
-## 10. Integration Flow Example
+## 12. Integration Flow Example
 
 ```
 1. SCAN
@@ -332,28 +459,35 @@ Every second, the device:
    ├── Write 0x0100 to NavData CCCD         (UUID 0x2902)
    ├── Write 0x0100 to WindData CCCD
    ├── Write 0x0100 to AutopilotData CCCD
-   └── Write 0x0100 to PerformanceData CCCD
+   ├── Write 0x0100 to PerformanceData CCCD
+   └── Write 0x0100 to AdminData CCCD
 
 6. RECEIVE DATA (every ~1 s)
    ├── NavData         → position, speed, heading, depth
    ├── WindData        → apparent / true wind
    ├── AutopilotData   → autopilot state
-   └── PerformanceData → vmg, polar_pct, target_stw, polar_loaded
+   ├── PerformanceData → vmg, polar_pct, target_stw, polar_loaded
+   └── AdminData       → uptime_s, datetime_utc, wifi_mode, wifi_ssid, free_heap
 
 7. HANDLE POLAR STATE
    ├── if polar_loaded == false → show "No polar loaded" in UI
    └── if polar_loaded == true  → display polar_pct and target_stw
 
-8. SEND COMMANDS (optional)
+8. SEND AUTOPILOT COMMANDS (optional)
    └── Write to AutopilotCmd → {"command": "adjust+1"}
 
-9. DISCONNECT
-   └── Device restarts advertising automatically
+9. SEND ADMIN COMMANDS (optional)
+   ├── Restart device  → Write to AdminCmd → {"command": "restart"}
+   ├── Switch to STA   → Write to AdminCmd → {"command": "wifi_sta", "ssid": "Net", "password": "pw"}
+   └── Switch to AP    → Write to AdminCmd → {"command": "wifi_ap",  "ssid": "AP",  "password": "pw"}
+
+10. DISCONNECT
+    └── Device restarts advertising automatically
 ```
 
 ---
 
-## 11. UUID Reference Table
+## 13. UUID Reference Table
 
 | Element | 128-bit UUID |
 |---|---|
@@ -364,6 +498,9 @@ Every second, the device:
 | Autopilot Service | `4d475743-0003-4e41-5649-474154494f4e` |
 | Autopilot Data Characteristic | `4d475743-0301-4e41-5649-474154494f4e` |
 | Autopilot Command Characteristic | `4d475743-0302-4e41-5649-474154494f4e` |
-| **Sail Performance Service** | **`4d475743-0004-4e41-5649-474154494f4e`** |
-| **Performance Data Characteristic** | **`4d475743-0401-4e41-5649-474154494f4e`** |
+| Sail Performance Service | `4d475743-0004-4e41-5649-474154494f4e` |
+| Performance Data Characteristic | `4d475743-0401-4e41-5649-474154494f4e` |
+| **Admin Service** | **`4d475743-0005-4e41-5649-474154494f4e`** |
+| **Admin Data Characteristic** | **`4d475743-0501-4e41-5649-474154494f4e`** |
+| **Admin Command Characteristic** | **`4d475743-0502-4e41-5649-474154494f4e`** |
 | CCCD (enable notifications) | `0x2902` (standard Bluetooth SIG) |

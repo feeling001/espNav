@@ -36,6 +36,22 @@
 #define BLE_CHAR_PERFORMANCE_DATA_UUID  "4d475743-0401-4e41-5649-474154494f4e"
 
 // ============================================================
+// Admin Service
+// Provides system diagnostics (uptime, datetime) and remote
+// administration commands (restart, WiFi configuration).
+// ============================================================
+#define BLE_SERVICE_ADMIN_UUID          "4d475743-0005-4e41-5649-474154494f4e"
+
+/// READ + NOTIFY — system status: uptime_s, datetime (unix timestamp), wifi state, ip
+#define BLE_CHAR_ADMIN_DATA_UUID        "4d475743-0501-4e41-5649-474154494f4e"
+
+/// WRITE — administration commands (JSON):
+///   { "command": "restart" }
+///   { "command": "wifi_sta", "ssid": "...", "password": "..." }
+///   { "command": "wifi_ap",  "ssid": "...", "password": "..." }
+#define BLE_CHAR_ADMIN_CMD_UUID         "4d475743-0502-4e41-5649-474154494f4e"
+
+// ============================================================
 // Limits & task config
 // ============================================================
 #define BLE_MAX_CONNECTIONS     3
