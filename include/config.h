@@ -21,8 +21,13 @@
 
 #define DEBUG_SERIAL Serial0
 
-// LED  Configuration
-#define LED_PIN                 GPIO_NUM_48
+// LED Configuration (board-specific)
+#ifdef BOARD_ESP32S3_ZERO
+  #define LED_PIN               GPIO_NUM_21    // ESP32-S3 Zero
+#else
+  #define LED_PIN               GPIO_NUM_48    // ESP32-S3 N16R8
+#endif
+
 #define NUM_LEDS                1
 
 // WiFi Configuration
