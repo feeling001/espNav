@@ -380,12 +380,16 @@ There is no write-response mechanism (the characteristic uses WRITE without resp
 
 | `command` value | Action |
 |---|---|
-| `"enable"` | Enable the autopilot |
-| `"disable"` | Disable the autopilot (standby mode) |
+| `"auto"` | Engage autopilot (auto heading mode) |
+| `"standby"` | Disengage autopilot (standby mode) |
+| `"wind"` | Switch to wind mode (maintain wind angle) |
+| `"track"` | Switch to track mode (follow GPS route) |
 | `"adjust+10"` | Adjust target heading by +10° (starboard) |
 | `"adjust-10"` | Adjust target heading by −10° (port) |
 | `"adjust+1"` | Adjust target heading by +1° (starboard) |
 | `"adjust-1"` | Adjust target heading by −1° (port) |
+| `"tack-port"` | Execute a port tack |
+| `"tack-starboard"` | Execute a starboard tack |
 
 ---
 
