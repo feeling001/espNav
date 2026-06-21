@@ -6,16 +6,20 @@ import { api } from '../../services/api';
  * The polar file is stored on the ESP32 (LittleFS) and survives reboots.
  */
 export function Performance() {
-  const [status, setStatus]       = useState(null);
-  const [dragging, setDragging]   = useState(false);
-  const [file, setFile]           = useState(null);
-  const [uploading, setUploading] = useState(false);
-  const [progress, setProgress]   = useState(0);
-  const [message, setMessage]     = useState(null);
+  const [status, setStatus]           = useState(null);
+  const [dragging, setDragging]       = useState(false);
+  const [file, setFile]               = useState(null);
+  const [uploading, setUploading]     = useState(false);
+  const [progress, setProgress]       = useState(0);
+  const [message, setMessage]         = useState(null);
+  const [dampingTau, setDampingTau]   = useState(0);
+  const [dampingSaving, setDampingSaving] = useState(false);
+  const [dampingMsg, setDampingMsg]   = useState(null);
   const inputRef = useRef(null);
 
   useEffect(() => {
     loadStatus();
+    loadDampingConfig();
   }, []);
 
   const loadStatus = async () => {
@@ -24,6 +28,28 @@ export function Performance() {
       setStatus(data);
     } catch {
       setStatus(null);
+    }
+  };
+
+  const loadDampingConfig = async () => {
+    try {
+      const data = await api.getPerformanceConfig();
+      setDampingTau(data.damping_tau ?? 0);
+    } catch {
+      // keep default 0
+    }
+  };
+
+  const saveDamping = async () => {
+    setDampingSaving(true);
+    setDampingMsg(null);
+    try {
+      await api.setPerformanceConfig({ damping_tau: dampingTau });
+      setDampingMsg({ type: 'success', text: `Damping saved (τ = ${dampingTau} s).` });
+    } catch (err) {
+      setDampingMsg({ type: 'error', text: err.message });
+    } finally {
+      setDampingSaving(false);
     }
   };
 
@@ -188,6 +214,51 @@ export function Performance() {
 60\t6.7\t7.5\t7.9\t8.1\t8.3\t8.4\t8.5
 75\t7.0\t7.9\t8.3\t8.6\t8.8\t8.9\t9.1
 90\t7.1\t8.0\t8.4\t8.8\t9.2\t9.4\t9.7`}</pre>
+      </div>
+
+      {/* ── Damping configuration ── */}
+      <div className="config-section" style={{ marginTop: 28 }}>
+        <h3>Performance Damping</h3>
+        <p className="muted" style={{ marginBottom: 16, fontSize: 13 }}>
+          Smooths the wind and speed inputs before computing the polar performance
+          percentage, reducing noisy spikes caused by mast movement or sensor jitter.
+          Uses an exponential moving average (EMA) with time constant τ.
+          Set to <strong>0</strong> to disable damping.
+        </p>
+
+        {dampingMsg && (
+          <div className={`message ${dampingMsg.type}`} style={{ marginBottom: 12 }}>
+            {dampingMsg.text}
+          </div>
+        )}
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+          <label style={{ fontWeight: 500, minWidth: 140 }}>
+            τ = <strong>{dampingTau === 0 ? 'Off' : `${dampingTau} s`}</strong>
+          </label>
+          <input
+            type="range"
+            min={0}
+            max={15}
+            step={1}
+            value={dampingTau}
+            onChange={e => { setDampingTau(Number(e.target.value)); setDampingMsg(null); }}
+            style={{ flex: 1, minWidth: 160, maxWidth: 320 }}
+          />
+          <span className="muted" style={{ fontSize: 12 }}>0 s (off) — 15 s</span>
+        </div>
+
+        <div style={{ marginTop: 8, fontSize: 12, color: '#888', display: 'flex', gap: 16 }}>
+          <span>Racing: 3–5 s</span>
+          <span>Cruising: 6–10 s</span>
+          <span>Heavy sea: 10–15 s</span>
+        </div>
+
+        <div className="ota-actions" style={{ marginTop: 14 }}>
+          <button onClick={saveDamping} disabled={dampingSaving}>
+            {dampingSaving ? 'Saving…' : '💾 Save Damping'}
+          </button>
+        </div>
       </div>
     </div>
   );

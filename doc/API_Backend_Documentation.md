@@ -20,6 +20,7 @@
 9. [Boat Data — AIS](#9-boat-data--ais)
 10. [Boat Data — Full State](#10-boat-data--full-state)
 11. [NMEA WebSocket](#11-nmea-websocket)
+12. [Performance Configuration](#12-performance-configuration)
 
 ---
 
@@ -483,3 +484,72 @@ Real-time stream of raw NMEA sentences received on the serial port.
 | 400 | Invalid input (malformed JSON or constraint violation) |
 | 404 | Unknown endpoint |
 | 500 | Internal error (component not initialized) |
+
+---
+
+## 12. Performance Configuration
+
+### `GET /api/performance/config`
+
+Returns the current EMA damping time constant used when computing polar performance metrics (VMG and polar %).
+
+**Response:**
+```json
+{
+  "damping_tau": 6.0
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `damping_tau` | float | EMA time constant in seconds. `0` = damping disabled. |
+
+---
+
+### `POST /api/performance/config`
+
+Sets and persists the EMA damping time constant. The value is stored in NVS and survives reboots. Takes effect immediately without a restart.
+
+**Request body:**
+```json
+{
+  "damping_tau": 6.0
+}
+```
+
+| Field | Type | Required | Constraints | Description |
+|---|---|---|---|---|
+| `damping_tau` | float | Yes | 0–60 s | EMA time constant in seconds. `0` disables smoothing. Recommended: 3–15 s. |
+
+**Success response:**
+```json
+{
+  "success": true,
+  "damping_tau": 6.0
+}
+```
+
+**Error response (missing or invalid field):**
+```json
+{ "error": "damping_tau required (number)" }
+```
+
+#### How damping works
+
+When `damping_tau > 0`, the inputs to the polar calculation (STW, TWS, TWA) are smoothed using an **exponential moving average (EMA)** before computing the VMG and polar percentage:
+
+```
+α = 1 − exp(−Δt / τ)
+y_t = y_(t-1) + α × (x_t − y_(t-1))
+```
+
+- **τ** (`damping_tau`) is the time constant in seconds.
+- **Δt** is the real elapsed time between consecutive performance updates.
+- Wind angles (TWA) are smoothed in `(sin, cos)` space to avoid wrap-around discontinuities near 0°/360°.
+- The EMA state is reset whenever `damping_tau` is changed.
+
+| Profile | Suggested τ |
+|---|---|
+| Racing | 3–5 s |
+| Cruising | 6–10 s |
+| Heavy sea | 10–15 s |

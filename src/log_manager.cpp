@@ -433,16 +433,27 @@ void LogManager::writeCSVSnapshot() {
     uint64_t gpsTs = gps.datetime.getTimestamp();
 
     auto fv = [](const DataPoint& dp) -> String {
-        if (dp.valid && !dp.isStale()) return String(dp.value, 4);
+        if (dp.valid && !dp.isStale()) {
+            String v = String(dp.value, 4);
+            v.replace('.', ',');
+            return v;
+        }
         return "";
     };
 
-    csvFile.printf("%llu,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n",
+    auto gpsCoord = [](const DataPoint& dp) -> String {
+        if (dp.valid && !dp.isStale()) {
+            String v = String(dp.value, 6);
+            v.replace('.', ',');
+            return v;
+        }
+        return "";
+    };
+
+    csvFile.printf("%llu;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s;%s\n",
         (unsigned long long)gpsTs,
-        gps.position.lat.valid && !gps.position.lat.isStale()
-            ? String(gps.position.lat.value, 6).c_str() : "",
-        gps.position.lon.valid && !gps.position.lon.isStale()
-            ? String(gps.position.lon.value, 6).c_str() : "",
+        gpsCoord(gps.position.lat).c_str(),
+        gpsCoord(gps.position.lon).c_str(),
         fv(gps.sog).c_str(),
         fv(gps.cog).c_str(),
         fv(speed.stw).c_str(),

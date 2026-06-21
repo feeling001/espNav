@@ -438,6 +438,18 @@ void BoatState::calculateDerivedData() {
     xSemaphoreGive(mutex);
 }
 
+void BoatState::setDampingTau(float tau) {
+    xSemaphoreTake(mutex, portMAX_DELAY);
+    _dampingTau = (tau < 0.0f) ? 0.0f : tau;
+    // Reset EMA state so the new tau takes effect cleanly
+    _emaInit = false;
+    xSemaphoreGive(mutex);
+}
+
+float BoatState::getDampingTau() const {
+    return _dampingTau;
+}
+
 // ============================================================
 // updatePerformance
 // ============================================================
@@ -454,13 +466,59 @@ void BoatState::updatePerformance() {
 
     xSemaphoreTake(mutex, portMAX_DELAY);
 
+    // ── EMA damping ────────────────────────────────────────────
+    // If damping is enabled (tau > 0), smooth the inputs via an
+    // exponential moving average with a time-dependent alpha so that
+    // the smoothing is independent of the call rate.
+    //   alpha = 1 - exp(-dt / tau)
+    // Angles are smoothed in (sin, cos) space to avoid 0/360 wrap-around.
+
+    float smoothSTW = spd.stw.value;
+    float smoothTWS = wnd.tws.value;
+    float smoothTWA = wnd.twa.value;   // degrees absolute (0–180)
+
+    if (_dampingTau > 0.0f && (haveSTW || haveTWS || haveTWA)) {
+        uint32_t now = millis();
+        float dt = _emaInit ? ((float)(now - _lastPerfMs) / 1000.0f) : 0.0f;
+        _lastPerfMs = now;
+
+        float alpha = (_emaInit && dt > 0.0f)
+                      ? (1.0f - expf(-dt / _dampingTau))
+                      : 1.0f;   // First call: initialise immediately
+
+        if (!_emaInit) {
+            // Seed the filters with the first valid sample
+            _emaSTW    = haveSTW ? spd.stw.value : 0.0f;
+            _emaTWS    = haveTWS ? wnd.tws.value : 0.0f;
+            float twaRad0 = (haveTWA ? wnd.twa.value : 0.0f) * PI / 180.0f;
+            _emaSinTWA = sinf(twaRad0);
+            _emaCosTWA = cosf(twaRad0);
+            _emaInit   = true;
+        } else {
+            if (haveSTW) _emaSTW += alpha * (spd.stw.value - _emaSTW);
+            if (haveTWS) _emaTWS += alpha * (wnd.tws.value - _emaTWS);
+            if (haveTWA) {
+                float twaRad = wnd.twa.value * PI / 180.0f;
+                _emaSinTWA += alpha * (sinf(twaRad) - _emaSinTWA);
+                _emaCosTWA += alpha * (cosf(twaRad) - _emaCosTWA);
+            }
+        }
+
+        if (haveSTW) smoothSTW = _emaSTW;
+        if (haveTWS) smoothTWS = _emaTWS;
+        if (haveTWA) {
+            // Recover angle from (sin, cos) — result is always 0–180 for
+            // absolute TWA (we discard sign, same as polar symmetry assumption)
+            float recoveredRad = atan2f(_emaSinTWA, _emaCosTWA);
+            smoothTWA = fabsf(recoveredRad * 180.0f / PI);
+        }
+    }
+
     // ── VMG ────────────────────────────────────────────────────
-    // VMG = STW × cos(TWA)
-    // Positive when heading toward the wind (TWA < 90°)
-    // Negative when running downwind              (TWA > 90°)
+    // VMG = STW × cos(TWA)  (uses smoothed values when damping is on)
     if (haveSTW && haveTWA) {
-        float twaRad = wnd.twa.value * PI / 180.0f;
-        float vmgVal = spd.stw.value * cosf(twaRad);
+        float twaRad = smoothTWA * PI / 180.0f;
+        float vmgVal = smoothSTW * cosf(twaRad);
         performance.vmg.set(vmgVal, "kn");
     } else {
         performance.vmg.invalidate();
@@ -468,9 +526,9 @@ void BoatState::updatePerformance() {
 
     // ── Polar % ────────────────────────────────────────────────
     if (haveSTW && haveTWS && haveTWA && polar.isLoaded()) {
-        float target = polar.getTargetSTW(wnd.tws.value, wnd.twa.value);
+        float target = polar.getTargetSTW(smoothTWS, smoothTWA);
         if (target > 0.1f) {
-            float pct = (spd.stw.value / target) * 100.0f;
+            float pct = (smoothSTW / target) * 100.0f;
             performance.polarPct.set(pct, "%");
         } else {
             // Target STW is zero for this point (e.g. dead upwind in sparse polar)

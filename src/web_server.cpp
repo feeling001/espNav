@@ -46,6 +46,12 @@ WebServer::WebServer(ConfigManager* cm, WiFiManager* wm, TCPServer* tcp, UARTHan
 void WebServer::init() {
     serialPrintf("[Web] Initializing Web Server\n");
 
+    // Load performance config from NVS and apply to BoatState
+    perfNvs.begin("perf_cfg", false);
+    float tau = perfNvs.getFloat("damping_tau", 0.0f);
+    if (boatState) boatState->setDampingTau(tau);
+    serialPrintf("[Web] Performance damping tau: %.1f s\n", tau);
+
     wsNMEA->onEvent([this](AsyncWebSocket* server, AsyncWebSocketClient* client,
                            AwsEventType type, void* arg, uint8_t* data, size_t len) {
         this->handleWebSocketEvent(server, client, type, arg, data, len);
@@ -187,6 +193,17 @@ void WebServer::registerRoutes() {
     server->on("/api/boat/performance", HTTP_GET, [this](AsyncWebServerRequest* request) {
         this->handleGetPerformance(request);
     });
+    server->on("/api/performance/config", HTTP_GET, [this](AsyncWebServerRequest* request) {
+        this->handleGetPerformanceConfig(request);
+    });
+    server->on("/api/performance/config", HTTP_POST,
+        [](AsyncWebServerRequest* request) {},
+        NULL,
+        [this](AsyncWebServerRequest* request, uint8_t* data, size_t len,
+               size_t index, size_t total) {
+            this->handlePostPerformanceConfig(request, data, len);
+        }
+    );
 
     // ── Autopilot ──────────────────────────────────────────────
     server->on("/api/autopilot/command", HTTP_POST,
@@ -1363,6 +1380,46 @@ void WebServer::handleGetPerformance(AsyncWebServerRequest* request) {
     String response;
     serializeJson(doc, response);
     request->send(200, "application/json", response);
+}
+
+// GET /api/performance/config
+void WebServer::handleGetPerformanceConfig(AsyncWebServerRequest* request) {
+    JsonDocument doc;
+    doc["damping_tau"] = boatState ? boatState->getDampingTau() : 0.0f;
+    String body;
+    serializeJson(doc, body);
+    request->send(200, "application/json", body);
+}
+
+// POST /api/performance/config
+void WebServer::handlePostPerformanceConfig(AsyncWebServerRequest* request,
+                                             uint8_t* data, size_t len) {
+    JsonDocument doc;
+    if (deserializeJson(doc, (char*)data, len)) {
+        request->send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
+        return;
+    }
+
+    if (!doc["damping_tau"].is<float>() && !doc["damping_tau"].is<int>()) {
+        request->send(400, "application/json", "{\"error\":\"damping_tau required (number)\"}");
+        return;
+    }
+
+    float tau = doc["damping_tau"].as<float>();
+    if (tau < 0.0f)  tau = 0.0f;
+    if (tau > 60.0f) tau = 60.0f;
+
+    perfNvs.putFloat("damping_tau", tau);
+    if (boatState) boatState->setDampingTau(tau);
+
+    serialPrintf("[Web] Performance damping tau set to %.1f s\n", tau);
+
+    JsonDocument resp;
+    resp["success"]     = true;
+    resp["damping_tau"] = tau;
+    String body;
+    serializeJson(resp, body);
+    request->send(200, "application/json", body);
 }
 
 

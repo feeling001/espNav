@@ -58,8 +58,8 @@
 #define LOG_FLUSH_INTERVAL_MS 10000 ///< Flush/sync every 10 seconds
 #define LOG_NVS_NAMESPACE     "logmgr"
 #define LOG_CSV_HEADER \
-    "timestamp_utc,lat,lon,sog_kn,cog_deg,stw_kn,hdg_mag_deg,hdg_true_deg," \
-    "depth_m,aws_kn,awa_deg,tws_kn,twa_deg,twd_deg,water_temp_c\n"
+    "timestamp_utc;lat;lon;sog_kn;cog_deg;stw_kn;hdg_mag_deg;hdg_true_deg;" \
+    "depth_m;aws_kn;awa_deg;tws_kn;twa_deg;twd_deg;water_temp_c\n"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Public types

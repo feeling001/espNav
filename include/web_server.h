@@ -19,6 +19,7 @@
 #include <AsyncWebSocket.h>
 #include <LittleFS.h>
 #include <Update.h>
+#include <Preferences.h>
 #include "config_manager.h"
 #include "wifi_manager.h"
 #include "ble_manager.h"
@@ -91,6 +92,8 @@ private:
     void handleGetAIS(AsyncWebServerRequest* request);
     void handleGetBoatState(AsyncWebServerRequest* request);
     void handleGetPerformance(AsyncWebServerRequest* request);
+    void handleGetPerformanceConfig(AsyncWebServerRequest* request);
+    void handlePostPerformanceConfig(AsyncWebServerRequest* request, uint8_t* data, size_t len);
 
     // ── WiFi scan handlers ────────────────────────────────────────────────────
     void handleStartWiFiScan(AsyncWebServerRequest* request);
@@ -156,6 +159,9 @@ private:
     SDManager*      sdManager;      ///< May be nullptr when SD is disabled
     LogManager*     logManager;
     bool            running;
+
+    // ── OTA state ─────────────────────────────────────────────────────────────
+    Preferences  perfNvs;         ///< NVS namespace for performance config
 
     // ── OTA state ─────────────────────────────────────────────────────────────
     bool     otaInProgress;

@@ -372,6 +372,20 @@ public:
      */
     void updatePerformance();
 
+    /**
+     * @brief Set the EMA damping time constant (seconds).
+     *
+     * Controls how aggressively the inputs (STW, TWS, TWA) are smoothed
+     * before the polar performance calculation.
+     *
+     * @param tau  Time constant in seconds. 0 = no damping (pass-through).
+     *             Recommended range: 3–15 s.
+     */
+    void setDampingTau(float tau);
+
+    /** @brief Return the current EMA damping time constant (seconds). */
+    float getDampingTau() const;
+
     // Utility functions
     void cleanupStaleData();
     void calculateDerivedData();
@@ -397,7 +411,16 @@ private:
     
     // Thread safety
     SemaphoreHandle_t mutex;
-    
+
+    // ── EMA damping state ──────────────────────────────────────────────────
+    float    _dampingTau   = 0.0f;   ///< Time constant in seconds (0 = disabled)
+    float    _emaSTW       = 0.0f;
+    float    _emaTWS       = 0.0f;
+    float    _emaSinTWA    = 0.0f;
+    float    _emaCosTWA    = 1.0f;
+    bool     _emaInit      = false;
+    uint32_t _lastPerfMs   = 0;
+
     // Helper functions
     void addDataPointToJSON(JsonObject obj, const char* key, const DataPoint& dp);
 };

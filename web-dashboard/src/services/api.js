@@ -283,6 +283,22 @@ export const api = {
     return response.json();
   },
 
+  async getPerformanceConfig() {
+    const response = await fetch(`${API_BASE}/performance/config`);
+    if (!response.ok) throw new Error('Failed to get performance config');
+    return response.json();
+  },
+
+  async setPerformanceConfig(config) {
+    const response = await fetch(`${API_BASE}/performance/config`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config),
+    });
+    if (!response.ok) throw new Error('Failed to save performance config');
+    return response.json();
+  },
+
   // ── Boat data ─────────────────────────────────────────────────
   async getBoatNavigation() {
     const response = await fetch(`${API_BASE}/boat/navigation`);
