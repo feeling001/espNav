@@ -40,7 +40,7 @@ bool NMEAParser::parseLine(const char* line, NMEASentence& out) {
         if (boatState != nullptr) {
             if      (strstr(out.type, "GGA"))                          parseGGA(line);
             else if (strstr(out.type, "RMC"))                          parseRMC(line);
-            else if (strstr(out.type, "ZDA"))                          parseZDA(line);
+            else if (strcmp(out.type, "GNZDA") == 0)                   parseZDA(line);
             else if (strstr(out.type, "GLL"))                          parseGLL(line);
             else if (strstr(out.type, "VTG"))                          parseVTG(line);
             else if (strstr(out.type, "HDT"))                          parseHDT(line);
