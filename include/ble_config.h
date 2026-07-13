@@ -8,7 +8,7 @@
 // ============================================================
 #define BLE_DEVICE_NAME         "MarineGateway"
 #define BLE_DEFAULT_PIN         "123456"
-#define BLE_UPDATE_INTERVAL_MS  1000    // 1 Hz update rate
+#define BLE_UPDATE_INTERVAL_MS  2000    // 0.5 Hz update rate
 
 // ============================================================
 // Service UUIDs  (custom base: 4D475743-xxxx-4E41-5649-474154494F4E)
@@ -50,6 +50,25 @@
 ///   { "command": "wifi_sta", "ssid": "...", "password": "..." }
 ///   { "command": "wifi_ap",  "ssid": "...", "password": "..." }
 #define BLE_CHAR_ADMIN_CMD_UUID         "4d475743-0502-4e41-5649-474154494f4e"
+
+// ============================================================
+// Alarm Service
+// Exposes alarm configuration + runtime state (depth, AIS proximity,
+// GPS lost) and accepts configuration / acknowledge / beep commands.
+// ============================================================
+#define BLE_SERVICE_ALARM_UUID          "4d475743-0006-4e41-5649-474154494f4e"
+
+/// READ + NOTIFY — alarm config + runtime state (see BLE_Client_Documentation.md)
+#define BLE_CHAR_ALARM_DATA_UUID        "4d475743-0601-4e41-5649-474154494f4e"
+
+/// WRITE — alarm commands (JSON):
+///   { "command": "set_config", "depth_enabled": true, "depth_threshold_m": 2.0,
+///     "ais_enabled": true, "ais_distance_nm": 1.0, "own_mmsi": 123456789,
+///     "gps_lost_enabled": true, "gps_lost_timeout_s": 10, "alarms_enabled": true }
+///   { "command": "ack" }
+///   { "command": "beep_on" }
+///   { "command": "beep_off" }
+#define BLE_CHAR_ALARM_CMD_UUID         "4d475743-0602-4e41-5649-474154494f4e"
 
 // ============================================================
 // Limits & task config

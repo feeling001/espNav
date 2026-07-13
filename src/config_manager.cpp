@@ -42,6 +42,7 @@ bool ConfigManager::getWiFiConfig(WiFiConfig& config) {
     strncpy(config.ap_password, apPassword.c_str(), sizeof(config.ap_password) - 1);
     config.ap_password[sizeof(config.ap_password) - 1] = '\0';
     
+    /*
     serialPrintf("[Config] WiFi config loaded from NVS\n");
     serialPrintf("[Config]   Mode: %s\n", mode == 0 ? "STA" : "AP");
     if (mode == 0 && strlen(config.ssid) > 0) {
@@ -50,6 +51,7 @@ bool ConfigManager::getWiFiConfig(WiFiConfig& config) {
     if (strlen(config.ap_ssid) > 0) {
         serialPrintf("[Config]   AP SSID: %s\n", config.ap_ssid);
     }
+    */
     
     return true;
 }
@@ -161,6 +163,49 @@ bool ConfigManager::setBLEConfig(const BLEConfigData& config) {
     return true;
 }
 
+bool ConfigManager::getAlarmConfig(AlarmConfig& config) {
+    config.alarms_enabled      = nvs.getBool("alarm_en",       true);
+
+    config.depth_enabled       = nvs.getBool("alarm_dep_en",   true);
+    config.depth_threshold_m   = nvs.getFloat("alarm_dep_th",  2.0f);
+
+    config.ais_enabled         = nvs.getBool("alarm_ais_en",   true);
+    config.ais_distance_nm     = nvs.getFloat("alarm_ais_nm",  1.0f);
+    config.own_mmsi            = nvs.getUInt("alarm_mmsi",     0);
+
+    config.gps_lost_enabled    = nvs.getBool("alarm_gps_en",   true);
+    config.gps_lost_timeout_s  = nvs.getUShort("alarm_gps_to", 10);
+
+    return true;
+}
+
+bool ConfigManager::setAlarmConfig(const AlarmConfig& config) {
+    serialPrintf("[Config] Saving Alarm config to NVS\n");
+
+    nvs.putBool("alarm_en",       config.alarms_enabled);
+
+    nvs.putBool("alarm_dep_en",   config.depth_enabled);
+    nvs.putFloat("alarm_dep_th",  config.depth_threshold_m);
+
+    nvs.putBool("alarm_ais_en",   config.ais_enabled);
+    nvs.putFloat("alarm_ais_nm",  config.ais_distance_nm);
+    nvs.putUInt("alarm_mmsi",     config.own_mmsi);
+
+    nvs.putBool("alarm_gps_en",   config.gps_lost_enabled);
+    nvs.putUShort("alarm_gps_to", config.gps_lost_timeout_s);
+
+    serialPrintf("[Config]   Alarms enabled: %s\n", config.alarms_enabled ? "Yes" : "No");
+    serialPrintf("[Config]   Depth: %s, threshold=%.1f m\n",
+                 config.depth_enabled ? "on" : "off", config.depth_threshold_m);
+    serialPrintf("[Config]   AIS: %s, distance=%.1f nm, own_mmsi=%u\n",
+                 config.ais_enabled ? "on" : "off", config.ais_distance_nm, config.own_mmsi);
+    serialPrintf("[Config]   GPS lost: %s, timeout=%u s\n",
+                 config.gps_lost_enabled ? "on" : "off", config.gps_lost_timeout_s);
+
+    serialPrintf("[Config] ✓ Alarm config saved\n");
+    return true;
+}
+
 void ConfigManager::factoryReset() {
     serialPrintf("[Config] Performing factory reset...\n");
     
@@ -170,10 +215,12 @@ void ConfigManager::factoryReset() {
     WiFiConfig defaultWiFi;
     UARTConfig defaultSerial;
     BLEConfigData defaultBLE;
+    AlarmConfig defaultAlarm;
     
     setWiFiConfig(defaultWiFi);
     setSerialConfig(defaultSerial);
     setBLEConfig(defaultBLE);
+    setAlarmConfig(defaultAlarm);
     
     serialPrintf("[Config] ✓ Factory reset complete\n");
 }

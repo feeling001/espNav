@@ -1,6 +1,7 @@
 #include "ble_manager.h"
 #include "config_manager.h"
 #include "wifi_manager.h"
+#include "alarm_manager.h"
 #include "functions.h"
 #include <ArduinoJson.h>
 #include <esp_system.h>
@@ -190,6 +191,82 @@ void AdminCmdCallbacks::onWrite(NimBLECharacteristic* pChar, NimBLEConnInfo& con
 }
 
 // ============================================================
+// AlarmCmdCallbacks — NimBLE 2.x signature
+//
+// Accepted commands:
+//   { "command": "set_config", ... }
+//   { "command": "ack" }
+//   { "command": "beep_on" }
+//   { "command": "beep_off" }
+// ============================================================
+
+void AlarmCmdCallbacks::onWrite(NimBLECharacteristic* pChar, NimBLEConnInfo& connInfo) {
+    std::string raw = pChar->getValue();
+    if (raw.empty()) return;
+
+    serialPrintf("[BLE Alarm] Command from %s: %s\n",
+                  connInfo.getAddress().toString().c_str(),
+                  raw.c_str());
+
+    JsonDocument doc;
+    DeserializationError err = deserializeJson(doc, raw.c_str());
+    if (err) {
+        serialPrintf("[BLE Alarm] JSON parse error: %s\n", err.c_str());
+        return;
+    }
+
+    const char* cmd = doc["command"] | "";
+    if (cmd[0] == '\0') {
+        serialPrintf("[BLE Alarm] Missing command field\n");
+        return;
+    }
+
+    if (!manager->alarmManager) {
+        serialPrintf("[BLE Alarm] AlarmManager not set — command '%s' dropped\n", cmd);
+        return;
+    }
+
+    if (strcmp(cmd, "set_config") == 0) {
+        AlarmConfig cfg = manager->alarmManager->getConfig();
+        if (doc["alarms_enabled"].is<bool>())     cfg.alarms_enabled     = doc["alarms_enabled"];
+        if (doc["depth_enabled"].is<bool>())      cfg.depth_enabled      = doc["depth_enabled"];
+        if (doc["depth_threshold_m"].is<float>() || doc["depth_threshold_m"].is<int>())
+            cfg.depth_threshold_m = doc["depth_threshold_m"].as<float>();
+        if (doc["ais_enabled"].is<bool>())        cfg.ais_enabled        = doc["ais_enabled"];
+        if (doc["ais_distance_nm"].is<float>() || doc["ais_distance_nm"].is<int>())
+            cfg.ais_distance_nm = doc["ais_distance_nm"].as<float>();
+        if (doc["own_mmsi"].is<uint32_t>() || doc["own_mmsi"].is<int>() || doc["own_mmsi"].is<long>())
+            cfg.own_mmsi = doc["own_mmsi"].as<uint32_t>();
+        if (doc["gps_lost_enabled"].is<bool>())   cfg.gps_lost_enabled   = doc["gps_lost_enabled"];
+        if (doc["gps_lost_timeout_s"].is<int>())  cfg.gps_lost_timeout_s = (uint16_t)doc["gps_lost_timeout_s"].as<int>();
+
+        manager->alarmManager->setConfig(cfg);
+        serialPrintf("[BLE Alarm] Config updated\n");
+        return;
+    }
+
+    if (strcmp(cmd, "ack") == 0) {
+        manager->alarmManager->acknowledgeAll();
+        serialPrintf("[BLE Alarm] Alarms acknowledged\n");
+        return;
+    }
+
+    if (strcmp(cmd, "beep_on") == 0) {
+        bool ok = manager->alarmManager->beepOn();
+        serialPrintf("[BLE Alarm] beep_on -> %s\n", ok ? "OK" : "FAILED");
+        return;
+    }
+
+    if (strcmp(cmd, "beep_off") == 0) {
+        bool ok = manager->alarmManager->beepOff();
+        serialPrintf("[BLE Alarm] beep_off -> %s\n", ok ? "OK" : "FAILED");
+        return;
+    }
+
+    serialPrintf("[BLE Alarm] Unknown command: '%s'\n", cmd);
+}
+
+// ============================================================
 // Constructor / Destructor
 // ============================================================
 
@@ -200,9 +277,11 @@ BLEManager::BLEManager()
       pAutopilotService(nullptr),   pAutopilotDataChar(nullptr), pAutopilotCmdChar(nullptr),
       pPerformanceService(nullptr), pPerformanceDataChar(nullptr),
       pAdminService(nullptr),       pAdminDataChar(nullptr),     pAdminCmdChar(nullptr),
+      pAlarmService(nullptr),       pAlarmDataChar(nullptr),     pAlarmCmdChar(nullptr),
       serverCallbacks(nullptr), autopilotCmdCallbacks(nullptr), adminCmdCallbacks(nullptr),
+      alarmCmdCallbacks(nullptr),
       boatState(nullptr), seatalkManager(nullptr),
-      configManager(nullptr), wifiManager(nullptr),
+      configManager(nullptr), wifiManager(nullptr), alarmManager(nullptr),
       initialized(false), advertising(false),
       connectedDevices(0), updateTaskHandle(nullptr) {
 }
@@ -212,6 +291,7 @@ BLEManager::~BLEManager() {
     if (serverCallbacks)        delete serverCallbacks;
     if (autopilotCmdCallbacks)  delete autopilotCmdCallbacks;
     if (adminCmdCallbacks)      delete adminCmdCallbacks;
+    if (alarmCmdCallbacks)      delete alarmCmdCallbacks;
 }
 
 // ============================================================
@@ -221,7 +301,8 @@ BLEManager::~BLEManager() {
 void BLEManager::init(const BLEConfig& cfg, BoatState* state,
                       SeatalkManager* stMgr,
                       ConfigManager*  configMgr,
-                      WiFiManager*    wifiMgr) {
+                      WiFiManager*    wifiMgr,
+                      AlarmManager*   alarmMgr) {
     if (initialized) return;
 
     config         = cfg;
@@ -229,6 +310,7 @@ void BLEManager::init(const BLEConfig& cfg, BoatState* state,
     seatalkManager = stMgr;
     configManager  = configMgr;
     wifiManager    = wifiMgr;
+    alarmManager   = alarmMgr;
 
     serialPrintf("[BLE] Initializing NimBLE 2.x stack\n");
     serialPrintf("[BLE]   Device name    : %s\n", config.device_name);
@@ -236,6 +318,7 @@ void BLEManager::init(const BLEConfig& cfg, BoatState* state,
     serialPrintf("[BLE]   Enabled        : %s\n", config.enabled ? "yes" : "no");
     serialPrintf("[BLE]   SeatalkManager : %s\n", seatalkManager ? "yes" : "no (AP commands disabled)");
     serialPrintf("[BLE]   ConfigManager  : %s\n", configManager  ? "yes" : "no (Admin WiFi cmd disabled)");
+    serialPrintf("[BLE]   AlarmManager   : %s\n", alarmManager   ? "yes" : "no (Alarm cmds disabled)");
 
     NimBLEDevice::init(config.device_name);
     NimBLEDevice::setPower(9);
@@ -301,6 +384,7 @@ void BLEManager::update() {
     updateAutopilotData();
     updatePerformanceData();
     updateAdminData();
+    updateAlarmData();
 }
 
 void BLEManager::updateTask(void* param) {
@@ -383,6 +467,20 @@ void BLEManager::setupServices() {
     pAdminCmdChar->setCallbacks(adminCmdCallbacks);
     serialPrintf("[BLE]   ✓ Admin service\n");
 
+    // ── Alarm ────────────────────────────────────────
+    pAlarmService  = pServer->createService(BLE_SERVICE_ALARM_UUID);
+
+    pAlarmDataChar = pAlarmService->createCharacteristic(
+        BLE_CHAR_ALARM_DATA_UUID,
+        NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
+
+    alarmCmdCallbacks = new AlarmCmdCallbacks(this);
+    pAlarmCmdChar = pAlarmService->createCharacteristic(
+        BLE_CHAR_ALARM_CMD_UUID,
+        NIMBLE_PROPERTY::WRITE);
+    pAlarmCmdChar->setCallbacks(alarmCmdCallbacks);
+    serialPrintf("[BLE]   ✓ Alarm service\n");
+
     serialPrintf("[BLE] ✓ All services created\n");
 }
 
@@ -441,7 +539,7 @@ void BLEManager::setDeviceName(const char* name) {
         stop();
         NimBLEDevice::deinit(true);
         initialized = false;
-        init(config, boatState, seatalkManager, configManager, wifiManager);
+        init(config, boatState, seatalkManager, configManager, wifiManager, alarmManager);
         start();
     }
 }
@@ -493,6 +591,13 @@ void BLEManager::updateAdminData() {
     String json = buildAdminJSON();
     pAdminDataChar->setValue(json.c_str());
     pAdminDataChar->notify();
+}
+
+void BLEManager::updateAlarmData() {
+    if (!pAlarmDataChar) return;
+    String json = buildAlarmJSON();
+    pAlarmDataChar->setValue(json.c_str());
+    pAlarmDataChar->notify();
 }
 
 // ============================================================
@@ -625,6 +730,46 @@ String BLEManager::buildAdminJSON() {
 
     // Free heap
     doc["free_heap"] = (uint32_t)ESP.getFreeHeap();
+
+    String out;
+    serializeJson(doc, out);
+    return out;
+}
+
+String BLEManager::buildAlarmJSON() {
+    JsonDocument doc;
+
+    if (!alarmManager || !boatState) {
+        String out;
+        serializeJson(doc, out);
+        return out;
+    }
+
+    AlarmConfig cfg   = alarmManager->getConfig();
+    AlarmState  state = boatState->getAlarmState();
+
+    doc["alarms_enabled"]     = cfg.alarms_enabled;
+    doc["depth_enabled"]      = cfg.depth_enabled;
+    doc["depth_threshold_m"]  = cfg.depth_threshold_m;
+    doc["ais_enabled"]        = cfg.ais_enabled;
+    doc["ais_distance_nm"]    = cfg.ais_distance_nm;
+    doc["own_mmsi"]           = cfg.own_mmsi;
+    doc["gps_lost_enabled"]   = cfg.gps_lost_enabled;
+    doc["gps_lost_timeout_s"] = cfg.gps_lost_timeout_s;
+
+    auto addAlarm = [&](const char* key, const AlarmItemState& item) {
+        JsonObject obj = doc[key].to<JsonObject>();
+        obj["active"]       = item.active;
+        obj["acknowledged"] = item.acknowledged;
+    };
+
+    addAlarm("depth",    state.depth);
+    addAlarm("ais",      state.ais);
+    addAlarm("gps_lost", state.gps_lost);
+
+    doc["ais_trigger_mmsi"] = state.ais_trigger_mmsi;
+    doc["any_active"]       = state.anyActive();
+    doc["any_unacked"]      = state.anyUnacked();
 
     String out;
     serializeJson(doc, out);

@@ -59,6 +59,27 @@ struct BLEConfigData {
     }
 };
 
+// Alarm configuration structure
+struct AlarmConfig {
+    bool     alarms_enabled;
+
+    bool     depth_enabled;
+    float    depth_threshold_m;
+
+    bool     ais_enabled;
+    float    ais_distance_nm;
+    uint32_t own_mmsi;
+
+    bool     gps_lost_enabled;
+    uint16_t gps_lost_timeout_s;
+
+    AlarmConfig()
+        : alarms_enabled(true),
+          depth_enabled(true),      depth_threshold_m(2.0f),
+          ais_enabled(true),        ais_distance_nm(1.0f), own_mmsi(0),
+          gps_lost_enabled(true),   gps_lost_timeout_s(10) {}
+};
+
 // NMEA sentence structure
 struct NMEASentence {
     char raw[128];

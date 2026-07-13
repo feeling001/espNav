@@ -10,6 +10,7 @@ import { ConfigPage } from './components/Config/ConfigPage';
 import { Performance } from './components/Performance/Performance';
 import { Autopilot } from './components/Autopilot/Autopilot';
 import { Logbook } from './components/Logbook/Logbook';
+import { Alarms } from './components/Alarms/Alarms';
 
 import './styles/main.css';
 
@@ -25,6 +26,7 @@ function App() {
             <Route path="/autopilot"   element={<Autopilot />} />
             <Route path="/performance" element={<Performance />} />
             <Route path="/logbook"     element={<Logbook />} />
+            <Route path="/alarms"      element={<Alarms />} />
             <Route path="/config"      element={<ConfigPage />} />
             <Route path="/nmea"        element={<NMEAMonitor />} />
           </Routes>

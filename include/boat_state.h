@@ -293,6 +293,42 @@ struct PerformanceData {
 };
 
 /**
+ * @brief Runtime state of a single alarm (depth, AIS, GPS lost).
+ *
+ * `active` reflects the current trigger condition; `acknowledged` is
+ * cleared automatically whenever the alarm re-activates after having
+ * been inactive (fresh occurrence requires a new acknowledge).
+ */
+struct AlarmItemState {
+    bool          active;
+    bool          acknowledged;
+    unsigned long since;   ///< millis() timestamp of last state change
+
+    AlarmItemState() : active(false), acknowledged(false), since(0) {}
+};
+
+/**
+ * @brief Aggregated runtime alarm state (depth, AIS, GPS lost).
+ */
+struct AlarmState {
+    AlarmItemState depth;
+    AlarmItemState ais;
+    AlarmItemState gps_lost;
+
+    uint32_t ais_trigger_mmsi = 0;  ///< MMSI of the closest AIS target currently triggering the alarm
+
+    bool anyActive() const {
+        return depth.active || ais.active || gps_lost.active;
+    }
+
+    bool anyUnacked() const {
+        return (depth.active    && !depth.acknowledged) ||
+               (ais.active      && !ais.acknowledged)    ||
+               (gps_lost.active && !gps_lost.acknowledged);
+    }
+};
+
+/**
  * Main Boat State class
  * Thread-safe storage for all boat data
  */
@@ -364,6 +400,22 @@ public:
     
     void addOrUpdateAISTarget(const AISTarget& target);
 
+    // ── Alarms ──────────────────────────────────────────────────
+    /** @brief Return a thread-safe copy of the current alarm runtime state. */
+    AlarmState getAlarmState();
+
+    /** @brief Set the active flag for the depth alarm. Resets ack when re-activating. */
+    void setDepthAlarmActive(bool active);
+
+    /** @brief Set the active flag for the AIS proximity alarm. */
+    void setAISAlarmActive(bool active, uint32_t triggerMmsi = 0);
+
+    /** @brief Set the active flag for the GPS lost alarm. */
+    void setGPSLostAlarmActive(bool active);
+
+    /** @brief Acknowledge all currently active alarms (global ack). */
+    void acknowledgeAllAlarms();
+
     /**
      * @brief Recompute VMG and polarPct from current STW, TWS, TWA.
      *
@@ -408,6 +460,7 @@ private:
     AutopilotData autopilot;
     AISData ais;
     PerformanceData performance;
+    AlarmState alarmState;
     
     // Thread safety
     SemaphoreHandle_t mutex;

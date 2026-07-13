@@ -37,6 +37,9 @@
 #define WIFI_AP_MAX_CLIENTS      4
 #define WIFI_AP_CHANNEL          4
 #define WIFI_MAX_RECONNECT       3
+// WiFi TX power — reduces power consumption at the cost of range.
+// Values in units of 0.25 dBm. Valid range: 8 (2 dBm) to 84 (21 dBm).
+#define WIFI_TX_POWER            38
 
 
 // UART Configuration (NMEA0183_1)

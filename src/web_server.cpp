@@ -31,10 +31,12 @@ extern QueueHandle_t nmeaQueue;
 
 WebServer::WebServer(ConfigManager* cm, WiFiManager* wm, TCPServer* tcp, UARTHandler* uart,
                      NMEAParser* nmea, BoatState* bs, BLEManager* ble,
-                     SeatalkManager* stMgr, LogManager* logManager, SDManager* sdMgr)
+                     SeatalkManager* stMgr, LogManager* logManager, SDManager* sdMgr,
+                     AlarmManager* alarmMgr)
     : configManager(cm), wifiManager(wm), tcpServer(tcp), uartHandler(uart),
       nmeaParser(nmea), boatState(bs), bleManager(ble),
-      seatalkManager(stMgr), logManager(logManager), sdManager(sdMgr), running(false),
+      seatalkManager(stMgr), logManager(logManager), sdManager(sdMgr),
+      alarmManager(alarmMgr), running(false),
       otaInProgress(false), otaSuccess(false),
       otaExpectedSize(0), otaBytesWritten(0) {
     server = new AsyncWebServer(WEB_SERVER_PORT);
@@ -222,6 +224,31 @@ void WebServer::registerRoutes() {
             this->handlePostSeatalkExtra(request, data, len);
         }
     );
+
+    // ── Alarms ─────────────────────────────────────────────────
+    server->on("/api/alarms/config", HTTP_GET, [this](AsyncWebServerRequest* request) {
+        this->handleGetAlarmsConfig(request);
+    });
+    server->on("/api/alarms/config", HTTP_POST,
+        [](AsyncWebServerRequest* request) {},
+        NULL,
+        [this](AsyncWebServerRequest* request, uint8_t* data, size_t len,
+               size_t index, size_t total) {
+            this->handlePostAlarmsConfig(request, data, len);
+        }
+    );
+    server->on("/api/alarms/status", HTTP_GET, [this](AsyncWebServerRequest* request) {
+        this->handleGetAlarmsStatus(request);
+    });
+    server->on("/api/alarms/ack", HTTP_POST, [this](AsyncWebServerRequest* request) {
+        this->handlePostAlarmsAck(request);
+    });
+    server->on("/api/alarms/beep_on", HTTP_POST, [this](AsyncWebServerRequest* request) {
+        this->handlePostAlarmsBeepOn(request);
+    });
+    server->on("/api/alarms/beep_off", HTTP_POST, [this](AsyncWebServerRequest* request) {
+        this->handlePostAlarmsBeepOff(request);
+    });
 
     // ── OTA Update ─────────────────────────────────────────────
     server->on("/api/ota/status", HTTP_GET, [this](AsyncWebServerRequest* request) {
@@ -986,6 +1013,14 @@ void WebServer::handleGetStatus(AsyncWebServerRequest* request) {
     ble["connected_devices"] = bleManager->getConnectedDevices();
     ble["device_name"]       = bleManager->getConfig().device_name;
 
+    // ── Internal chip temperature ─────────────────────────────
+    {
+        float chip_temp = temperatureRead();  // Arduino ESP32 built-in
+        JsonObject temp = doc["chip_temp"].to<JsonObject>();
+        temp["celsius"]   = chip_temp;
+        temp["available"] = true;
+    }
+
     // ── SD card summary ───────────────────────────────────────
     JsonObject sd = doc["sd"].to<JsonObject>();
     if (sdManager) {
@@ -1547,5 +1582,165 @@ void WebServer::handlePostSeatalkExtra(AsyncWebServerRequest* request,
     } else {
         request->send(500, "application/json",
                       "{\"success\":false,\"error\":\"Transmission failed or unknown command\"}");
+    }
+}
+
+// ── Alarm handlers ─────────────────────────────────────────────────────────────
+
+// GET /api/alarms/config
+void WebServer::handleGetAlarmsConfig(AsyncWebServerRequest* request) {
+    if (!alarmManager) {
+        request->send(503, "application/json",
+                      "{\"error\":\"Alarm manager not initialised\"}");
+        return;
+    }
+
+    AlarmConfig cfg = alarmManager->getConfig();
+    JsonDocument doc;
+    doc["alarms_enabled"]       = cfg.alarms_enabled;
+    doc["depth_enabled"]        = cfg.depth_enabled;
+    doc["depth_threshold_m"]    = cfg.depth_threshold_m;
+    doc["ais_enabled"]          = cfg.ais_enabled;
+    doc["ais_distance_nm"]      = cfg.ais_distance_nm;
+    doc["own_mmsi"]             = cfg.own_mmsi;
+    doc["gps_lost_enabled"]     = cfg.gps_lost_enabled;
+    doc["gps_lost_timeout_s"]   = cfg.gps_lost_timeout_s;
+
+    String body;
+    serializeJson(doc, body);
+    request->send(200, "application/json", body);
+}
+
+// POST /api/alarms/config
+void WebServer::handlePostAlarmsConfig(AsyncWebServerRequest* request,
+                                        uint8_t* data, size_t len) {
+    if (!alarmManager) {
+        request->send(503, "application/json",
+                      "{\"error\":\"Alarm manager not initialised\"}");
+        return;
+    }
+
+    JsonDocument doc;
+    if (deserializeJson(doc, (char*)data, len)) {
+        request->send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
+        return;
+    }
+
+    AlarmConfig cfg = alarmManager->getConfig();
+
+    if (doc["alarms_enabled"].is<bool>())     cfg.alarms_enabled     = doc["alarms_enabled"];
+    if (doc["depth_enabled"].is<bool>())      cfg.depth_enabled      = doc["depth_enabled"];
+    if (doc["depth_threshold_m"].is<float>() || doc["depth_threshold_m"].is<int>()) {
+        float th = doc["depth_threshold_m"].as<float>();
+        if (th < 0.1f)  th = 0.1f;
+        if (th > 999.0f) th = 999.0f;
+        cfg.depth_threshold_m = th;
+    }
+    if (doc["ais_enabled"].is<bool>())        cfg.ais_enabled        = doc["ais_enabled"];
+    if (doc["ais_distance_nm"].is<float>() || doc["ais_distance_nm"].is<int>()) {
+        float nm = doc["ais_distance_nm"].as<float>();
+        nm = roundf(nm * 10.0f) / 10.0f;   // snap to 0.1 nm steps
+        if (nm < 0.1f)  nm = 0.1f;
+        if (nm > 99.9f) nm = 99.9f;
+        cfg.ais_distance_nm = nm;
+    }
+    if (doc["own_mmsi"].is<uint32_t>() || doc["own_mmsi"].is<int>() || doc["own_mmsi"].is<long>()) {
+        cfg.own_mmsi = doc["own_mmsi"].as<uint32_t>();
+    }
+    if (doc["gps_lost_enabled"].is<bool>())   cfg.gps_lost_enabled   = doc["gps_lost_enabled"];
+    if (doc["gps_lost_timeout_s"].is<int>()) {
+        int to = doc["gps_lost_timeout_s"];
+        if (to < 1)     to = 1;
+        if (to > 3600)  to = 3600;
+        cfg.gps_lost_timeout_s = (uint16_t)to;
+    }
+
+    alarmManager->setConfig(cfg);
+
+    request->send(200, "application/json",
+                  "{\"success\":true,\"message\":\"Alarm config saved\"}");
+}
+
+// GET /api/alarms/status
+void WebServer::handleGetAlarmsStatus(AsyncWebServerRequest* request) {
+    if (!boatState || !alarmManager) {
+        request->send(503, "application/json",
+                      "{\"error\":\"Alarm manager not initialised\"}");
+        return;
+    }
+
+    AlarmState state = boatState->getAlarmState();
+    JsonDocument doc;
+
+    auto addAlarm = [&](const char* key, const AlarmItemState& item) {
+        JsonObject obj = doc[key].to<JsonObject>();
+        obj["active"]       = item.active;
+        obj["acknowledged"] = item.acknowledged;
+        if (item.active) {
+            obj["age"] = (millis() - item.since) / 1000.0;
+        } else {
+            obj["age"] = nullptr;
+        }
+    };
+
+    addAlarm("depth",    state.depth);
+    addAlarm("ais",      state.ais);
+    addAlarm("gps_lost", state.gps_lost);
+
+    doc["ais_trigger_mmsi"] = state.ais_trigger_mmsi;
+    doc["any_active"]       = state.anyActive();
+    doc["any_unacked"]      = state.anyUnacked();
+
+    String body;
+    serializeJson(doc, body);
+    request->send(200, "application/json", body);
+}
+
+// POST /api/alarms/ack
+void WebServer::handlePostAlarmsAck(AsyncWebServerRequest* request) {
+    if (!alarmManager) {
+        request->send(503, "application/json",
+                      "{\"error\":\"Alarm manager not initialised\"}");
+        return;
+    }
+
+    alarmManager->acknowledgeAll();
+    request->send(200, "application/json",
+                  "{\"success\":true,\"message\":\"Alarms acknowledged\"}");
+}
+
+// POST /api/alarms/beep_on
+void WebServer::handlePostAlarmsBeepOn(AsyncWebServerRequest* request) {
+    if (!alarmManager) {
+        request->send(503, "application/json",
+                      "{\"error\":\"Alarm manager not initialised\"}");
+        return;
+    }
+
+    bool ok = alarmManager->beepOn();
+    if (ok) {
+        request->send(200, "application/json",
+                      "{\"success\":true,\"message\":\"Beep on\"}");
+    } else {
+        request->send(500, "application/json",
+                      "{\"success\":false,\"error\":\"Transmission failed\"}");
+    }
+}
+
+// POST /api/alarms/beep_off
+void WebServer::handlePostAlarmsBeepOff(AsyncWebServerRequest* request) {
+    if (!alarmManager) {
+        request->send(503, "application/json",
+                      "{\"error\":\"Alarm manager not initialised\"}");
+        return;
+    }
+
+    bool ok = alarmManager->beepOff();
+    if (ok) {
+        request->send(200, "application/json",
+                      "{\"success\":true,\"message\":\"Beep off\"}");
+    } else {
+        request->send(500, "application/json",
+                      "{\"success\":false,\"error\":\"Transmission failed\"}");
     }
 }

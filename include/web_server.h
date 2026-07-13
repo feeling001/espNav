@@ -25,6 +25,7 @@
 #include "ble_manager.h"
 #include "seatalk_manager.h"
 #include "sd_manager.h"
+#include "alarm_manager.h"
 
 // Forward declarations
 class TCPServer;
@@ -49,10 +50,12 @@ public:
      * @param ble     BLE manager
      * @param stMgr   SeaTalk manager (autopilot commands)
      * @param sdMgr   SD card manager — may be nullptr if SD is not used
+     * @param alarmMgr Alarm manager — may be nullptr if alarms are not used
      */
     WebServer(ConfigManager* cm, WiFiManager* wm, TCPServer* tcp, UARTHandler* uart,
               NMEAParser* nmea, BoatState* bs, BLEManager* ble,
-              SeatalkManager* stMgr, LogManager* logManager ,SDManager* sdMgr = nullptr);
+              SeatalkManager* stMgr, LogManager* logManager ,SDManager* sdMgr = nullptr,
+              AlarmManager* alarmMgr = nullptr);
 
     void init();
     void start();
@@ -94,6 +97,14 @@ private:
     void handleGetPerformance(AsyncWebServerRequest* request);
     void handleGetPerformanceConfig(AsyncWebServerRequest* request);
     void handlePostPerformanceConfig(AsyncWebServerRequest* request, uint8_t* data, size_t len);
+
+    // ── Alarm handlers ──────────────────────────────────────────
+    void handleGetAlarmsConfig(AsyncWebServerRequest* request);
+    void handlePostAlarmsConfig(AsyncWebServerRequest* request, uint8_t* data, size_t len);
+    void handleGetAlarmsStatus(AsyncWebServerRequest* request);
+    void handlePostAlarmsAck(AsyncWebServerRequest* request);
+    void handlePostAlarmsBeepOn(AsyncWebServerRequest* request);
+    void handlePostAlarmsBeepOff(AsyncWebServerRequest* request);
 
     // ── WiFi scan handlers ────────────────────────────────────────────────────
     void handleStartWiFiScan(AsyncWebServerRequest* request);
@@ -158,6 +169,7 @@ private:
     SeatalkManager* seatalkManager;
     SDManager*      sdManager;      ///< May be nullptr when SD is disabled
     LogManager*     logManager;
+    AlarmManager*   alarmManager;   ///< May be nullptr when alarms are disabled
     bool            running;
 
     // ── OTA state ─────────────────────────────────────────────────────────────

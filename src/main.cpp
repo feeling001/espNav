@@ -29,6 +29,7 @@
 #include "uart_handler.h"
 #include "seatalk_rmt.h"
 #include "seatalk_manager.h"
+#include "alarm_manager.h"
 #include "nmea_parser.h"
 #include "tcp_server.h"
 #include "web_server.h"
@@ -46,6 +47,7 @@ SDManager      sdManager;
 LogManager     logManager(&sdManager, &boatState);
 SeatalkRMT     seatalkHandler(&logManager);
 SeatalkManager seatalkManager(&seatalkHandler, &boatState);
+AlarmManager   alarmManager(&boatState, &configManager, &seatalkManager);
 TCPServer      tcpServer;
 BLEManager     bleManager;
 NMEAParser     nmeaParser(&boatState);
@@ -57,7 +59,7 @@ char rgb[3] = {100, 100, 100}; // Vert par défaut
 // WebServer receives all subsystem pointers including SDManager.
 WebServer webServer(&configManager, &wifiManager, &tcpServer, &uartHandler,
                     &nmeaParser, &boatState, &bleManager, &seatalkManager, &logManager,
-                    &sdManager);
+                    &sdManager, &alarmManager);
 
 
 
@@ -168,6 +170,9 @@ void setup() {
     // ── Boat state ────────────────────────────────────────────
     boatState.init();
 
+    // ── Alarm manager ─────────────────────────────────────────
+    alarmManager.init();
+
     // ── Polar diagram ─────────────────────────────────────────
     serialPrintf("\n[Polar] Loading polar diagram...\n");
     if (LittleFS.exists(POLAR_FILE_PATH)) {
@@ -236,7 +241,7 @@ void setup() {
             sizeof(bleManagerConfig.device_name) - 1);
     strncpy(bleManagerConfig.pin_code, bleConfig.pin_code,
             sizeof(bleManagerConfig.pin_code) - 1);
-    bleManager.init(bleManagerConfig, &boatState, &seatalkManager, &configManager, &wifiManager);
+    bleManager.init(bleManagerConfig, &boatState, &seatalkManager, &configManager, &wifiManager, &alarmManager);
 
 
     if (bleConfig.enabled) {
@@ -309,6 +314,12 @@ void setup() {
 // ── loop ──────────────────────────────────────────────────────────────────────
 
 void loop() {
+    static uint32_t lastAlarmCheckMs = 0;
+    uint32_t now = millis();
+    if (now - lastAlarmCheckMs >= 1000) {
+        lastAlarmCheckMs = now;
+        alarmManager.update();
+    }
     vTaskDelay(pdMS_TO_TICKS(100));
 }
 

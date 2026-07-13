@@ -21,7 +21,11 @@ public:
     // BLE configuration
     bool getBLEConfig(BLEConfigData& config);
     bool setBLEConfig(const BLEConfigData& config);
-    
+
+    // Alarm configuration
+    bool getAlarmConfig(AlarmConfig& config);
+    bool setAlarmConfig(const AlarmConfig& config);
+
     // Factory reset
     void factoryReset();
     

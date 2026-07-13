@@ -229,26 +229,18 @@ void TCPServer::broadcast(const char* data, size_t len) {
     if (!running || !data || len == 0) {
         return;
     }
-    
-    xSemaphoreTake(clientsMutex, portMAX_DELAY);
-    
-    if (clients.empty()) {
-        xSemaphoreGive(clientsMutex);
-        return;
-    }
-    
+
     // ═══════════════════════════════════════════════════════════════
     // Prepare data with CRLF if not already present
+    // (done before taking the mutex — no need to hold it for this)
     // ═══════════════════════════════════════════════════════════════
     char buffer[NMEA_MAX_LENGTH + 3];  // +3 for \r\n\0
     size_t sendLen = len;
-    
-    // Check if data already has CRLF
+
     bool hasCRLF = (len >= 2 && data[len-2] == '\r' && data[len-1] == '\n');
-    
+
     if (len < sizeof(buffer) - 2) {
         memcpy(buffer, data, len);
-        
         if (!hasCRLF) {
             buffer[len++] = '\r';
             buffer[len++] = '\n';
@@ -256,59 +248,52 @@ void TCPServer::broadcast(const char* data, size_t len) {
         buffer[len] = '\0';
         sendLen = len;
     } else {
-        // Data too long, just use as-is
         memcpy(buffer, data, sizeof(buffer) - 1);
         buffer[sizeof(buffer) - 1] = '\0';
         sendLen = sizeof(buffer) - 1;
     }
-    
-    // ═══════════════════════════════════════════════════════════════
-    // NOUVEAU: Système de throttling intelligent
-    // ═══════════════════════════════════════════════════════════════
+
     uint32_t now = millis();
-    size_t sentCount = 0;
+    size_t sentCount    = 0;
     size_t skippedCount = 0;
-    size_t errorCount = 0;
-    
+    size_t errorCount   = 0;
+
+    // Clients that need closing are collected here so that client->close()
+    // is called OUTSIDE the mutex.  This prevents the async_tcp task from
+    // blocking on clientsMutex while processing the onDisconnect callback,
+    // which was the root cause of the task-watchdog crash.
+    std::vector<AsyncClient*> toClose;
+
+    xSemaphoreTake(clientsMutex, portMAX_DELAY);
+
+    if (clients.empty()) {
+        xSemaphoreGive(clientsMutex);
+        return;
+    }
+
     for (auto it = clients.begin(); it != clients.end(); ) {
         AsyncClient* client = *it;
-        
-        // Check if client is still connected
+
+        // Remove already-disconnected clients
         if (!client || !client->connected()) {
             serialPrintf("[TCP] Removing disconnected client during broadcast\n");
-            
-            // Clean up stats
             auto statsIt = clientStats.find(client);
-            if (statsIt != clientStats.end()) {
-                clientStats.erase(statsIt);
-            }
-            
+            if (statsIt != clientStats.end()) clientStats.erase(statsIt);
             it = clients.erase(it);
             continue;
         }
-        
-        // Get client stats
+
         auto& stats = clientStats[client];
-        
-        // ═══════════════════════════════════════════════════════════════
-        // NOUVEAU: Vérifier si le client peut recevoir
-        // ═══════════════════════════════════════════════════════════════
+
         if (!client->canSend()) {
             stats.failedSends++;
             stats.totalSkipped++;
             skippedCount++;
-            
-            // ═══════════════════════════════════════════════════════════════
-            // Politique de déconnexion intelligente:
-            // 1. Plus de 100 échecs consécutifs → déconnexion
-            // 2. Plus de 10 secondes bloqué ET > 10 échecs → déconnexion
-            // 3. Plus de 30 secondes bloqué → déconnexion inconditionnelle
-            // ═══════════════════════════════════════════════════════════════
+
             uint32_t timeSinceLastSend = now - stats.lastSend;
-            
             bool shouldDisconnect = false;
             const char* reason = "";
-            
+
             if (stats.failedSends > 100) {
                 shouldDisconnect = true;
                 reason = "too many consecutive failures (>100)";
@@ -319,34 +304,30 @@ void TCPServer::broadcast(const char* data, size_t len) {
                 shouldDisconnect = true;
                 reason = "blocked for >10s with failures";
             }
-            
+
             if (shouldDisconnect) {
-                serialPrintf("[TCP] Disconnecting %s: %s (fails=%u, blocked=%ums)\n", 
+                serialPrintf("[TCP] Disconnecting %s: %s (fails=%u, blocked=%ums)\n",
                              client->remoteIP().toString().c_str(),
                              reason,
                              stats.failedSends,
                              timeSinceLastSend);
-                
-                client->close();
+                // Remove from bookkeeping now; close() called after mutex release
                 clientStats.erase(client);
                 it = clients.erase(it);
+                toClose.push_back(client);
                 errorCount++;
                 continue;
             }
-            
-            // Sinon, skip ce message pour ce client
+
             ++it;
             continue;
         }
-        
-        // ═══════════════════════════════════════════════════════════════
-        // Client prêt - envoyer les données
-        // ═══════════════════════════════════════════════════════════════
+
+        // Client ready — send
         size_t written = client->write(buffer, sendLen);
-        
+
         if (written == sendLen) {
-            // Succès complet
-            stats.failedSends = 0;  // Reset compteur d'échecs
+            stats.failedSends = 0;
             stats.lastSend = now;
             stats.totalSent++;
             sentCount++;
@@ -423,6 +404,16 @@ void TCPServer::broadcast(const char* data, size_t len) {
     }
     
     xSemaphoreGive(clientsMutex);
+
+    // Close stale clients AFTER releasing the mutex.
+    // This avoids blocking the async_tcp task on clientsMutex when it
+    // processes the resulting onDisconnect callback (which calls removeClient
+    // → takes clientsMutex).  Calling close() outside the lock is safe
+    // because the client was already removed from the bookkeeping structures
+    // above; a subsequent onDisconnect will find nothing to erase.
+    for (AsyncClient* c : toClose) {
+        c->close(true);  // true = abort immediately
+    }
 }
 
 size_t TCPServer::getClientCount() {

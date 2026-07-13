@@ -17,17 +17,19 @@
 6. [Autopilot Service](#6-autopilot-service)
 7. [Sail Performance Service](#7-sail-performance-service)
 8. [Admin Service](#8-admin-service)
-9. [Sending Autopilot Commands](#9-sending-autopilot-commands)
-10. [Sending Admin Commands](#10-sending-admin-commands)
-11. [Behavior and Timing](#11-behavior-and-timing)
-12. [Integration Flow Example](#12-integration-flow-example)
-13. [UUID Reference Table](#13-uuid-reference-table)
+9. [Alarm Service](#9-alarm-service)
+10. [Sending Autopilot Commands](#10-sending-autopilot-commands)
+11. [Sending Admin Commands](#11-sending-admin-commands)
+12. [Sending Alarm Commands](#12-sending-alarm-commands)
+13. [Behavior and Timing](#13-behavior-and-timing)
+14. [Integration Flow Example](#14-integration-flow-example)
+15. [UUID Reference Table](#15-uuid-reference-table)
 
 ---
 
 ## 1. Overview
 
-The Marine Gateway is an ESP32-based bridge that reads NMEA 0183 data from a serial port and exposes it over Bluetooth Low Energy (BLE). It implements a custom GATT profile organized into **5 services**:
+The Marine Gateway is an ESP32-based bridge that reads NMEA 0183 data from a serial port and exposes it over Bluetooth Low Energy (BLE). It implements a custom GATT profile organized into **6 services**:
 
 | Service | Purpose |
 |---|---|
@@ -35,7 +37,8 @@ The Marine Gateway is an ESP32-based bridge that reads NMEA 0183 data from a ser
 | Wind | Apparent wind and true wind |
 | Autopilot | Autopilot state + command input |
 | Sail Performance | VMG, polar efficiency, polar target speed |
-| **Admin** | **System status (uptime, datetime) + administration commands (restart, WiFi config)** |
+| Admin | System status (uptime, datetime) + administration commands (restart, WiFi config) |
+| **Alarm** | **Depth / AIS proximity / GPS lost alarm configuration, runtime state, acknowledge and beep commands** |
 
 Data is encoded as **UTF-8 JSON** in each characteristic and updated at **1 Hz** (every second).
 
@@ -115,6 +118,14 @@ All UUIDs are 128-bit. The custom base is `4D475743-xxxx-4E41-5649-474154494F4E`
 | **AdminData Characteristic** | `4d475743-0501-4e41-5649-474154494f4e` |
 | **AdminCmd Characteristic** | `4d475743-0502-4e41-5649-474154494f4e` |
 
+#### Alarm Service
+
+| Element | UUID |
+|---|---|
+| **Service** | `4d475743-0006-4e41-5649-474154494f4e` |
+| **AlarmData Characteristic** | `4d475743-0601-4e41-5649-474154494f4e` |
+| **AlarmCmd Characteristic** | `4d475743-0602-4e41-5649-474154494f4e` |
+
 ### Characteristic Properties
 
 | Characteristic | READ | NOTIFY | WRITE |
@@ -124,8 +135,10 @@ All UUIDs are 128-bit. The custom base is `4D475743-xxxx-4E41-5649-474154494F4E`
 | AutopilotData | ✅ | ✅ | ❌ |
 | AutopilotCmd | ❌ | ❌ | ✅ |
 | PerformanceData | ✅ | ✅ | ❌ |
-| **AdminData** | **✅** | **✅** | **❌** |
-| **AdminCmd** | **❌** | **❌** | **✅** |
+| AdminData | ✅ | ✅ | ❌ |
+| AdminCmd | ❌ | ❌ | ✅ |
+| **AlarmData** | **✅** | **✅** | **❌** |
+| **AlarmCmd** | **❌** | **❌** | **✅** |
 
 > All `NOTIFY` characteristics include a **CCCD** (UUID `0x2902`).  
 > The client **must enable notifications** on each desired characteristic to receive updates.
@@ -393,7 +406,7 @@ There is no write-response mechanism (the characteristic uses WRITE without resp
 
 ---
 
-## 10. Sending Admin Commands
+## 11. Sending Admin Commands
 
 **Command Characteristic UUID:** `4d475743-0502-4e41-5649-474154494f4e`  
 **Property:** WRITE (no response expected)
@@ -418,7 +431,35 @@ There is no write-response mechanism (the characteristic uses WRITE without resp
 
 ---
 
-## 11. Behavior and Timing
+## 12. Sending Alarm Commands
+
+**Command Characteristic UUID:** `4d475743-0602-4e41-5649-474154494f4e`  
+**Property:** WRITE (no response expected)
+
+### Command Summary
+
+| `command` value | Additional fields | Effect |
+|---|---|---|
+| `"set_config"` | `depth_enabled`, `depth_threshold_m`, `ais_enabled`, `ais_distance_nm`, `own_mmsi`, `gps_lost_enabled`, `gps_lost_timeout_s`, `alarms_enabled` | Update alarm configuration (persisted to NVS) |
+| `"ack"` | — | Acknowledge all active alarms, stop beep |
+| `"beep_on"` | — | Manually trigger the SeaTalk1 beep |
+| `"beep_off"` | — | Manually silence the SeaTalk1 beep |
+
+### Examples
+
+```json
+{ "command": "set_config", "depth_threshold_m": 2.5, "ais_distance_nm": 0.5 }
+
+{ "command": "ack" }
+
+{ "command": "beep_on" }
+
+{ "command": "beep_off" }
+```
+
+---
+
+## 13. Behavior and Timing
 
 | Parameter | Value |
 |---|---|
@@ -434,12 +475,12 @@ There is no write-response mechanism (the characteristic uses WRITE without resp
 
 Every second, the device:
 1. Reads the current `BoatState` and system status (FreeRTOS mutex protected).
-2. Serializes all 5 characteristics to JSON.
+2. Serializes all 6 characteristics to JSON.
 3. Sends a BLE notification on each characteristic to all subscribed clients.
 
 ---
 
-## 12. Integration Flow Example
+## 14. Integration Flow Example
 
 ```
 1. SCAN
@@ -464,14 +505,16 @@ Every second, the device:
    ├── Write 0x0100 to WindData CCCD
    ├── Write 0x0100 to AutopilotData CCCD
    ├── Write 0x0100 to PerformanceData CCCD
-   └── Write 0x0100 to AdminData CCCD
+   ├── Write 0x0100 to AdminData CCCD
+   └── Write 0x0100 to AlarmData CCCD
 
 6. RECEIVE DATA (every ~1 s)
    ├── NavData         → position, speed, heading, depth
    ├── WindData        → apparent / true wind
    ├── AutopilotData   → autopilot state
    ├── PerformanceData → vmg, polar_pct, target_stw, polar_loaded
-   └── AdminData       → uptime_s, datetime_utc, wifi_mode, wifi_ssid, free_heap
+   ├── AdminData       → uptime_s, datetime_utc, wifi_mode, wifi_ssid, free_heap
+   └── AlarmData       → alarm config + depth/ais/gps_lost active/acknowledged state
 
 7. HANDLE POLAR STATE
    ├── if polar_loaded == false → show "No polar loaded" in UI
@@ -485,13 +528,19 @@ Every second, the device:
    ├── Switch to STA   → Write to AdminCmd → {"command": "wifi_sta", "ssid": "Net", "password": "pw"}
    └── Switch to AP    → Write to AdminCmd → {"command": "wifi_ap",  "ssid": "AP",  "password": "pw"}
 
-10. DISCONNECT
+10. SEND ALARM COMMANDS (optional)
+    ├── Update config    → Write to AlarmCmd → {"command": "set_config", "depth_threshold_m": 2.5}
+    ├── Acknowledge all  → Write to AlarmCmd → {"command": "ack"}
+    ├── Manual beep on   → Write to AlarmCmd → {"command": "beep_on"}
+    └── Manual beep off  → Write to AlarmCmd → {"command": "beep_off"}
+
+11. DISCONNECT
     └── Device restarts advertising automatically
 ```
 
 ---
 
-## 13. UUID Reference Table
+## 15. UUID Reference Table
 
 | Element | 128-bit UUID |
 |---|---|
@@ -504,7 +553,10 @@ Every second, the device:
 | Autopilot Command Characteristic | `4d475743-0302-4e41-5649-474154494f4e` |
 | Sail Performance Service | `4d475743-0004-4e41-5649-474154494f4e` |
 | Performance Data Characteristic | `4d475743-0401-4e41-5649-474154494f4e` |
-| **Admin Service** | **`4d475743-0005-4e41-5649-474154494f4e`** |
-| **Admin Data Characteristic** | **`4d475743-0501-4e41-5649-474154494f4e`** |
-| **Admin Command Characteristic** | **`4d475743-0502-4e41-5649-474154494f4e`** |
+| Admin Service | `4d475743-0005-4e41-5649-474154494f4e` |
+| Admin Data Characteristic | `4d475743-0501-4e41-5649-474154494f4e` |
+| Admin Command Characteristic | `4d475743-0502-4e41-5649-474154494f4e` |
+| **Alarm Service** | **`4d475743-0006-4e41-5649-474154494f4e`** |
+| **Alarm Data Characteristic** | **`4d475743-0601-4e41-5649-474154494f4e`** |
+| **Alarm Command Characteristic** | **`4d475743-0602-4e41-5649-474154494f4e`** |
 | CCCD (enable notifications) | `0x2902` (standard Bluetooth SIG) |

@@ -230,6 +230,23 @@ export function SystemStatus() {
           <div className="label">Device: {status.ble.device_name || 'N/A'}</div>
         </div>
 
+        {/* Chip Temperature */}
+        <div className="status-card" style={{
+          borderLeftColor: status.chip_temp?.available
+            ? (status.chip_temp.celsius > 70 ? '#e74c3c' : status.chip_temp.celsius > 55 ? '#f39c12' : '#27ae60')
+            : '#888'
+        }}>
+          <h3>Chip Temperature</h3>
+          <div className="value" style={{
+            color: status.chip_temp?.available
+              ? (status.chip_temp.celsius > 70 ? '#e74c3c' : status.chip_temp.celsius > 55 ? '#f39c12' : '#27ae60')
+              : '#888'
+          }}>
+            {status.chip_temp?.available ? `${status.chip_temp.celsius.toFixed(1)} °C` : 'N/A'}
+          </div>
+          <div className="label">Internal die temperature</div>
+        </div>
+
       </div>
     </div>
   );

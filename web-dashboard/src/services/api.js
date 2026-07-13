@@ -247,6 +247,47 @@ export const api = {
   return response.json();
 },
 
+  // ── Alarms ────────────────────────────────────────────────────
+  async getAlarmsConfig() {
+    const response = await fetch(`${API_BASE}/alarms/config`);
+    if (!response.ok) throw new Error('Failed to get alarms config');
+    return response.json();
+  },
+
+  async setAlarmsConfig(config) {
+    const response = await fetch(`${API_BASE}/alarms/config`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config)
+    });
+    if (!response.ok) throw new Error('Failed to set alarms config');
+    return response.json();
+  },
+
+  async getAlarmsStatus() {
+    const response = await fetch(`${API_BASE}/alarms/status`);
+    if (!response.ok) throw new Error('Failed to get alarms status');
+    return response.json();
+  },
+
+  async acknowledgeAlarms() {
+    const response = await fetch(`${API_BASE}/alarms/ack`, { method: 'POST' });
+    if (!response.ok) throw new Error('Failed to acknowledge alarms');
+    return response.json();
+  },
+
+  async alarmsBeepOn() {
+    const response = await fetch(`${API_BASE}/alarms/beep_on`, { method: 'POST' });
+    if (!response.ok) throw new Error('Failed to trigger beep on');
+    return response.json();
+  },
+
+  async alarmsBeepOff() {
+    const response = await fetch(`${API_BASE}/alarms/beep_off`, { method: 'POST' });
+    if (!response.ok) throw new Error('Failed to trigger beep off');
+    return response.json();
+  },
+
   // ── Polar / Performance ───────────────────────────────────────
   async getPolarStatus() {
     const response = await fetch(`${API_BASE}/polar/status`);

@@ -21,6 +21,7 @@
 10. [Boat Data — Full State](#10-boat-data--full-state)
 11. [NMEA WebSocket](#11-nmea-websocket)
 12. [Performance Configuration](#12-performance-configuration)
+13. [Alarms](#13-alarms)
 
 ---
 
@@ -196,12 +197,14 @@ Saves and applies the BLE configuration.
 
 ### `GET /api/status`
 
-Returns the overall system state: memory, WiFi, TCP, UART, and NMEA buffer.
+Returns the overall system state: memory, WiFi, TCP, UART, NMEA buffer, BLE, SD card, and chip temperature.
 
 **Response:**
 ```json
 {
+  "version": "1.2.0",
   "uptime": 3600,
+  "datetime": 1718900000,
   "heap": {
     "free": 120000,
     "total": 327680,
@@ -222,6 +225,32 @@ Returns the overall system state: memory, WiFi, TCP, UART, and NMEA buffer.
     "sentences_received": 1542,
     "errors": 3,
     "baud": 38400
+  },
+  "nmea_buffer": {
+    "queue_size": 40,
+    "overflow_total": 0,
+    "full_events_recent": 0,
+    "has_overflow": false,
+    "queue_waiting": 2,
+    "queue_load_pct": 5
+  },
+  "ble": {
+    "enabled": true,
+    "advertising": true,
+    "connected_devices": 0,
+    "device_name": "MarineGateway"
+  },
+  "sd": {
+    "enabled": true,
+    "mounted": true,
+    "card_type": "SDHC",
+    "total_mb": 15360,
+    "free_mb": 14000,
+    "used_pct": 9
+  },
+  "chip_temp": {
+    "celsius": 42.3,
+    "available": true
   }
 }
 ```
@@ -229,6 +258,7 @@ Returns the overall system state: memory, WiFi, TCP, UART, and NMEA buffer.
 | Field | Type | Description |
 |---|---|---|
 | `uptime` | int | Uptime in seconds since last boot |
+| `datetime` | int | Unix timestamp from GPS (0 if no fix) |
 | `heap.free` | int | Available heap memory in bytes |
 | `heap.total` | int | Total heap memory in bytes |
 | `heap.min_free` | int | Historical minimum free heap in bytes |
@@ -242,6 +272,24 @@ Returns the overall system state: memory, WiFi, TCP, UART, and NMEA buffer.
 | `uart.sentences_received` | int | Total NMEA sentences received since boot |
 | `uart.errors` | int | Number of invalid NMEA sentences |
 | `uart.baud` | int | Current baud rate |
+| `nmea_buffer.queue_size` | int | Total NMEA queue capacity |
+| `nmea_buffer.overflow_total` | int | Cumulative overflow events since boot |
+| `nmea_buffer.full_events_recent` | int | Recent queue-full events |
+| `nmea_buffer.has_overflow` | bool | True if any recent overflow occurred |
+| `nmea_buffer.queue_waiting` | int | Messages currently waiting in queue |
+| `nmea_buffer.queue_load_pct` | int | Queue fill percentage (0–100) |
+| `ble.enabled` | bool | Whether BLE is enabled |
+| `ble.advertising` | bool | Whether BLE is advertising |
+| `ble.connected_devices` | int | Number of connected BLE devices |
+| `ble.device_name` | string | BLE device name |
+| `sd.enabled` | bool | Whether SD manager is present |
+| `sd.mounted` | bool | Whether the SD card is currently mounted |
+| `sd.card_type` | string | SD card type (e.g. `"SDHC"`) |
+| `sd.total_mb` | int | Total SD capacity in MB |
+| `sd.free_mb` | int | Free space on SD card in MB |
+| `sd.used_pct` | int | Used space percentage |
+| `chip_temp.celsius` | float\|null | ESP32-S3 internal die temperature in °C (±5 °C accuracy) |
+| `chip_temp.available` | bool | False if sensor read failed |
 
 ---
 
@@ -553,3 +601,151 @@ y_t = y_(t-1) + α × (x_t − y_(t-1))
 | Racing | 3–5 s |
 | Cruising | 6–10 s |
 | Heavy sea | 10–15 s |
+
+---
+
+## 13. Alarms
+
+The device implements three onboard alarms, continuously evaluated by the firmware's `AlarmManager` (checked every second):
+
+| Alarm | Trigger condition | Config fields |
+|---|---|---|
+| **Depth** | `depth.below_transducer <= depth_threshold_m` | `depth_enabled`, `depth_threshold_m` |
+| **AIS proximity** | Any AIS target (MMSI ≠ `own_mmsi`) within `ais_distance_nm` | `ais_enabled`, `ais_distance_nm`, `own_mmsi` |
+| **GPS lost** | GPS position stale for more than `gps_lost_timeout_s` | `gps_lost_enabled`, `gps_lost_timeout_s` |
+
+Each alarm has an independent `active` / `acknowledged` runtime state. When any alarm transitions to active and unacknowledged, the firmware automatically sends the SeaTalk1 `beep_on` datagram (same as `/api/seatalk/extra`); the beep is stopped (`beep_off`) as soon as all active alarms are acknowledged, or automatically if the condition clears. Acknowledging silences the beep but does not disable future re-triggers if the alarm clears and re-activates later.
+
+### `GET /api/alarms/config`
+
+Returns the current alarm configuration.
+
+**Response:**
+```json
+{
+  "alarms_enabled": true,
+  "depth_enabled": true,
+  "depth_threshold_m": 2.0,
+  "ais_enabled": true,
+  "ais_distance_nm": 1.0,
+  "own_mmsi": 227123456,
+  "gps_lost_enabled": true,
+  "gps_lost_timeout_s": 10
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `alarms_enabled` | bool | Master switch for all alarm evaluation |
+| `depth_enabled` | bool | Enable/disable the depth alarm |
+| `depth_threshold_m` | float | Depth threshold in meters (default `2.0`) |
+| `ais_enabled` | bool | Enable/disable the AIS proximity alarm |
+| `ais_distance_nm` | float | Proximity distance in nautical miles, 0.1 nm steps (default `1.0`) |
+| `own_mmsi` | int | MMSI of your own vessel — excluded from AIS proximity detection |
+| `gps_lost_enabled` | bool | Enable/disable the GPS lost alarm |
+| `gps_lost_timeout_s` | int | Seconds without a valid GPS fix before triggering (default `10`) |
+
+---
+
+### `POST /api/alarms/config`
+
+Saves the alarm configuration to NVS and applies it immediately (no restart required). All fields are optional — only the given fields are updated.
+
+**Request body:**
+```json
+{
+  "alarms_enabled": true,
+  "depth_enabled": true,
+  "depth_threshold_m": 2.5,
+  "ais_enabled": true,
+  "ais_distance_nm": 0.5,
+  "own_mmsi": 227123456,
+  "gps_lost_enabled": true,
+  "gps_lost_timeout_s": 15
+}
+```
+
+| Field | Type | Constraints |
+|---|---|---|
+| `depth_threshold_m` | float | Clamped to 0.1–999.0 m |
+| `ais_distance_nm` | float | Snapped to nearest 0.1 nm, clamped to 0.1–99.9 nm |
+| `own_mmsi` | int | Any unsigned integer, `0` = not configured |
+| `gps_lost_timeout_s` | int | Clamped to 1–3600 s |
+
+**Success response:**
+```json
+{ "success": true, "message": "Alarm config saved" }
+```
+
+**Error response (invalid JSON):**
+```json
+{ "error": "Invalid JSON" }
+```
+
+---
+
+### `GET /api/alarms/status`
+
+Returns the current runtime state of all three alarms.
+
+**Response:**
+```json
+{
+  "depth":    { "active": false, "acknowledged": false, "age": null },
+  "ais":      { "active": true,  "acknowledged": false, "age": 4.2 },
+  "gps_lost": { "active": false, "acknowledged": false, "age": null },
+  "ais_trigger_mmsi": 227654321,
+  "any_active": true,
+  "any_unacked": true
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `depth.active` / `ais.active` / `gps_lost.active` | bool | Whether the alarm condition currently holds |
+| `*.acknowledged` | bool | Whether the operator has acknowledged the active alarm |
+| `*.age` | float\|null | Seconds since the alarm last changed state; `null` if not active |
+| `ais_trigger_mmsi` | int | MMSI of the closest AIS target currently triggering the proximity alarm (`0` if none) |
+| `any_active` | bool | `true` if at least one alarm is active |
+| `any_unacked` | bool | `true` if at least one active alarm has not yet been acknowledged (drives the beep) |
+
+---
+
+### `POST /api/alarms/ack`
+
+Globally acknowledges all currently active alarms and stops the beep (sends `beep_off`).
+
+**Body:** none.
+
+**Response:**
+```json
+{ "success": true, "message": "Alarms acknowledged" }
+```
+
+---
+
+### `POST /api/alarms/beep_on`
+
+Manually triggers the SeaTalk1 beep, independent of alarm state (equivalent to `/api/seatalk/extra` with `command: "beep_on"`).
+
+**Response:**
+```json
+{ "success": true, "message": "Beep on" }
+```
+```json
+{ "success": false, "error": "Transmission failed" }
+```
+
+---
+
+### `POST /api/alarms/beep_off`
+
+Manually silences the SeaTalk1 beep, independent of alarm state (equivalent to `/api/seatalk/extra` with `command: "beep_off"`).
+
+**Response:**
+```json
+{ "success": true, "message": "Beep off" }
+```
+```json
+{ "success": false, "error": "Transmission failed" }
+```

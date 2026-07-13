@@ -367,6 +367,56 @@ void BoatState::addOrUpdateAISTarget(const AISTarget& target) {
 }
 
 // ============================================================
+// Alarms
+// ============================================================
+
+AlarmState BoatState::getAlarmState() {
+    xSemaphoreTake(mutex, portMAX_DELAY);
+    AlarmState copy = alarmState;
+    xSemaphoreGive(mutex);
+    return copy;
+}
+
+void BoatState::setDepthAlarmActive(bool active) {
+    xSemaphoreTake(mutex, portMAX_DELAY);
+    if (alarmState.depth.active != active) {
+        alarmState.depth.active = active;
+        alarmState.depth.since  = millis();
+        if (active) alarmState.depth.acknowledged = false;
+    }
+    xSemaphoreGive(mutex);
+}
+
+void BoatState::setAISAlarmActive(bool active, uint32_t triggerMmsi) {
+    xSemaphoreTake(mutex, portMAX_DELAY);
+    if (alarmState.ais.active != active) {
+        alarmState.ais.active = active;
+        alarmState.ais.since  = millis();
+        if (active) alarmState.ais.acknowledged = false;
+    }
+    if (active) alarmState.ais_trigger_mmsi = triggerMmsi;
+    xSemaphoreGive(mutex);
+}
+
+void BoatState::setGPSLostAlarmActive(bool active) {
+    xSemaphoreTake(mutex, portMAX_DELAY);
+    if (alarmState.gps_lost.active != active) {
+        alarmState.gps_lost.active = active;
+        alarmState.gps_lost.since  = millis();
+        if (active) alarmState.gps_lost.acknowledged = false;
+    }
+    xSemaphoreGive(mutex);
+}
+
+void BoatState::acknowledgeAllAlarms() {
+    xSemaphoreTake(mutex, portMAX_DELAY);
+    if (alarmState.depth.active)    alarmState.depth.acknowledged    = true;
+    if (alarmState.ais.active)      alarmState.ais.acknowledged      = true;
+    if (alarmState.gps_lost.active) alarmState.gps_lost.acknowledged = true;
+    xSemaphoreGive(mutex);
+}
+
+// ============================================================
 // Utility Functions
 // ============================================================
 

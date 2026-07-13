@@ -26,6 +26,7 @@
 // Forward declarations for Admin service dependencies
 class ConfigManager;
 class WiFiManager;
+class AlarmManager;
 
 // ============================================================
 // BLE Configuration
@@ -110,6 +111,27 @@ private:
 };
 
 // ============================================================
+// Alarm command write callback — NimBLE 2.x API
+//
+// Accepted JSON commands:
+//   { "command": "set_config", "depth_enabled": true, "depth_threshold_m": 2.0,
+//     "ais_enabled": true, "ais_distance_nm": 1.0, "own_mmsi": 123456789,
+//     "gps_lost_enabled": true, "gps_lost_timeout_s": 10, "alarms_enabled": true }
+//   { "command": "ack" }
+//   { "command": "beep_on" }
+//   { "command": "beep_off" }
+// ============================================================
+class AlarmCmdCallbacks : public NimBLECharacteristicCallbacks {
+public:
+    explicit AlarmCmdCallbacks(BLEManager* mgr) : manager(mgr) {}
+
+    void onWrite(NimBLECharacteristic* pChar, NimBLEConnInfo& connInfo) override;
+
+private:
+    BLEManager* manager;
+};
+
+// ============================================================
 // BLEManager
 // ============================================================
 class BLEManager {
@@ -123,11 +145,13 @@ public:
      * @param stMgr         SeatalkManager for AP commands (may be nullptr).
      * @param configMgr     ConfigManager for WiFi config persistence (may be nullptr).
      * @param wifiMgr       WiFiManager for applying WiFi changes (may be nullptr).
+     * @param alarmMgr      AlarmManager for alarm config/ack/beep commands (may be nullptr).
      */
     void init(const BLEConfig& config, BoatState* state,
               SeatalkManager* stMgr      = nullptr,
               ConfigManager*  configMgr  = nullptr,
-              WiFiManager*    wifiMgr    = nullptr);
+              WiFiManager*    wifiMgr    = nullptr,
+              AlarmManager*   alarmMgr   = nullptr);
     void start();
     void stop();
     void update();
@@ -143,6 +167,7 @@ public:
     friend class MarineServerCallbacks;
     friend class AutopilotCmdCallbacks;
     friend class AdminCmdCallbacks;
+    friend class AlarmCmdCallbacks;
 
 private:
     // ── NimBLE objects ──────────────────────────────────────────
@@ -172,9 +197,15 @@ private:
     NimBLECharacteristic* pAdminDataChar;   // READ + NOTIFY
     NimBLECharacteristic* pAdminCmdChar;    // WRITE
 
+    // Alarm service
+    NimBLEService*        pAlarmService;
+    NimBLECharacteristic* pAlarmDataChar;   // READ + NOTIFY
+    NimBLECharacteristic* pAlarmCmdChar;    // WRITE
+
     MarineServerCallbacks* serverCallbacks;
     AutopilotCmdCallbacks* autopilotCmdCallbacks;
     AdminCmdCallbacks*     adminCmdCallbacks;
+    AlarmCmdCallbacks*     alarmCmdCallbacks;
 
     // ── State ───────────────────────────────────────────────────
     BLEConfig       config;
@@ -182,6 +213,7 @@ private:
     SeatalkManager* seatalkManager;
     ConfigManager*  configManager;
     WiFiManager*    wifiManager;
+    AlarmManager*   alarmManager;
 
     bool           initialized;
     bool           advertising;
@@ -202,12 +234,14 @@ private:
     void updateAutopilotData();
     void updatePerformanceData();
     void updateAdminData();
+    void updateAlarmData();
 
     String buildNavJSON();
     String buildWindJSON();
     String buildAutopilotJSON();
     String buildPerformanceJSON();
     String buildAdminJSON();
+    String buildAlarmJSON();
 };
 
 #endif // BLE_MANAGER_H
