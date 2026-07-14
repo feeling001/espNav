@@ -75,7 +75,8 @@
 #define WEB_SERVER_PORT          80
 
 // Websocket configuration
-#define WS_MAX_RATE_HZ   10      // max WebSocket frames per second
+#define WS_MAX_RATE_HZ   10      // max WebSocket frames per second (/ws/nmea)
+#define WS_BOATSTATE_RATE_HZ 2   // max WebSocket frames per second (/ws/boatstate)
 
 // NMEA - OPTIMISÉ POUR ÉVITER OVERFLOWS
 #define NMEA_MAX_LENGTH          86        // In theory the max is 83 bytes

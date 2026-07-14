@@ -3,7 +3,8 @@
 > Embedded HTTP server on ESP32 (port **80**), based on ESPAsyncWebServer.  
 > All responses are `application/json`.  
 > Web dashboard static files are served from LittleFS (`/www/`).  
-> A raw NMEA WebSocket stream is available at `/ws/nmea`.
+> A raw NMEA WebSocket stream is available at `/ws/nmea`.  
+> A real-time combined boat state WebSocket (navigation + wind + AIS + alarms) is available at `/ws/boatstate` — the recommended way to build a live client without polling.
 
 ---
 
@@ -22,6 +23,7 @@
 11. [NMEA WebSocket](#11-nmea-websocket)
 12. [Performance Configuration](#12-performance-configuration)
 13. [Alarms](#13-alarms)
+14. [Real-time Boat State WebSocket](#14-real-time-boat-state-websocket)
 
 ---
 
@@ -748,4 +750,109 @@ Manually silences the SeaTalk1 beep, independent of alarm state (equivalent to `
 ```
 ```json
 { "success": false, "error": "Transmission failed" }
+```
+
+---
+
+## 14. Real-time Boat State WebSocket
+
+### `WS /ws/boatstate`
+
+Real-time combined push of **navigation**, **wind**, **AIS**, **alarms**, **autopilot** and a lightweight **system status** summary in a single JSON message. This is the recommended way to build a live client (instrument panel, chart plotter overlay, etc.) **without polling** the REST endpoints described in sections 4, 7–9 and 13.
+
+- **Protocol:** text WebSocket
+- **Format:** one JSON object per message (see below)
+- **Direction:** read-only (server → client)
+- **Push rate:** up to 2 Hz (every 500 ms), only while at least one client is connected — configurable in firmware via `WS_BOATSTATE_RATE_HZ`
+- **Trigger:** periodic timer (independent of NMEA sentence arrival), so data is pushed on a steady cadence even during quiet periods
+
+**Message payload:**
+```json
+{
+  "timestamp": 3601234,
+  "navigation": {
+    "position": { "latitude": 47.2345, "longitude": -2.1234, "age": 0.8 },
+    "sog": { "value": 5.2, "unit": "kn", "age": 0.8 },
+    "cog": { "value": 135.0, "unit": "deg", "age": 0.8 },
+    "stw": { "value": 4.9, "unit": "kn", "age": 1.2 },
+    "heading": { "value": 138.0, "unit": "deg", "age": 0.5 },
+    "depth": { "value": 12.5, "unit": "m", "age": 1.0 },
+    "trip": { "value": 23.4, "unit": "nm" },
+    "total": { "value": 1245.6, "unit": "nm" },
+    "gps_quality": { "satellites": 8, "fix_quality": 1, "hdop": 1.2 }
+  },
+  "wind": {
+    "aws": { "value": 12.3, "unit": "kn", "age": 0.6 },
+    "awa": { "value": 45.0, "unit": "deg", "age": 0.6 },
+    "tws": { "value": 10.1, "unit": "kn", "age": 0.6 },
+    "twa": { "value": 52.0, "unit": "deg", "age": 0.6 },
+    "twd": { "value": 187.0, "unit": "deg", "age": 0.6 }
+  },
+  "ais": {
+    "target_count": 1,
+    "targets": [
+      {
+        "mmsi": 227123456,
+        "name": "VESSEL_A",
+        "position": { "latitude": 47.250, "longitude": -2.110 },
+        "cog": 220.0,
+        "sog": 8.5,
+        "heading": 218.0,
+        "proximity": {
+          "distance": 1.23, "distance_unit": "nm",
+          "bearing": 45.0, "bearing_unit": "deg",
+          "cpa": 0.45, "cpa_unit": "nm",
+          "tcpa": 12.3, "tcpa_unit": "min"
+        },
+        "age": 5
+      }
+    ]
+  },
+  "alarms": {
+    "depth":    { "active": false, "acknowledged": false, "age": null },
+    "ais":      { "active": true,  "acknowledged": false, "age": 4.2 },
+    "gps_lost": { "active": false, "acknowledged": false, "age": null },
+    "ais_trigger_mmsi": 227654321,
+    "any_active": true,
+    "any_unacked": true
+  },
+  "autopilot": {
+    "mode": "auto",
+    "status": "engaged",
+    "alarm": "",
+    "age": 0.4,
+    "heading_target": { "value": 135.0, "unit": "deg", "age": 0.4 },
+    "wind_angle_target": { "value": null, "unit": "deg", "age": null },
+    "rudder_angle": { "value": -2.5, "unit": "deg", "age": 0.4 },
+    "xte": { "value": 0.02, "unit": "nm", "age": 0.4 }
+  },
+  "status": {
+    "uptime": 3601,
+    "heap": { "free": 120000, "total": 327680 },
+    "wifi": { "mode": "STA", "rssi": -62 },
+    "tcp_clients": 2,
+    "ble_connected": 0
+  }
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `timestamp` | int | Device uptime in milliseconds when the message was built |
+| `navigation` | object | Same shape as `GET /api/boat/navigation` (see [section 7](#7-boat-data--navigation)) |
+| `wind` | object | Same shape as `GET /api/boat/wind` (see [section 8](#8-boat-data--wind)) |
+| `ais` | object | Same shape as `GET /api/boat/ais` (see [section 9](#9-boat-data--ais)) |
+| `alarms` | object | Same shape as `GET /api/alarms/status` (see [section 13](#13-alarms)). **Omitted entirely** if the alarm manager is not configured on the device |
+| `autopilot` | object | Autopilot state (mode, status, targets, rudder angle, XTE). Fields are `null` if no autopilot data has been received (e.g. SeaTalk1 autopilot not connected) |
+| `status` | object | Lightweight system status subset: uptime, heap usage, WiFi mode/RSSI, TCP client count, BLE connected devices. For the full system status (UART stats, NMEA buffer, SD card, chip temperature), poll `GET /api/status` (see [section 4](#4-system-status)) |
+
+As with the REST endpoints, individual `value`/`age` fields are `null` when the underlying data is absent or stale.
+
+**Client example:**
+```javascript
+const ws = new WebSocket(`ws://${location.host}/ws/boatstate`);
+ws.onmessage = (event) => {
+  const state = JSON.parse(event.data);
+  console.log(state.navigation.sog.value, state.wind.tws.value, state.autopilot.mode, state.status.uptime);
+};
 ```

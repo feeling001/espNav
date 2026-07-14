@@ -17,6 +17,7 @@
 
 #include <ESPAsyncWebServer.h>
 #include <AsyncWebSocket.h>
+#include <ArduinoJson.h>
 #include <LittleFS.h>
 #include <Update.h>
 #include <Preferences.h>
@@ -61,9 +62,11 @@ public:
     void start();
     void stop();
     void broadcastNMEA(const char* sentence);
+    void broadcastBoatState();
 
 private:
     void registerRoutes();
+    String buildBoatStateJSON();
 
     // ── Configuration handlers ────────────────────────────────────────────────
     void handleGetWiFiConfig(AsyncWebServerRequest* request);
@@ -159,6 +162,7 @@ private:
     // ── Members ───────────────────────────────────────────────────────────────
     AsyncWebServer* server;
     AsyncWebSocket* wsNMEA;
+    AsyncWebSocket* wsBoatState;
     ConfigManager*  configManager;
     WiFiManager*    wifiManager;
     TCPServer*      tcpServer;

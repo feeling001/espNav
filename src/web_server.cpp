@@ -41,6 +41,7 @@ WebServer::WebServer(ConfigManager* cm, WiFiManager* wm, TCPServer* tcp, UARTHan
       otaExpectedSize(0), otaBytesWritten(0) {
     server = new AsyncWebServer(WEB_SERVER_PORT);
     wsNMEA = new AsyncWebSocket("/ws/nmea");
+    wsBoatState = new AsyncWebSocket("/ws/boatstate");
 }
 
 // ── init ──────────────────────────────────────────────────────────────────────
@@ -59,7 +60,13 @@ void WebServer::init() {
         this->handleWebSocketEvent(server, client, type, arg, data, len);
     });
 
+    wsBoatState->onEvent([this](AsyncWebSocket* server, AsyncWebSocketClient* client,
+                                AwsEventType type, void* arg, uint8_t* data, size_t len) {
+        this->handleWebSocketEvent(server, client, type, arg, data, len);
+    });
+
     server->addHandler(wsNMEA);
+    server->addHandler(wsBoatState);
     registerRoutes();
 }
 
@@ -394,6 +401,229 @@ void WebServer::broadcastNMEA(const char* sentence) {
     lastSend = now;
 
     wsNMEA->textAll(sentence);
+}
+
+// ── /ws/boatstate: periodic push of navigation + wind + ais + alarms ─────────
+
+void WebServer::broadcastBoatState() {
+    if (!wsBoatState || !running || !boatState) return;
+
+    static uint32_t lastCleanup = 0;
+    uint32_t now = millis();
+    if (now - lastCleanup >= 5000) {
+        wsBoatState->cleanupClients();
+        lastCleanup = now;
+    }
+
+    if (wsBoatState->count() == 0) return;
+
+    static uint32_t lastSend = 0;
+    static const uint32_t minInterval = 1000 / WS_BOATSTATE_RATE_HZ;
+    if (now - lastSend < minInterval) return;
+    lastSend = now;
+
+    wsBoatState->textAll(buildBoatStateJSON());
+}
+
+String WebServer::buildBoatStateJSON() {
+    JsonDocument doc;
+    doc["timestamp"] = millis();
+
+    // ── Navigation ────────────────────────────────────────────────
+    {
+        GPSData     gps     = boatState->getGPS();
+        SpeedData   speed   = boatState->getSpeed();
+        HeadingData heading = boatState->getHeading();
+        DepthData   depth   = boatState->getDepth();
+
+        JsonObject nav = doc["navigation"].to<JsonObject>();
+
+        JsonObject position = nav["position"].to<JsonObject>();
+        if (gps.position.lat.valid && !gps.position.lat.isStale()) {
+            position["latitude"]  = gps.position.lat.value;
+            position["longitude"] = gps.position.lon.value;
+            position["age"]       = (millis() - gps.position.lat.timestamp) / 1000.0;
+        } else {
+            position["latitude"]  = nullptr;
+            position["longitude"] = nullptr;
+            position["age"]       = nullptr;
+        }
+
+        auto addDP = [&](const char* key, const DataPoint& dp, const char* unit) {
+            if (dp.valid && !dp.isStale()) {
+                nav[key]["value"] = dp.value;
+                nav[key]["unit"]  = dp.unit;
+                nav[key]["age"]   = (millis() - dp.timestamp) / 1000.0;
+            } else {
+                nav[key]["value"] = nullptr;
+                nav[key]["unit"]  = unit;
+                nav[key]["age"]   = nullptr;
+            }
+        };
+
+        addDP("sog",     gps.sog,                "kn");
+        addDP("cog",     gps.cog,                "deg");
+        addDP("stw",     speed.stw,              "kn");
+        addDP("heading", heading.true_heading,   "deg");
+        addDP("depth",   depth.below_transducer, "m");
+
+        JsonObject quality = nav["gps_quality"].to<JsonObject>();
+        if (gps.satellites.valid  && !gps.satellites.isStale())  quality["satellites"]  = (int)gps.satellites.value;  else quality["satellites"]  = nullptr;
+        if (gps.fix_quality.valid && !gps.fix_quality.isStale()) quality["fix_quality"] = (int)gps.fix_quality.value; else quality["fix_quality"] = nullptr;
+        if (gps.hdop.valid        && !gps.hdop.isStale())        quality["hdop"]        = gps.hdop.value;             else quality["hdop"]        = nullptr;
+
+        if (speed.trip.valid  && !speed.trip.isStale())  { nav["trip"]["value"]  = speed.trip.value;  nav["trip"]["unit"]  = speed.trip.unit; }
+        else                                              { nav["trip"]["value"]  = nullptr;            nav["trip"]["unit"]  = "nm"; }
+        if (speed.total.valid && !speed.total.isStale())  { nav["total"]["value"] = speed.total.value; nav["total"]["unit"] = speed.total.unit; }
+        else                                              { nav["total"]["value"] = nullptr;            nav["total"]["unit"] = "nm"; }
+    }
+
+    // ── Wind ──────────────────────────────────────────────────────
+    {
+        WindData wind = boatState->getWind();
+        JsonObject windObj = doc["wind"].to<JsonObject>();
+
+        auto addWind = [&](const char* key, const DataPoint& dp, const char* defaultUnit) {
+            if (dp.valid && !dp.isStale()) {
+                windObj[key]["value"] = dp.value;
+                windObj[key]["unit"]  = dp.unit;
+                windObj[key]["age"]   = (millis() - dp.timestamp) / 1000.0;
+            } else {
+                windObj[key]["value"] = nullptr;
+                windObj[key]["unit"]  = defaultUnit;
+                windObj[key]["age"]   = nullptr;
+            }
+        };
+
+        addWind("aws", wind.aws, "kn");
+        addWind("awa", wind.awa, "deg");
+        addWind("tws", wind.tws, "kn");
+        addWind("twa", wind.twa, "deg");
+        addWind("twd", wind.twd, "deg");
+    }
+
+    // ── AIS ───────────────────────────────────────────────────────
+    {
+        AISData ais = boatState->getAIS();
+        JsonObject aisObj = doc["ais"].to<JsonObject>();
+        aisObj["target_count"] = ais.targetCount;
+        JsonArray targets = aisObj["targets"].to<JsonArray>();
+
+        for (int i = 0; i < ais.targetCount; i++) {
+            AISTarget& t      = ais.targets[i];
+            unsigned long age = (millis() - t.timestamp) / 1000;
+            if (age > DATA_TIMEOUT_AIS / 1000) continue;
+
+            JsonObject obj = targets.add<JsonObject>();
+            obj["mmsi"] = t.mmsi;
+            obj["name"] = t.name;
+            JsonObject pos = obj["position"].to<JsonObject>();
+            pos["latitude"]  = t.lat;
+            pos["longitude"] = t.lon;
+            obj["cog"]     = t.cog;
+            obj["sog"]     = t.sog;
+            obj["heading"] = t.heading;
+            JsonObject prox = obj["proximity"].to<JsonObject>();
+            prox["distance"]      = t.distance;
+            prox["distance_unit"] = "nm";
+            prox["bearing"]       = t.bearing;
+            prox["bearing_unit"]  = "deg";
+            prox["cpa"]           = t.cpa;
+            prox["cpa_unit"]      = "nm";
+            prox["tcpa"]          = t.tcpa;
+            prox["tcpa_unit"]     = "min";
+            obj["age"] = age;
+        }
+    }
+
+    // ── Alarms ────────────────────────────────────────────────────
+    if (alarmManager) {
+        AlarmState state = boatState->getAlarmState();
+        JsonObject alarmsObj = doc["alarms"].to<JsonObject>();
+
+        auto addAlarm = [&](const char* key, const AlarmItemState& item) {
+            JsonObject obj = alarmsObj[key].to<JsonObject>();
+            obj["active"]       = item.active;
+            obj["acknowledged"] = item.acknowledged;
+            if (item.active) {
+                obj["age"] = (millis() - item.since) / 1000.0;
+            } else {
+                obj["age"] = nullptr;
+            }
+        };
+
+        addAlarm("depth",    state.depth);
+        addAlarm("ais",      state.ais);
+        addAlarm("gps_lost", state.gps_lost);
+
+        alarmsObj["ais_trigger_mmsi"] = state.ais_trigger_mmsi;
+        alarmsObj["any_active"]       = state.anyActive();
+        alarmsObj["any_unacked"]      = state.anyUnacked();
+    }
+
+    // ── Autopilot ─────────────────────────────────────────────────
+    {
+        AutopilotData ap = boatState->getAutopilot();
+        JsonObject apObj = doc["autopilot"].to<JsonObject>();
+
+        if (ap.valid && !ap.isStale()) {
+            apObj["mode"]   = ap.mode;
+            apObj["status"] = ap.status;
+            apObj["alarm"]  = ap.alarm;
+            apObj["age"]    = (millis() - ap.timestamp) / 1000.0;
+
+            auto addAP = [&](const char* key, const DataPoint& dp, const char* unit) {
+                if (dp.valid && !dp.isStale()) {
+                    apObj[key]["value"] = dp.value;
+                    apObj[key]["unit"]  = dp.unit;
+                    apObj[key]["age"]   = (millis() - dp.timestamp) / 1000.0;
+                } else {
+                    apObj[key]["value"] = nullptr;
+                    apObj[key]["unit"]  = unit;
+                    apObj[key]["age"]   = nullptr;
+                }
+            };
+
+            addAP("heading_target",    ap.heading_target,    "deg");
+            addAP("wind_angle_target", ap.wind_angle_target, "deg");
+            addAP("rudder_angle",      ap.rudder_angle,      "deg");
+            addAP("xte",               ap.xte,               "nm");
+        } else {
+            apObj["mode"]   = nullptr;
+            apObj["status"] = nullptr;
+            apObj["alarm"]  = nullptr;
+            apObj["age"]    = nullptr;
+        }
+    }
+
+    // ── System status (lightweight) ──────────────────────────────
+    {
+        JsonObject statusObj = doc["status"].to<JsonObject>();
+        statusObj["uptime"] = millis() / 1000;
+
+        JsonObject heap = statusObj["heap"].to<JsonObject>();
+        heap["free"]  = ESP.getFreeHeap();
+        heap["total"] = ESP.getHeapSize();
+
+        JsonObject wifi = statusObj["wifi"].to<JsonObject>();
+        wl_status_t wlStat = WiFi.status();
+        const char* modeStr = "Unknown";
+        if (wlStat == WL_CONNECTED) {
+            modeStr = "STA";
+            wifi["rssi"] = WiFi.RSSI();
+        } else if (WiFi.getMode() == WIFI_AP) {
+            modeStr = "AP";
+            wifi["clients"] = WiFi.softAPgetStationNum();
+        }
+        wifi["mode"] = modeStr;
+
+        statusObj["tcp_clients"]  = tcpServer ? tcpServer->getClientCount() : 0;
+        statusObj["ble_connected"] = bleManager ? bleManager->getConnectedDevices() : 0;
+    }
+
+    String output;
+    serializeJson(doc, output);
+    return output;
 }
 
 // ── OTA Handlers ─────────────────────────────────────────────────────────────

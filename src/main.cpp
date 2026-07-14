@@ -385,10 +385,11 @@ void processorTask(void* parameter) {
     NMEASentence sentence;
     serialPrintf("[Processor] Started on Core 1\n");
 
-    uint32_t lastStatsTime     = millis();
-    uint32_t lastLedTime       = millis();
-    bool     setLedOff         = true;
-    uint32_t messagesProcessed = 0;
+    uint32_t lastStatsTime      = millis();
+    uint32_t lastLedTime        = millis();
+    uint32_t lastBoatStatePush  = millis();
+    bool     setLedOff          = true;
+    uint32_t messagesProcessed  = 0;
 
     while (true) {
         if (xQueueReceive(nmeaQueue, &sentence, pdMS_TO_TICKS(100)) == pdTRUE) {
@@ -399,6 +400,11 @@ void processorTask(void* parameter) {
                 tcpServer.broadcast(sentence.raw);
             }
             webServer.broadcastNMEA(sentence.raw);
+        }
+
+        if (millis() - lastBoatStatePush > 500) {
+            webServer.broadcastBoatState();
+            lastBoatStatePush = millis();
         }
 
 #ifdef DEBUG_CPU

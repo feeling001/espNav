@@ -59,7 +59,7 @@ export function Sidebar() {
         <Link to="/instruments" className={isActive('/instruments')}>Instruments</Link>
         <Link to="/autopilot"   className={isActive('/autopilot')}>Autopilot</Link>
         <Link to="/performance" className={isActive('/performance')}>Performance</Link>
-        <Link to="/alarms"      className={isActive('/alarms')}>⚠️ Alarms</Link>
+        <Link to="/alarms"      className={isActive('/alarms')}>Alarms</Link>
         <Link to="/logbook"     className={isActive('/logbook')}>Logbook</Link>
         <Link to="/nmea"        className={isActive('/nmea')}>NMEA Monitor</Link>
         <Link to="/config"      className={isActive('/config')}>Config</Link>
