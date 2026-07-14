@@ -19,11 +19,12 @@
 7. [Boat Data — Navigation](#7-boat-data--navigation)
 8. [Boat Data — Wind](#8-boat-data--wind)
 9. [Boat Data — AIS](#9-boat-data--ais)
-10. [Boat Data — Full State](#10-boat-data--full-state)
-11. [NMEA WebSocket](#11-nmea-websocket)
-12. [Performance Configuration](#12-performance-configuration)
-13. [Alarms](#13-alarms)
-14. [Real-time Boat State WebSocket](#14-real-time-boat-state-websocket)
+10. [Boat Data — Performance](#10-boat-data--performance)
+11. [Boat Data — Full State](#11-boat-data--full-state)
+12. [NMEA WebSocket](#12-nmea-websocket)
+13. [Performance Configuration](#13-performance-configuration)
+14. [Alarms](#14-alarms)
+15. [Real-time Boat State WebSocket](#15-real-time-boat-state-websocket)
 
 ---
 
@@ -496,11 +497,44 @@ Returns the list of active AIS targets (age < 60 seconds).
 
 ---
 
-## 10. Boat Data — Full State
+## 10. Boat Data — Performance
+
+### `GET /api/boat/performance`
+
+Returns real-time performance metrics derived from the loaded polar diagram: VMG (upwind/downwind) and current STW as a percentage of the polar target speed. Recomputed whenever a new STW is received, provided TWS/TWA are valid and a polar diagram is loaded.
+
+**Response:**
+```json
+{
+  "vmg": {
+    "value": 3.8,
+    "unit": "kn",
+    "age": 0.4
+  },
+  "polar_pct": {
+    "value": 94.2,
+    "unit": "%",
+    "age": 0.4
+  },
+  "polar_loaded": true
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `vmg.value` | float | Velocity Made Good toward/away from the wind, in knots. Positive = sailing upwind, negative = sailing downwind |
+| `polar_pct.value` | float | Current STW as a percentage of the polar target speed for the current TWA/TWS. 100% = exactly on polar, >100% = faster than polar |
+| `polar_loaded` | bool | Whether a polar diagram file is currently loaded on the device |
+
+When a value is absent, stale, or the polar diagram is not loaded, `value` and `age` are `null`.
+
+---
+
+## 11. Boat Data — Full State
 
 ### `GET /api/boat/state`
 
-Returns the complete boat state in a single call (full serialization of `BoatState`). Includes all navigation, wind, AIS, environment, autopilot, and calculated data.
+Returns the complete boat state in a single call (full serialization of `BoatState`). Includes all navigation, wind, AIS, environment, autopilot, performance, and calculated data.
 
 **Recommended use:** for initialization or debugging. For regular polling, prefer the specialized endpoints above.
 
@@ -508,11 +542,12 @@ Returns the complete boat state in a single call (full serialization of `BoatSta
 
 - `environment`: water temperature, air temperature, barometric pressure
 - `calculated`: wind VMG, waypoint VMG, current set and drift
+- `performance`: VMG and polar % (same shape as [section 10](#10-boat-data--performance))
 - `autopilot`: mode, status, heading target, wind angle target, rudder angle, XTE
 
 ---
 
-## 11. NMEA WebSocket
+## 12. NMEA WebSocket
 
 ### `WS /ws/nmea`
 
@@ -537,7 +572,7 @@ Real-time stream of raw NMEA sentences received on the serial port.
 
 ---
 
-## 12. Performance Configuration
+## 13. Performance Configuration
 
 ### `GET /api/performance/config`
 
@@ -606,7 +641,7 @@ y_t = y_(t-1) + α × (x_t − y_(t-1))
 
 ---
 
-## 13. Alarms
+## 14. Alarms
 
 The device implements three onboard alarms, continuously evaluated by the firmware's `AlarmManager` (checked every second):
 
@@ -754,11 +789,11 @@ Manually silences the SeaTalk1 beep, independent of alarm state (equivalent to `
 
 ---
 
-## 14. Real-time Boat State WebSocket
+## 15. Real-time Boat State WebSocket
 
 ### `WS /ws/boatstate`
 
-Real-time combined push of **navigation**, **wind**, **AIS**, **alarms**, **autopilot** and a lightweight **system status** summary in a single JSON message. This is the recommended way to build a live client (instrument panel, chart plotter overlay, etc.) **without polling** the REST endpoints described in sections 4, 7–9 and 13.
+Real-time combined push of **navigation**, **wind**, **AIS**, **alarms**, **autopilot**, **performance** and a lightweight **system status** summary in a single JSON message. This is the recommended way to build a live client (instrument panel, chart plotter overlay, etc.) **without polling** the REST endpoints described in sections 4, 7–10 and 14.
 
 - **Protocol:** text WebSocket
 - **Format:** one JSON object per message (see below)
@@ -770,6 +805,7 @@ Real-time combined push of **navigation**, **wind**, **AIS**, **alarms**, **auto
 ```json
 {
   "timestamp": 3601234,
+  "gpstimestamp": 1718900123,
   "navigation": {
     "position": { "latitude": 47.2345, "longitude": -2.1234, "age": 0.8 },
     "sog": { "value": 5.2, "unit": "kn", "age": 0.8 },
@@ -826,6 +862,11 @@ Real-time combined push of **navigation**, **wind**, **AIS**, **alarms**, **auto
     "rudder_angle": { "value": -2.5, "unit": "deg", "age": 0.4 },
     "xte": { "value": 0.02, "unit": "nm", "age": 0.4 }
   },
+  "performance": {
+    "vmg": { "value": 3.8, "unit": "kn", "age": 0.4 },
+    "polar_pct": { "value": 94.2, "unit": "%", "age": 0.4 },
+    "polar_loaded": true
+  },
   "status": {
     "uptime": 3601,
     "heap": { "free": 120000, "total": 327680 },
@@ -839,11 +880,13 @@ Real-time combined push of **navigation**, **wind**, **AIS**, **alarms**, **auto
 | Field | Type | Description |
 |---|---|---|
 | `timestamp` | int | Device uptime in milliseconds when the message was built |
+| `gpstimestamp` | int | GPS-derived Unix timestamp (UTC), same semantics as `datetime` in `GET /api/status` (see [section 4](#4-system-status)). `0` if no GPS fix has provided date/time yet |
 | `navigation` | object | Same shape as `GET /api/boat/navigation` (see [section 7](#7-boat-data--navigation)) |
 | `wind` | object | Same shape as `GET /api/boat/wind` (see [section 8](#8-boat-data--wind)) |
 | `ais` | object | Same shape as `GET /api/boat/ais` (see [section 9](#9-boat-data--ais)) |
-| `alarms` | object | Same shape as `GET /api/alarms/status` (see [section 13](#13-alarms)). **Omitted entirely** if the alarm manager is not configured on the device |
+| `alarms` | object | Same shape as `GET /api/alarms/status` (see [section 14](#14-alarms)). **Omitted entirely** if the alarm manager is not configured on the device |
 | `autopilot` | object | Autopilot state (mode, status, targets, rudder angle, XTE). Fields are `null` if no autopilot data has been received (e.g. SeaTalk1 autopilot not connected) |
+| `performance` | object | Same shape as `GET /api/boat/performance` (see [section 10](#10-boat-data--performance)) |
 | `status` | object | Lightweight system status subset: uptime, heap usage, WiFi mode/RSSI, TCP client count, BLE connected devices. For the full system status (UART stats, NMEA buffer, SD card, chip temperature), poll `GET /api/status` (see [section 4](#4-system-status)) |
 
 As with the REST endpoints, individual `value`/`age` fields are `null` when the underlying data is absent or stale.

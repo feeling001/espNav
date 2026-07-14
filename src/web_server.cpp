@@ -450,6 +450,11 @@ String WebServer::buildBoatStateJSON() {
         HeadingData heading = boatState->getHeading();
         DepthData   depth   = boatState->getDepth();
 
+        // GPS-derived UTC timestamp (Unix epoch, from RMC/ZDA date+time).
+        // 0 when no GPS fix has provided date/time yet — same semantics as
+        // the "datetime" field of GET /api/status.
+        doc["gpstimestamp"] = gps.datetime.getTimestamp();
+
         JsonObject nav = doc["navigation"].to<JsonObject>();
 
         JsonObject position = nav["position"].to<JsonObject>();
@@ -608,6 +613,28 @@ String WebServer::buildBoatStateJSON() {
             apObj["alarm"]  = nullptr;
             apObj["age"]    = nullptr;
         }
+    }
+
+    // ── Performance (polar-based) ────────────────────────────────
+    {
+        PerformanceData perf = boatState->getPerformance();
+        JsonObject perfObj = doc["performance"].to<JsonObject>();
+
+        auto addPerf = [&](const char* key, const DataPoint& dp, const char* unit) {
+            if (dp.valid && !dp.isStale()) {
+                perfObj[key]["value"] = dp.value;
+                perfObj[key]["unit"]  = dp.unit;
+                perfObj[key]["age"]   = (millis() - dp.timestamp) / 1000.0;
+            } else {
+                perfObj[key]["value"] = nullptr;
+                perfObj[key]["unit"]  = unit;
+                perfObj[key]["age"]   = nullptr;
+            }
+        };
+
+        addPerf("vmg",       perf.vmg,      "kn");
+        addPerf("polar_pct", perf.polarPct, "%");
+        perfObj["polar_loaded"] = boatState->polar.isLoaded();
     }
 
     // ── System status (lightweight) ──────────────────────────────

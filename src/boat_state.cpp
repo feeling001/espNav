@@ -660,7 +660,13 @@ String BoatState::toJSON() {
     addDataPointToJSON(calcObj, "vmg_waypoint", calculated.vmg_waypoint);
     addDataPointToJSON(calcObj, "set", calculated.set);
     addDataPointToJSON(calcObj, "drift", calculated.drift);
-    
+
+    // Performance (polar-based)
+    JsonObject perfObj = doc["performance"].to<JsonObject>();
+    addDataPointToJSON(perfObj, "vmg", performance.vmg);
+    addDataPointToJSON(perfObj, "polar_pct", performance.polarPct);
+    perfObj["polar_loaded"] = polar.isLoaded();
+
     // Autopilot
     JsonObject apObj = doc["autopilot"].to<JsonObject>();
     if (autopilot.valid && !autopilot.isStale()) {
