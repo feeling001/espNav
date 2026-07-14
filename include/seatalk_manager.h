@@ -4,6 +4,7 @@
 #include <Arduino.h>
 #include "seatalk_rmt.h"
 #include "boat_state.h"
+#include "types.h"
 
 /**
  * @brief Semantic SeaTalk1 layer — sits above SeatalkRMT.
@@ -97,10 +98,37 @@ public:
      */
     void update();
 
+    // ── Bus conversion ────────────────────────────────────────────────────────
+
+    /**
+     * @brief Set the active conversion configuration (thread-safe).
+     */
+    void setConversionConfig(const ConversionConfig& cfg);
+
+    /**
+     * @brief Get the current conversion configuration (thread-safe copy).
+     */
+    ConversionConfig getConversionConfig() const;
+
+    /**
+     * @brief Evaluate enabled conversion rules and transmit due datagrams.
+     *
+     * Call this from the SeaTalk FreeRTOS task after update().
+     * Internally rate-limits each rule to its configured interval.
+     *
+     * @param bs  Pointer to the shared BoatState used as the data source.
+     */
+    void runConversions(BoatState* bs);
+
 private:
     SeatalkRMT*       rmt;
     BoatState*        boatState;
     SemaphoreHandle_t txMutex;
+
+    // ── Conversion state ──────────────────────────────────────────────────────
+    ConversionConfig  _convCfg;
+    uint32_t          _convLastSent[CONV_COUNT];
+    SemaphoreHandle_t _convMutex;
 
     // ── Low-level helpers ─────────────────────────────────────────────────────
 
@@ -119,6 +147,21 @@ private:
      * @return true on successful transmission.
      */
     bool sendRaw(uint8_t* buf, uint8_t len);
+
+    // ── Conversion helpers (NMEA data → SeaTalk datagrams) ───────────────────
+    bool convSendCOG(float cog_deg);          // → 0x53
+    bool convSendSOG(float sog_knots);         // → 0x52
+    bool convSendPosition(float lat, float lon); // → 0x50 + 0x51
+    bool convSendDepth(float depth_m);          // → 0x00
+    bool convSendSTW(float stw_knots);          // → 0x20
+    bool convSendAWA(float awa_deg);            // → 0x10
+    bool convSendAWS(float aws_knots);          // → 0x11
+    bool convSendWaterTemp(float temp_c);       // → 0x27
+    bool convSendHeading(float hdg_deg);        // → 0x9C
+
+    /// Encode a 0-359° angle to the Seatalk U-nibble / VW byte format
+    /// used by datagrams 0x53, 0x89, 0x9C.
+    static void encodeAngle(uint16_t deg, uint8_t& U_nibble, uint8_t& VW);
 
     // ── Incoming frame parser ─────────────────────────────────────────────────
 

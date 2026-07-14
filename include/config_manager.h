@@ -26,6 +26,10 @@ public:
     bool getAlarmConfig(AlarmConfig& config);
     bool setAlarmConfig(const AlarmConfig& config);
 
+    // Bus conversion configuration
+    bool getConversionConfig(ConversionConfig& config);
+    bool setConversionConfig(const ConversionConfig& config);
+
     // Factory reset
     void factoryReset();
     

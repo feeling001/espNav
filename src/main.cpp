@@ -252,6 +252,14 @@ void setup() {
     serialPrintf("\n[Web] Initializing...\n");
     webServer.init();
 
+    // ── Conversion config ─────────────────────────────────────
+    {
+        ConversionConfig convCfg;
+        configManager.getConversionConfig(convCfg);
+        seatalkManager.setConversionConfig(convCfg);
+        serialPrintf("[Config] Conversion rules loaded\n");
+    }
+
     // ── NMEA queue ────────────────────────────────────────────
     serialPrintf("\n[NMEA] Creating queue...\n");
     nmeaQueue = xQueueCreate(NMEA_QUEUE_SIZE, sizeof(NMEASentence));
@@ -375,6 +383,7 @@ void seatalkTask(void* parameter) {
 
     while (true) {
         seatalkManager.update();
+        seatalkManager.runConversions(&boatState);
         vTaskDelay(1 / portTICK_PERIOD_MS);
     }
 }
@@ -388,6 +397,7 @@ void processorTask(void* parameter) {
     uint32_t lastStatsTime      = millis();
     uint32_t lastLedTime        = millis();
     uint32_t lastBoatStatePush  = millis();
+    uint32_t lastTW_NMEA        = 0;
     bool     setLedOff          = true;
     uint32_t messagesProcessed  = 0;
 
@@ -405,6 +415,37 @@ void processorTask(void* parameter) {
         if (millis() - lastBoatStatePush > 500) {
             webServer.broadcastBoatState();
             lastBoatStatePush = millis();
+        }
+
+        // ── True Wind → NMEA0183 MWV(T) broadcast ────────────────────────────
+        {
+            ConversionConfig convCfg = seatalkManager.getConversionConfig();
+            if (convCfg.rules[CONV_TW_TO_NMEA].enabled) {
+                uint32_t now_tw = millis();
+                uint32_t interval_ms = (uint32_t)convCfg.rules[CONV_TW_TO_NMEA].interval_s * 1000UL;
+                if (now_tw - lastTW_NMEA >= interval_ms) {
+                    WindData wind = boatState.getWind();
+                    if (wind.twa.valid && !wind.twa.isStale() &&
+                        wind.tws.valid && !wind.tws.isStale()) {
+                        // Normalise TWA to 0-360
+                        float twa = wind.twa.value;
+                        while (twa <    0.0f) twa += 360.0f;
+                        while (twa >= 360.0f) twa -= 360.0f;
+                        // Build NMEA body and compute XOR checksum
+                        char body[72];
+                        int blen = snprintf(body, sizeof(body),
+                                            "IIMWV,%.1f,T,%.1f,N,A", twa, wind.tws.value);
+                        uint8_t cs = 0;
+                        for (int i = 0; i < blen; i++) cs ^= (uint8_t)body[i];
+                        char nmea[90];
+                        snprintf(nmea, sizeof(nmea), "$%s*%02X\r\n", body, cs);
+                        if (tcpServer.getClientCount() > 0) tcpServer.broadcast(nmea);
+                        webServer.broadcastNMEA(nmea);
+                        lastTW_NMEA = now_tw;
+                        serialPrintf("[Conv] TW→NMEA: %s", nmea);
+                    }
+                }
+            }
         }
 
 #ifdef DEBUG_CPU

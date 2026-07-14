@@ -77,6 +77,10 @@ private:
     void handleRestart(AsyncWebServerRequest* request);
     void handlePostSeatalkExtra(AsyncWebServerRequest* request, uint8_t* data, size_t len);
 
+    // ── Conversion handlers ───────────────────────────────────────────────────
+    void handleGetConversionConfig(AsyncWebServerRequest* request);
+    void handlePostConversionConfig(AsyncWebServerRequest* request, uint8_t* data, size_t len);
+
     // ── BLE handlers ──────────────────────────────────────────────────────────
     void handleGetBLEConfig(AsyncWebServerRequest* request);
     void handlePostBLEConfig(AsyncWebServerRequest* request, uint8_t* data, size_t len);

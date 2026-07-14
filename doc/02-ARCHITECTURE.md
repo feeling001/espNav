@@ -373,6 +373,131 @@ enum WiFiState {
 };
 ```
 
+### 4.7 SeaTalk Manager
+**Responsibility**: Decode SeaTalk1 datagrams and send autopilot commands
+
+**Interface**:
+```cpp
+class SeatalkManager {
+public:
+    SeatalkManager(SeatalkRMT* rmt, BoatState* boatState = nullptr);
+    
+    // Autopilot commands
+    bool sendAutopilotCommand(const char* command);  // "auto", "standby", "track", etc.
+    
+    // Utility commands
+    bool sendExtraCommand(const char* command);      // "lamp:0..3", "beep_on", "beep_off"
+    
+    // Bus conversions (new)
+    void setConversionConfig(const ConversionConfig& cfg);
+    ConversionConfig getConversionConfig() const;
+    void runConversions(BoatState* bs);
+    
+    // Processing
+    void update();  // Call regularly from SeaTalk task
+    
+private:
+    void parseFrame(const uint8_t* frame, uint8_t len);
+    bool sendRaw(uint8_t* buf, uint8_t len);
+    
+    // Conversion helpers
+    bool convSendCOG(float cog_deg);
+    bool convSendSOG(float sog_knots);
+    bool convSendPosition(float lat, float lon);
+    // ... (7 more conversion methods)
+    
+    SeatalkRMT* rmt;
+    BoatState* boatState;
+    ConversionConfig _convCfg;
+    uint32_t _convLastSent[CONV_COUNT];
+};
+```
+
+**Supported Autopilot Commands**:
+| Command | Effect | SeaTalk Datagram |
+|---------|--------|------------------|
+| `auto` | Compass lock | 0x86 key=0x01 |
+| `standby` | Disengage | 0x86 key=0x02 |
+| `track` | GPS track mode | 0x86 key=0x03 |
+| `wind` | Wind vane mode | 0x86 key=0x23 |
+| `adjust+1` / `adjust+10` | Course +1° / +10° | 0x86 key=0x07/0x08 |
+| `adjust-1` / `adjust-10` | Course -1° / -10° | 0x86 key=0x05/0x06 |
+| `tack-port` / `tack-starboard` | Tack modes | 0x86 key=0x21/0x22 |
+
+### 4.8 Bus Conversion System
+**Responsibility**: Bridge data between NMEA0183 and SeaTalk1 buses
+
+**Purpose**: Allow non-native instruments to share data. For example:
+- GPS receiver on NMEA → convert to SeaTalk for autopilot
+- Wind sensor on SeaTalk → already native (no conversion needed)
+- Calculated True Wind → broadcast as NMEA MWV sentence to network clients
+
+**Configuration**:
+```cpp
+#define CONV_GPS_COG_TO_ST     0   // NMEA GPS COG → SeaTalk 0x53
+#define CONV_GPS_SOG_TO_ST     1   // NMEA GPS SOG → SeaTalk 0x52
+#define CONV_GPS_POS_TO_ST     2   // NMEA GPS LAT/LON → SeaTalk 0x50/0x51
+#define CONV_DEPTH_TO_ST       3   // NMEA Depth → SeaTalk 0x00
+#define CONV_STW_TO_ST         4   // NMEA STW → SeaTalk 0x20
+#define CONV_AWA_TO_ST         5   // NMEA AWA → SeaTalk 0x10 (⚠ native on SeaTalk)
+#define CONV_AWS_TO_ST         6   // NMEA AWS → SeaTalk 0x11 (⚠ native on SeaTalk)
+#define CONV_WATER_TEMP_TO_ST  7   // NMEA Water Temp → SeaTalk 0x27
+#define CONV_HDG_TO_ST         8   // NMEA Heading → SeaTalk 0x9C
+#define CONV_TW_TO_NMEA        9   // Calculated True Wind → NMEA MWV(T)
+#define CONV_COUNT             10
+
+struct ConversionRule {
+    bool enabled;           // Is this rule active?
+    uint8_t interval_s;     // Transmission interval (1-60 seconds)
+};
+
+struct ConversionConfig {
+    ConversionRule rules[CONV_COUNT];
+};
+```
+
+**Encoding Reference** (per Thomas Knauf SeaTalk spec):
+
+| Datagram | Format | Source Field | Notes |
+|----------|--------|--------------|-------|
+| 0x53 | COG | GPS COG | Angle encoding: (U&3)*90 + (VW&0x3F)*2 + (U&0xC)/8 |
+| 0x52 | SOG | GPS SOG | XXXX/10 knots |
+| 0x50+0x51 | LAT/LON | GPS position | Degrees + minutes/100, S/E flags |
+| 0x00 | Depth | NMEA DPT/DBT | XXXX/10 feet (converted from meters) |
+| 0x20 | STW | NMEA VHW | XXXX/10 knots |
+| 0x10 | AWA | NMEA MWV | XXYY/2 degrees (big-endian) |
+| 0x11 | AWS | NMEA MWV | Integer + 1/10ths knots |
+| 0x27 | WaterTemp | NMEA MTW | (XXXX-100)/10 °C |
+| 0x9C | Heading | NMEA HDM/HDG | Same angle encoding as 0x53 |
+
+**True Wind Output** (broadcast to network):
+```
+$IIMWV,{twa:.1f},T,{tws:.1f},N,A*{checksum}
+```
+- Calculated from AWA + AWS + STW (via BoatState::calculateDerivedData)
+- Broadcast on TCP (port 10110) and WebSocket (/ws/nmea)
+- Rate-limited per configured interval
+
+**Data Flow**:
+```
+BoatState (receives NMEA data)
+    │
+    ├─ AWA/AWS set ──▶ calculateDerivedData() ──▶ TWA/TWS updated
+    │
+    └─ runConversions() [called from SeaTalk task]
+         │
+         ├─ Check enabled rules
+         ├─ Verify data freshness (not stale)
+         ├─ Rate-limit per interval
+         │
+         └─ Encode & transmit to SeaTalk bus
+```
+
+**Configuration Persistence**:
+- Stored in NVS namespace `marine_gw`
+- Keys: `conv_en_N` (enabled flag), `conv_int_N` (interval seconds)
+- REST API: `GET/POST /api/config/conversions`
+
 ## 5. FreeRTOS Task Design
 
 ### Task Priority Levels

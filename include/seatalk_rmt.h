@@ -4,6 +4,7 @@
 #include "driver/rmt.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/ringbuf.h"
+#include "freertos/semphr.h"
 #include "log_manager.h"
 
 #include "esp_rom_gpio.h"
@@ -73,6 +74,12 @@ private:
 
     seatalk_rx_callback_t _callback = nullptr;
 
+    /// Guards the RX ring-buffer + decode state machine below, since both
+    /// task() (called from the SeaTalk FreeRTOS task) and sendDatagram()'s
+    /// collision-check wait loop (which may be invoked from a different
+    /// task, e.g. the web server) call processIncoming() concurrently.
+    SemaphoreHandle_t   _rxMutex = nullptr;
+
     // ── RX state machine ──────────────────────────────────────────────────────
     uint32_t            _lasttransition;
     uint8_t             _inframe;
@@ -109,6 +116,20 @@ private:
     void addbit(uint8_t level, uint8_t count);
     void addchar();
     void handleframe();
+
+    /**
+     * @brief Drain and process whatever is currently available in the RMT RX
+     *        ring buffer, and finalize a stalled frame after
+     *        SEATALK_FRAME_TIMOUT of silence.
+     *
+     * This is the single source of truth for RX processing — both task()
+     * and sendDatagram()'s collision-check wait loop call it so that RX
+     * decoding (and therefore `_frame`) keeps advancing in real time even
+     * while sendDatagram() is busy-waiting for its own echo.
+     *
+     * @param rbTimeoutMs  Max time to block waiting on the ring buffer.
+     */
+    void processIncoming(uint32_t rbTimeoutMs);
 
     uint8_t reverse8(uint8_t x);
 };

@@ -133,6 +133,18 @@ void WebServer::registerRoutes() {
         }
     );
 
+    server->on("/api/config/conversions", HTTP_GET, [this](AsyncWebServerRequest* request) {
+        this->handleGetConversionConfig(request);
+    });
+    server->on("/api/config/conversions", HTTP_POST,
+        [](AsyncWebServerRequest* request) {},
+        NULL,
+        [this](AsyncWebServerRequest* request, uint8_t* data, size_t len,
+               size_t index, size_t total) {
+            this->handlePostConversionConfig(request, data, len);
+        }
+    );
+
     server->on("/api/status", HTTP_GET, [this](AsyncWebServerRequest* request) {
         this->handleGetStatus(request);
     });
@@ -336,7 +348,8 @@ void WebServer::registerRoutes() {
 
     serialPrintf("[Web]   ✓ All API routes registered\n");
 
-    // ── SPA fallback routes ────────────────────────────────────
+    // ── SPA fallback routes (LittleFS only) ────────────────────
+#ifndef WEB_UI_PROGMEM
     const char* spaRoutes[] = {
         "/instruments", "/autopilot", "/performance",
         "/config", "/nmea", nullptr
@@ -346,6 +359,7 @@ void WebServer::registerRoutes() {
             request->send(LittleFS, "/www/index.html", "text/html");
         });
     }
+#endif
 
     // ── Static files ───────────────────────────────────────────
 #ifdef WEB_UI_PROGMEM
@@ -1813,6 +1827,78 @@ void WebServer::handlePostSeatalkExtra(AsyncWebServerRequest* request,
         request->send(500, "application/json",
                       "{\"success\":false,\"error\":\"Transmission failed or unknown command\"}");
     }
+}
+
+// ── Conversion config rule descriptors (must match types.h index constants) ──
+static const char* CONV_RULE_IDS[CONV_COUNT] = {
+    "gps_cog_to_st",    // 0
+    "gps_sog_to_st",    // 1
+    "gps_pos_to_st",    // 2
+    "depth_to_st",      // 3
+    "stw_to_st",        // 4
+    "awa_to_st",        // 5
+    "aws_to_st",        // 6
+    "water_temp_to_st", // 7
+    "hdg_to_st",        // 8
+    "tw_to_nmea",       // 9
+};
+
+// GET /api/config/conversions
+void WebServer::handleGetConversionConfig(AsyncWebServerRequest* request) {
+    ConversionConfig cfg;
+    if (configManager) configManager->getConversionConfig(cfg);
+
+    JsonDocument doc;
+    JsonArray rules = doc["rules"].to<JsonArray>();
+    for (int i = 0; i < CONV_COUNT; i++) {
+        JsonObject rule = rules.add<JsonObject>();
+        rule["id"]         = CONV_RULE_IDS[i];
+        rule["enabled"]    = cfg.rules[i].enabled;
+        rule["interval_s"] = cfg.rules[i].interval_s;
+    }
+
+    String body;
+    serializeJson(doc, body);
+    request->send(200, "application/json", body);
+}
+
+// POST /api/config/conversions
+void WebServer::handlePostConversionConfig(AsyncWebServerRequest* request,
+                                           uint8_t* data, size_t len) {
+    JsonDocument doc;
+    if (deserializeJson(doc, (char*)data, len)) {
+        request->send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
+        return;
+    }
+
+    ConversionConfig cfg;
+    if (configManager) configManager->getConversionConfig(cfg);
+
+    JsonArray rules = doc["rules"].as<JsonArray>();
+    if (!rules.isNull()) {
+        for (JsonObject rule : rules) {
+            const char* id = rule["id"] | "";
+            for (int i = 0; i < CONV_COUNT; i++) {
+                if (strcmp(id, CONV_RULE_IDS[i]) == 0) {
+                    if (rule["enabled"].is<bool>())
+                        cfg.rules[i].enabled = rule["enabled"].as<bool>();
+                    if (rule["interval_s"].is<int>()) {
+                        int iv = rule["interval_s"].as<int>();
+                        if (iv < 1)  iv = 1;
+                        if (iv > 60) iv = 60;
+                        cfg.rules[i].interval_s = (uint8_t)iv;
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    if (configManager)  configManager->setConversionConfig(cfg);
+    if (seatalkManager) seatalkManager->setConversionConfig(cfg);
+
+    request->send(200, "application/json",
+                  "{\"success\":true,\"message\":\"Conversion config saved\"}");
 }
 
 // ── Alarm handlers ─────────────────────────────────────────────────────────────

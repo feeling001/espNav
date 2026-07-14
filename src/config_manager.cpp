@@ -206,6 +206,31 @@ bool ConfigManager::setAlarmConfig(const AlarmConfig& config) {
     return true;
 }
 
+bool ConfigManager::getConversionConfig(ConversionConfig& config) {
+    for (int i = 0; i < CONV_COUNT; i++) {
+        char keyEn[20], keyInt[20];
+        snprintf(keyEn,  sizeof(keyEn),  "conv_en_%d",  i);
+        snprintf(keyInt, sizeof(keyInt), "conv_int_%d", i);
+        config.rules[i].enabled    = nvs.getBool(keyEn,  false);
+        config.rules[i].interval_s = (uint8_t)nvs.getUChar(keyInt, 1);
+        if (config.rules[i].interval_s < 1)  config.rules[i].interval_s = 1;
+        if (config.rules[i].interval_s > 60) config.rules[i].interval_s = 60;
+    }
+    return true;
+}
+
+bool ConfigManager::setConversionConfig(const ConversionConfig& config) {
+    for (int i = 0; i < CONV_COUNT; i++) {
+        char keyEn[20], keyInt[20];
+        snprintf(keyEn,  sizeof(keyEn),  "conv_en_%d",  i);
+        snprintf(keyInt, sizeof(keyInt), "conv_int_%d", i);
+        nvs.putBool(keyEn,  config.rules[i].enabled);
+        nvs.putUChar(keyInt, config.rules[i].interval_s);
+    }
+    serialPrintf("[Config] ✓ Conversion config saved\n");
+    return true;
+}
+
 void ConfigManager::factoryReset() {
     serialPrintf("[Config] Performing factory reset...\n");
     

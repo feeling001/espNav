@@ -288,6 +288,23 @@ export const api = {
     return response.json();
   },
 
+  // ── Bus Conversions ───────────────────────────────────────────
+  async getConversionConfig() {
+    const response = await fetch(`${API_BASE}/config/conversions`);
+    if (!response.ok) throw new Error('Failed to get conversion config');
+    return response.json();
+  },
+
+  async setConversionConfig(config) {
+    const response = await fetch(`${API_BASE}/config/conversions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config)
+    });
+    if (!response.ok) throw new Error('Failed to set conversion config');
+    return response.json();
+  },
+
   // ── Polar / Performance ───────────────────────────────────────
   async getPolarStatus() {
     const response = await fetch(`${API_BASE}/polar/status`);

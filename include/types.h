@@ -103,4 +103,32 @@ enum WiFiState {
     WIFI_AP_MODE
 };
 
+// ── Bus Conversion Configuration ─────────────────────────────────────────────
+// Number and ordering of conversion rules (must match CONV_RULE_DEFS in
+// seatalk_manager.cpp and the front-end ConversionsConfig.jsx)
+#define CONV_GPS_COG_TO_ST     0   // NMEA GPS COG → SeaTalk 0x53
+#define CONV_GPS_SOG_TO_ST     1   // NMEA GPS SOG → SeaTalk 0x52
+#define CONV_GPS_POS_TO_ST     2   // NMEA GPS LAT/LON → SeaTalk 0x50/0x51
+#define CONV_DEPTH_TO_ST       3   // NMEA Depth → SeaTalk 0x00
+#define CONV_STW_TO_ST         4   // NMEA STW → SeaTalk 0x20
+#define CONV_AWA_TO_ST         5   // NMEA AWA → SeaTalk 0x10  (⚠ normally native on SeaTalk)
+#define CONV_AWS_TO_ST         6   // NMEA AWS → SeaTalk 0x11  (⚠ normally native on SeaTalk)
+#define CONV_WATER_TEMP_TO_ST  7   // NMEA Water Temp → SeaTalk 0x27
+#define CONV_HDG_TO_ST         8   // NMEA Heading → SeaTalk 0x9C
+#define CONV_TW_TO_NMEA        9   // Calculated True Wind (TWA+TWS) → NMEA0183 MWV(T)
+#define CONV_COUNT             10
+
+struct ConversionRule {
+    bool    enabled;
+    uint8_t interval_s;   // transmission interval in seconds (1–60)
+
+    ConversionRule() : enabled(false), interval_s(1) {}
+};
+
+struct ConversionConfig {
+    ConversionRule rules[CONV_COUNT];
+
+    ConversionConfig() {}
+};
+
 #endif // TYPES_H

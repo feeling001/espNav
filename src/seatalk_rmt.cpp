@@ -62,7 +62,8 @@ void SeatalkRMT::init(gpio_num_t rxPin, gpio_num_t txPin, rmt_channel_t rxChanne
     // rmt_set_gpio(_txChannel, RMT_MODE_TX, _txPin, false);
     rmt_set_idle_level(_txChannel, true, _invertTx ? RMT_IDLE_LEVEL_HIGH : RMT_IDLE_LEVEL_LOW);
     rmt_tx_stop(_txChannel);
-    
+
+    if (!_rxMutex) _rxMutex = xSemaphoreCreateMutex();
 }
     
 
@@ -136,7 +137,16 @@ void SeatalkRMT::addbit(uint8_t level, uint8_t count) {
     }
 }
 
-void SeatalkRMT::task() {
+void SeatalkRMT::processIncoming(uint32_t rbTimeoutMs) {
+    // Serialize access to the RX ring buffer + decode state machine: task()
+    // (SeaTalk FreeRTOS task) and sendDatagram()'s wait loop (which may run
+    // on a different task, e.g. the web server thread issuing an autopilot
+    // command) can both call this concurrently. Without this mutex the two
+    // callers race on _rb / _frame / _bitpos / ... corrupting RX decoding.
+    if (_rxMutex && xSemaphoreTake(_rxMutex, pdMS_TO_TICKS(rbTimeoutMs)) != pdTRUE) {
+        return; // another caller currently owns RX processing — try again later
+    }
+
     size_t item_num = 0;
     rmt_item32_t* items = NULL;
     _rb = NULL;
@@ -146,8 +156,8 @@ void SeatalkRMT::task() {
         _inframe = 0;
     }
     if (rmt_get_ringbuf_handle(_rxChannel, &_rb) == ESP_OK && _rb != NULL) {
-        // On récupère les données (timeout 100ms)
-        items = (rmt_item32_t*) xRingbufferReceive(_rb, &item_num, pdMS_TO_TICKS(100));
+        // On récupère les données (timeout configurable)
+        items = (rmt_item32_t*) xRingbufferReceive(_rb, &item_num, pdMS_TO_TICKS(rbTimeoutMs));
 
         if (items != NULL) {
             // item_num est en octets, on divise par la taille d'un item (4 octets)
@@ -170,6 +180,12 @@ void SeatalkRMT::task() {
             vRingbufferReturnItem(_rb, (void*)items);
         }
     }
+
+    if (_rxMutex) xSemaphoreGive(_rxMutex);
+}
+
+void SeatalkRMT::task() {
+    processIncoming(100);
 }
 
 void SeatalkRMT::addItemBit(uint8_t bit, uint8_t closeframe) {
@@ -216,8 +232,15 @@ bool SeatalkRMT::sendDatagram(uint8_t* buffer, uint8_t len) {
 
         // Check for collisions
         // Wait ( len*11*SEATALK_BIT_US ) us for the frame sending.  ~ len*3ms
-                
-        delay( ( len * 3 ) + 100 );
+        // NOTE: we must keep draining the RX ring buffer (processIncoming)
+        // during this wait — this task is single-threaded with RX decoding,
+        // so a blind delay() here would starve _frame updates and make every
+        // echo comparison fail against stale data (false collisions).
+        uint32_t waitMs = ( len * 3 ) + 100;
+        uint32_t waitStart = millis();
+        while (millis() - waitStart < waitMs) {
+            processIncoming(5);
+        }
 
         // serialPrintf("compare : ");
         for(int i=0;i<len;i++) {
@@ -227,7 +250,12 @@ bool SeatalkRMT::sendDatagram(uint8_t* buffer, uint8_t len) {
         }
         if(compareok) { return true; }
         serialPrintf("Collision detectee, retry %d...\n", attempt + 1);
-        delay(random(5, 50));
+
+        uint32_t backoffMs = random(5, 50);
+        uint32_t backoffStart = millis();
+        while (millis() - backoffStart < backoffMs) {
+            processIncoming(5);
+        }
     }
     return false;
 }
