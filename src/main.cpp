@@ -124,6 +124,9 @@ void setup() {
     DEBUG_SERIAL.begin(115200);
     delay(1000);
 
+    esp_reset_reason_t reason = esp_reset_reason();
+    serialPrintf("[Boot] Reset reason: %d\n", (int)reason);
+
     g_serialMutex = xSemaphoreCreateMutex();
 
     serialPrintf("\n\n======================================\n");

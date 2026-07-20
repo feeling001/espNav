@@ -223,7 +223,12 @@ bool SeatalkRMT::sendDatagram(uint8_t* buffer, uint8_t len) {
                 silenceStart = millis(); // On reset le chrono
             }
             if (millis() - silenceStart > 10) busBusy = false; // 10ms de silence
-            yield();
+            // NOTE: yield() alone does not guarantee the IDLE0 task gets
+            // scheduled — if the bus stays LOW continuously this becomes a
+            // tight busy-loop on this priority-5 task and starves IDLE0,
+            // tripping the task watchdog (abort/reboot). A real vTaskDelay
+            // forces the scheduler to run lower-priority tasks (IDLE0).
+            vTaskDelay(pdMS_TO_TICKS(1));
         }
         
 
