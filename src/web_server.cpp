@@ -16,6 +16,7 @@
 #include "polar.h"
 #include "functions.h"
 #include "log_manager.h"
+#include "debug_log.h"
 
 #include <ArduinoJson.h>
 #include <Update.h>
@@ -42,6 +43,7 @@ WebServer::WebServer(ConfigManager* cm, WiFiManager* wm, TCPServer* tcp, UARTHan
     server = new AsyncWebServer(WEB_SERVER_PORT);
     wsNMEA = new AsyncWebSocket("/ws/nmea");
     wsBoatState = new AsyncWebSocket("/ws/boatstate");
+    wsDebug = new AsyncWebSocket("/ws/debug");
 }
 
 // ── init ──────────────────────────────────────────────────────────────────────
@@ -65,8 +67,14 @@ void WebServer::init() {
         this->handleWebSocketEvent(server, client, type, arg, data, len);
     });
 
+    wsDebug->onEvent([this](AsyncWebSocket* server, AsyncWebSocketClient* client,
+                            AwsEventType type, void* arg, uint8_t* data, size_t len) {
+        this->handleWebSocketEvent(server, client, type, arg, data, len);
+    });
+
     server->addHandler(wsNMEA);
     server->addHandler(wsBoatState);
+    server->addHandler(wsDebug);
     registerRoutes();
 }
 
@@ -388,6 +396,13 @@ void WebServer::handleWebSocketEvent(AsyncWebSocket* server, AsyncWebSocketClien
         case WS_EVT_CONNECT:
             serialPrintf("[WebSocket] Client #%u connected from %s\n",
                           client->id(), client->remoteIP().toString().c_str());
+            // Send the existing debug-log backlog to newly connected debug
+            // console clients so they immediately see recent history rather
+            // than waiting for the next line to be printed.
+            if (server == wsDebug) {
+                String backlog = DebugLog::instance().collectAll();
+                if (!backlog.isEmpty()) client->text(backlog);
+            }
             break;
         case WS_EVT_DISCONNECT:
             serialPrintf("[WebSocket] Client #%u disconnected\n", client->id());
@@ -395,6 +410,32 @@ void WebServer::handleWebSocketEvent(AsyncWebSocket* server, AsyncWebSocketClien
         default:
             break;
     }
+}
+
+// ── /ws/debug: streams serialPrintf() output captured in DebugLog ───────────
+
+void WebServer::broadcastDebugLog() {
+    if (!wsDebug || !running) return;
+
+    static uint32_t lastCleanup = 0;
+    uint32_t now = millis();
+    if (now - lastCleanup >= 5000) {
+        wsDebug->cleanupClients();
+        lastCleanup = now;
+    }
+
+    if (wsDebug->count() == 0) {
+        // No viewers: still advance the cursor so we don't build up and dump
+        // a huge backlog the moment someone connects mid-session (they get
+        // the ring-buffer backlog via collectAll() on connect instead).
+        debugLogLastSeq = DebugLog::instance().currentSeq();
+        return;
+    }
+
+    String newLines = DebugLog::instance().collectSince(debugLogLastSeq);
+    if (newLines.isEmpty()) return;
+
+    wsDebug->textAll(newLines);
 }
 
 void WebServer::broadcastNMEA(const char* sentence) {

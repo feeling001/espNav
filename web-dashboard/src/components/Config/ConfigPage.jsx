@@ -5,6 +5,7 @@ import { BLEConfig }         from './BLEConfig';
 import { OTAUpdate }         from './OTAUpdate';
 import { StorageManager }    from './StorageManager';
 import { ConversionsConfig } from './ConversionsConfig';
+import { DebugConsole }      from './DebugConsole';
 
 const TABS = [
   { id: 'wifi',        label: '📶 WiFi'         },
@@ -13,6 +14,7 @@ const TABS = [
   { id: 'conversions', label: '🔄 Conversions'   },
   { id: 'ota',         label: '⬆ Firmware'      },
   { id: 'storage',     label: '💾 Storage'       },
+  { id: 'debug',       label: '🐞 Debug'         },
 ];
 
 export function ConfigPage() {
@@ -41,6 +43,7 @@ export function ConfigPage() {
         {activeTab === 'conversions' && <ConversionsConfig />}
         {activeTab === 'ota'         && <OTAUpdate />}
         {activeTab === 'storage'     && <StorageManager />}
+        {activeTab === 'debug'       && <DebugConsole />}
       </div>
     </div>
   );

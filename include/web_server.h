@@ -63,6 +63,8 @@ public:
     void stop();
     void broadcastNMEA(const char* sentence);
     void broadcastBoatState();
+    /** Push any new debug-log lines (see DebugLog) to connected /ws/debug clients. */
+    void broadcastDebugLog();
 
 private:
     void registerRoutes();
@@ -167,6 +169,8 @@ private:
     AsyncWebServer* server;
     AsyncWebSocket* wsNMEA;
     AsyncWebSocket* wsBoatState;
+    AsyncWebSocket* wsDebug;
+    uint32_t        debugLogLastSeq = 0; ///< Last DebugLog sequence number already broadcast
     ConfigManager*  configManager;
     WiFiManager*    wifiManager;
     TCPServer*      tcpServer;

@@ -4,7 +4,8 @@
 > All responses are `application/json`.  
 > Web dashboard static files are served from LittleFS (`/www/`).  
 > A raw NMEA WebSocket stream is available at `/ws/nmea`.  
-> A real-time combined boat state WebSocket (navigation + wind + AIS + alarms) is available at `/ws/boatstate` — the recommended way to build a live client without polling.
+> A real-time combined boat state WebSocket (navigation + wind + AIS + alarms) is available at `/ws/boatstate` — the recommended way to build a live client without polling.  
+> A live firmware debug-log stream (mirrors everything sent to the serial console via `serialPrintf`) is available at `/ws/debug` — useful when the physical serial/USB port is not accessible (e.g. boat in real operating conditions).
 
 ---
 
@@ -25,6 +26,7 @@
 13. [Performance Configuration](#13-performance-configuration)
 14. [Alarms](#14-alarms)
 15. [Real-time Boat State WebSocket](#15-real-time-boat-state-websocket)
+16. [Debug Log WebSocket](#16-debug-log-websocket)
 
 ---
 
@@ -897,5 +899,28 @@ const ws = new WebSocket(`ws://${location.host}/ws/boatstate`);
 ws.onmessage = (event) => {
   const state = JSON.parse(event.data);
   console.log(state.navigation.sog.value, state.wind.tws.value, state.autopilot.mode, state.status.uptime);
+};
+```
+
+---
+
+## 16. Debug Log WebSocket
+
+### `WS /ws/debug`
+
+Streams every line the firmware sends via `serialPrintf()` (the same output normally printed on the physical USB/serial console), so it can be viewed live in the web dashboard when the physical port is not wired/accessible (e.g. boat in real operating conditions). Exposed in the dashboard under **Config → 🐞 Debug**.
+
+- **Protocol:** text WebSocket
+- **Format:** plain text, one or more `\n`-joined log lines per message (not JSON)
+- **Direction:** read-only (server → client)
+- **Push rate:** up to ~3.3 Hz (every 300 ms), only when at least one client is connected and there is new output
+- **On connect:** the server immediately sends the current backlog (last lines kept in the in-RAM ring buffer, capacity 80 lines × 128 chars) so late-joining clients see recent history instead of starting from a blank screen
+- **Overhead:** capture uses a fixed-size RAM ring buffer with a non-blocking mutex — if the buffer is busy a line is silently dropped rather than blocking the caller; broadcasting only happens when clients are connected, so there is no cost when the debug tab is closed
+
+**Client example:**
+```javascript
+const ws = new WebSocket(`ws://${location.host}/ws/debug`);
+ws.onmessage = (event) => {
+  event.data.split('\n').forEach(line => console.log(line));
 };
 ```

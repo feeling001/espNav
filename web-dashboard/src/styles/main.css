@@ -406,6 +406,48 @@ button.danger:hover {
   padding-top: 10px;
 }
 
+/* ── Debug Console ───────────────────────────────────────── */
+.debug-console-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.debug-console-toolbar button {
+  padding: 6px 14px;
+  font-size: 13px;
+}
+
+.ws-status.connected {
+  color: #27ae60;
+}
+
+.ws-status.disconnected {
+  color: #e74c3c;
+}
+
+.debug-console-count {
+  margin-left: auto;
+  color: #7f8c8d;
+  font-size: 13px;
+}
+
+.debug-console-output {
+  background: #1e1e1e;
+  color: #d4d4d4;
+  border-radius: 6px;
+  padding: 12px;
+  height: 480px;
+  overflow-y: auto;
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 12.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+}
+
 /* ── Board Update ────────────────────────────────────────── */
 .board-update h3 {
   margin-bottom: 16px;

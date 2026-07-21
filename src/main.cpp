@@ -37,6 +37,7 @@
 #include "polar.h"
 #include "sd_manager.h"
 #include "log_manager.h"
+#include "debug_log.h"
 
 // ── Global instances ──────────────────────────────────────────────────────────
 ConfigManager  configManager;
@@ -123,6 +124,8 @@ void setup() {
     Serial.begin(115200);
     DEBUG_SERIAL.begin(115200);
     delay(1000);
+
+    DebugLog::instance().init();
 
     esp_reset_reason_t reason = esp_reset_reason();
     serialPrintf("[Boot] Reset reason: %d\n", (int)reason);
@@ -326,10 +329,15 @@ void setup() {
 
 void loop() {
     static uint32_t lastAlarmCheckMs = 0;
+    static uint32_t lastDebugLogMs   = 0;
     uint32_t now = millis();
     if (now - lastAlarmCheckMs >= 1000) {
         lastAlarmCheckMs = now;
         alarmManager.update();
+    }
+    if (now - lastDebugLogMs >= 300) {
+        lastDebugLogMs = now;
+        webServer.broadcastDebugLog();
     }
     vTaskDelay(pdMS_TO_TICKS(100));
 }
