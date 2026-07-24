@@ -48,6 +48,23 @@ export const api = {
     return response.json();
   },
 
+  // ── Data source selection ────────────────────────────────────
+  async getDataSourceConfig() {
+    const response = await fetch(`${API_BASE}/config/data-sources`);
+    if (!response.ok) throw new Error('Failed to get data source config');
+    return response.json();
+  },
+
+  async setDataSourceConfig(config) {
+    const response = await fetch(`${API_BASE}/config/data-sources`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config)
+    });
+    if (!response.ok) throw new Error('Failed to set data source config');
+    return response.json();
+  },
+
   // ── System status ─────────────────────────────────────────────
   async getStatus() {
     const response = await fetch(`${API_BASE}/status`);
@@ -391,7 +408,11 @@ export const api = {
           valid: data.heading?.value !== null,
           timestamp: data.heading?.age ? Date.now() - (data.heading.age * 1000) : Date.now()
         },
-        true_heading: { value: null, valid: false, timestamp: Date.now() }
+        true_heading: {
+          value: data.heading_true?.value, unit: data.heading_true?.unit || 'deg',
+          valid: data.heading_true?.value !== null,
+          timestamp: data.heading_true?.age ? Date.now() - (data.heading_true.age * 1000) : Date.now()
+        }
       },
       speed: {
         stw: {

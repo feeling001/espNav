@@ -27,6 +27,8 @@
 14. [Alarms](#14-alarms)
 15. [Real-time Boat State WebSocket](#15-real-time-boat-state-websocket)
 16. [Debug Log WebSocket](#16-debug-log-websocket)
+17. [Autopilot Commands](#17-autopilot-commands)
+18. [SeaTalk Extra Commands](#18-seatalk-extra-commands)
 
 ---
 
@@ -387,6 +389,7 @@ Each measurement includes its value, unit, and age in seconds (`null` if data is
   "cog": { "value": 135.0, "unit": "deg", "age": 0.8 },
   "stw": { "value": 4.9, "unit": "kn", "age": 1.2 },
   "heading": { "value": 138.0, "unit": "deg", "age": 0.5 },
+  "heading_true": { "value": 141.0, "unit": "deg", "age": 0.5 },
   "depth": { "value": 12.5, "unit": "m", "age": 1.0 },
   "trip": { "value": 23.4, "unit": "nm" },
   "total": { "value": 1245.6, "unit": "nm" },
@@ -406,6 +409,7 @@ Each measurement includes its value, unit, and age in seconds (`null` if data is
 | `cog` | deg | RMC, VTG | Course Over Ground (0–360°) |
 | `stw` | kn | VHW | Speed Through Water |
 | `heading` | deg | HDG, HDM | Magnetic heading (0–360°) |
+| `heading_true` | deg | HDT, VHW | True heading (0–360°) |
 | `depth` | m | DPT, DBT | Depth below transducer |
 | `trip` | nm | VLW | Trip distance counter |
 | `total` | nm | VLW | Total cumulative distance |
@@ -923,4 +927,105 @@ const ws = new WebSocket(`ws://${location.host}/ws/debug`);
 ws.onmessage = (event) => {
   event.data.split('\n').forEach(line => console.log(line));
 };
+```
+
+---
+
+## 17. Autopilot Commands
+
+### `POST /api/autopilot/command`
+
+Sends a semantic autopilot command over the SeaTalk1 bus (translated internally into the corresponding ST4000+ command-0x86 keystroke datagram). Requires the SeaTalk manager to be initialised (`503` if not).
+
+**Request body:**
+```json
+{ "command": "auto" }
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `command` | string | Yes | One of the accepted autopilot command strings (see table below) |
+
+**Accepted `command` values:**
+
+| Command | Effect | SeaTalk1 key code |
+|---|---|---|
+| `standby` | Disengage autopilot | `0x02` |
+| `auto` | Engage compass-lock ("auto") mode | `0x01` |
+| `wind` | Engage wind-vane mode | `0x23` |
+| `track` | Engage GPS track mode | `0x03` |
+| `adjust-1` | Adjust course −1° | `0x05` |
+| `adjust-10` | Adjust course −10° | `0x06` |
+| `adjust+1` | Adjust course +1° | `0x07` |
+| `adjust+10` | Adjust course +10° | `0x08` |
+| `tack-port` | Initiate a port tack | `0x21` |
+| `tack-starboard` | Initiate a starboard tack | `0x22` |
+
+**Success response:**
+```json
+{ "success": true, "message": "Sent: auto" }
+```
+
+**Error responses:**
+```json
+{ "error": "Invalid JSON" }
+```
+```json
+{ "error": "Missing command field" }
+```
+```json
+{ "success": false, "error": "SeaTalk manager not initialised" }
+```
+```json
+{ "success": false, "error": "SeaTalk transmission failed or unknown command" }
+```
+
+---
+
+## 18. SeaTalk Extra Commands
+
+### `POST /api/seatalk/extra`
+
+Sends a utility / instrument command over the SeaTalk1 bus — lamp intensity, alarm acknowledge, and the audible beep used by the onboard alarm system (see [section 14](#14-alarms)). Requires the SeaTalk manager to be initialised (`503` if not).
+
+**Request body:**
+```json
+{ "command": "lamp:2" }
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `command` | string | Yes | One of the accepted extra command strings (see table below) |
+
+**Accepted `command` values:**
+
+| Command | Effect | Datagram |
+|---|---|---|
+| `lamp:0` | Instrument backlight off | `30 00 00` |
+| `lamp:1` | Instrument backlight level 1 | `30 00 04` |
+| `lamp:2` | Instrument backlight level 2 | `30 00 08` |
+| `lamp:3` | Instrument backlight level 3 | `30 00 0C` |
+| `alarm-ack` | Acknowledge alarm keystroke (ST40 Wind Instrument) | `68 41 15 00` |
+| `beep_on` | Trigger the audible alarm beep | `A8 53 80 00 00 D3` |
+| `beep_off` | Silence the audible alarm beep | `A8 43 80 00 00 C3` |
+
+`beep_on` / `beep_off` are also triggered automatically by the alarm system (see [section 14](#14-alarms)) and are equivalent to `/api/alarms/beep_on` / `/api/alarms/beep_off`.
+
+**Success response:**
+```json
+{ "success": true, "message": "Sent: lamp:2" }
+```
+
+**Error responses:**
+```json
+{ "error": "Invalid JSON" }
+```
+```json
+{ "error": "Missing command field" }
+```
+```json
+{ "success": false, "error": "SeaTalk manager not initialised" }
+```
+```json
+{ "success": false, "error": "Transmission failed or unknown command" }
 ```

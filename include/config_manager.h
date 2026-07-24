@@ -30,6 +30,10 @@ public:
     bool getConversionConfig(ConversionConfig& config);
     bool setConversionConfig(const ConversionConfig& config);
 
+    // Data source selection configuration
+    bool getDataSourceConfig(DataSourceConfig& config);
+    bool setDataSourceConfig(const DataSourceConfig& config);
+
     // Factory reset
     void factoryReset();
     

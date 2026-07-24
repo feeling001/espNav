@@ -33,11 +33,11 @@ extern QueueHandle_t nmeaQueue;
 WebServer::WebServer(ConfigManager* cm, WiFiManager* wm, TCPServer* tcp, UARTHandler* uart,
                      NMEAParser* nmea, BoatState* bs, BLEManager* ble,
                      SeatalkManager* stMgr, LogManager* logManager, SDManager* sdMgr,
-                     AlarmManager* alarmMgr)
+                     AlarmManager* alarmMgr, DataSourceManager* dsMgr)
     : configManager(cm), wifiManager(wm), tcpServer(tcp), uartHandler(uart),
       nmeaParser(nmea), boatState(bs), bleManager(ble),
       seatalkManager(stMgr), logManager(logManager), sdManager(sdMgr),
-      alarmManager(alarmMgr), running(false),
+      alarmManager(alarmMgr), dataSourceManager(dsMgr), running(false),
       otaInProgress(false), otaSuccess(false),
       otaExpectedSize(0), otaBytesWritten(0) {
     server = new AsyncWebServer(WEB_SERVER_PORT);
@@ -150,6 +150,18 @@ void WebServer::registerRoutes() {
         [this](AsyncWebServerRequest* request, uint8_t* data, size_t len,
                size_t index, size_t total) {
             this->handlePostConversionConfig(request, data, len);
+        }
+    );
+
+    server->on("/api/config/data-sources", HTTP_GET, [this](AsyncWebServerRequest* request) {
+        this->handleGetDataSourceConfig(request);
+    });
+    server->on("/api/config/data-sources", HTTP_POST,
+        [](AsyncWebServerRequest* request) {},
+        NULL,
+        [this](AsyncWebServerRequest* request, uint8_t* data, size_t len,
+               size_t index, size_t total) {
+            this->handlePostDataSourceConfig(request, data, len);
         }
     );
 
@@ -521,11 +533,12 @@ String WebServer::buildBoatStateJSON() {
             }
         };
 
-        addDP("sog",     gps.sog,                "kn");
-        addDP("cog",     gps.cog,                "deg");
-        addDP("stw",     speed.stw,              "kn");
-        addDP("heading", heading.true_heading,   "deg");
-        addDP("depth",   depth.below_transducer, "m");
+        addDP("sog",         gps.sog,                "kn");
+        addDP("cog",         gps.cog,                "deg");
+        addDP("stw",         speed.stw,              "kn");
+        addDP("heading",      heading.magnetic,      "deg");
+        addDP("heading_true", heading.true_heading,  "deg");
+        addDP("depth",       depth.below_transducer, "m");
 
         JsonObject quality = nav["gps_quality"].to<JsonObject>();
         if (gps.satellites.valid  && !gps.satellites.isStale())  quality["satellites"]  = (int)gps.satellites.value;  else quality["satellites"]  = nullptr;
@@ -1590,11 +1603,12 @@ void WebServer::handleGetNavigation(AsyncWebServerRequest* request) {
         }
     };
 
-    addDP("sog",     gps.sog,                "kn");
-    addDP("cog",     gps.cog,                "deg");
-    addDP("stw",     speed.stw,              "kn");
-    addDP("heading", heading.true_heading,   "deg");
-    addDP("depth",   depth.below_transducer, "m");
+    addDP("sog",         gps.sog,                "kn");
+    addDP("cog",         gps.cog,                "deg");
+    addDP("stw",         speed.stw,              "kn");
+    addDP("heading",      heading.magnetic,      "deg");
+    addDP("heading_true", heading.true_heading,  "deg");
+    addDP("depth",       depth.below_transducer, "m");
 
     JsonObject quality = doc["gps_quality"].to<JsonObject>();
     if (gps.satellites.valid  && !gps.satellites.isStale())  quality["satellites"]  = (int)gps.satellites.value;  else quality["satellites"]  = nullptr;
@@ -1967,6 +1981,66 @@ void WebServer::handlePostConversionConfig(AsyncWebServerRequest* request,
 
     request->send(200, "application/json",
                   "{\"success\":true,\"message\":\"Conversion config saved\"}");
+}
+
+// GET /api/config/data-sources
+void WebServer::handleGetDataSourceConfig(AsyncWebServerRequest* request) {
+    DataSourceConfig cfg;
+    if (configManager) configManager->getDataSourceConfig(cfg);
+
+    JsonDocument doc;
+    JsonArray fields = doc["fields"].to<JsonArray>();
+    for (int i = 0; i < DS_FIELD_COUNT; i++) {
+        JsonObject f = fields.add<JsonObject>();
+        f["id"]     = DataSourceManager::fieldId(i);
+        f["source"] = DataSourceManager::subId((DataSubSource)cfg.source[i]);
+    }
+    doc["magneticVariation"] = cfg.magneticVariation;
+
+    String body;
+    serializeJson(doc, body);
+    request->send(200, "application/json", body);
+}
+
+// POST /api/config/data-sources
+void WebServer::handlePostDataSourceConfig(AsyncWebServerRequest* request,
+                                            uint8_t* data, size_t len) {
+    JsonDocument doc;
+    if (deserializeJson(doc, (char*)data, len)) {
+        request->send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
+        return;
+    }
+
+    DataSourceConfig cfg;
+    if (configManager) configManager->getDataSourceConfig(cfg);
+
+    JsonArray fields = doc["fields"].as<JsonArray>();
+    if (!fields.isNull()) {
+        for (JsonObject f : fields) {
+            const char* id     = f["id"]     | "";
+            const char* source = f["source"] | "";
+            uint8_t field;
+            DataSubSource sub;
+            if (DataSourceManager::fieldFromId(id, field) &&
+                DataSourceManager::subFromId(source, sub)) {
+                cfg.source[field] = (uint8_t)sub;
+            }
+        }
+    }
+
+    if (doc["magneticVariation"].is<float>()) {
+        cfg.magneticVariation = doc["magneticVariation"].as<float>();
+    }
+
+    if (configManager)      configManager->setDataSourceConfig(cfg);
+    if (dataSourceManager)  dataSourceManager->setConfig(cfg);
+    // Recompute derived values (True Wind / True Heading) immediately so a
+    // switch to "Compute" takes effect right away, instead of waiting for
+    // the next incoming NMEA/SeaTalk update to trigger a recalculation.
+    if (boatState) boatState->calculateDerivedData();
+
+    request->send(200, "application/json",
+                  "{\"success\":true,\"message\":\"Data source config saved\"}");
 }
 
 // ── Alarm handlers ─────────────────────────────────────────────────────────────

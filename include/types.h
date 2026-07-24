@@ -131,4 +131,63 @@ struct ConversionConfig {
     ConversionConfig() {}
 };
 
+// ── Data Source Selection (NMEA / SeaTalk / Compute per logical field) ──────
+// Number and ordering of fields (must match DS_FIELD_IDS in
+// data_source_manager.cpp and the front-end DataSourceConfig.jsx)
+#define DS_GPS_POSITION   0   // Latitude/Longitude
+#define DS_GPS_SOG        1   // Speed Over Ground
+#define DS_GPS_COG        2   // Course Over Ground
+#define DS_HEADING_MAG    3   // Magnetic Heading
+#define DS_HEADING_TRUE   4   // True Heading
+#define DS_STW            5   // Speed Through Water
+#define DS_DEPTH          6   // Depth below transducer
+#define DS_WIND_APPARENT  7   // Apparent Wind Speed + Angle
+#define DS_WIND_TRUE      8   // True Wind Speed + Angle + Direction
+#define DS_WATER_TEMP     9   // Water temperature
+#define DS_TRIP           10  // Trip distance
+#define DS_TOTAL          11  // Total distance (log)
+#define DS_FIELD_COUNT    12
+
+// Possible "sub-sources" a field can be bound to. Not every value is valid
+// for every field — see DS_FIELD_OPTIONS in data_source_manager.cpp.
+enum DataSubSource {
+    DS_SUB_NMEA_GGA = 0,
+    DS_SUB_NMEA_RMC,
+    DS_SUB_NMEA_GLL,
+    DS_SUB_NMEA_VTG,
+    DS_SUB_NMEA_HDT,
+    DS_SUB_NMEA_HDM,
+    DS_SUB_NMEA_VHW,
+    DS_SUB_NMEA_DPT,
+    DS_SUB_NMEA_DBT,
+    DS_SUB_NMEA_MWV,
+    DS_SUB_NMEA_MWD,
+    DS_SUB_NMEA_MTW,
+    DS_SUB_NMEA_VLW,
+    DS_SUB_SEATALK,
+    DS_SUB_COMPUTE,
+    DS_SUB_COUNT
+};
+
+struct DataSourceConfig {
+    uint8_t source[DS_FIELD_COUNT];   // one DataSubSource value per field
+    float   magneticVariation;        // degrees, +E / -W — used by HEADING_TRUE compute
+
+    DataSourceConfig() : magneticVariation(0.0f) {
+        // Sensible defaults — NMEA everywhere except True Wind (Compute).
+        source[DS_GPS_POSITION]  = DS_SUB_NMEA_GGA;
+        source[DS_GPS_SOG]       = DS_SUB_NMEA_RMC;
+        source[DS_GPS_COG]       = DS_SUB_NMEA_RMC;
+        source[DS_HEADING_MAG]   = DS_SUB_NMEA_HDM;
+        source[DS_HEADING_TRUE]  = DS_SUB_NMEA_HDT;
+        source[DS_STW]           = DS_SUB_NMEA_VHW;
+        source[DS_DEPTH]         = DS_SUB_NMEA_DPT;
+        source[DS_WIND_APPARENT] = DS_SUB_NMEA_MWV;
+        source[DS_WIND_TRUE]     = DS_SUB_COMPUTE;
+        source[DS_WATER_TEMP]    = DS_SUB_NMEA_MTW;
+        source[DS_TRIP]          = DS_SUB_NMEA_VLW;
+        source[DS_TOTAL]         = DS_SUB_NMEA_VLW;
+    }
+};
+
 #endif // TYPES_H

@@ -25,6 +25,7 @@
 #include "functions.h"
 #include "boat_state.h"
 #include "config_manager.h"
+#include "data_source_manager.h"
 #include "wifi_manager.h"
 #include "uart_handler.h"
 #include "seatalk_rmt.h"
@@ -41,17 +42,18 @@
 
 // ── Global instances ──────────────────────────────────────────────────────────
 ConfigManager  configManager;
-BoatState      boatState;
+DataSourceManager dataSourceManager;
+BoatState      boatState(&dataSourceManager);
 WiFiManager    wifiManager;
 UARTHandler    uartHandler;
 SDManager      sdManager;
 LogManager     logManager(&sdManager, &boatState);
 SeatalkRMT     seatalkHandler(&logManager);
-SeatalkManager seatalkManager(&seatalkHandler, &boatState);
+SeatalkManager seatalkManager(&seatalkHandler, &boatState, &dataSourceManager);
 AlarmManager   alarmManager(&boatState, &configManager, &seatalkManager);
 TCPServer      tcpServer;
 BLEManager     bleManager;
-NMEAParser     nmeaParser(&boatState);
+NMEAParser     nmeaParser(&boatState, &dataSourceManager);
 
 
 Adafruit_NeoPixel strip(NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800);
@@ -60,7 +62,7 @@ char rgb[3] = {100, 100, 100}; // Vert par défaut
 // WebServer receives all subsystem pointers including SDManager.
 WebServer webServer(&configManager, &wifiManager, &tcpServer, &uartHandler,
                     &nmeaParser, &boatState, &bleManager, &seatalkManager, &logManager,
-                    &sdManager, &alarmManager);
+                    &sdManager, &alarmManager, &dataSourceManager);
 
 
 
@@ -172,6 +174,13 @@ void setup() {
     // ── Config manager ────────────────────────────────────────
     serialPrintf("[Config] Initializing...\n");
     configManager.init();
+
+    // ── Data source selection ─────────────────────────────────
+    {
+        DataSourceConfig dsCfg;
+        configManager.getDataSourceConfig(dsCfg);
+        dataSourceManager.setConfig(dsCfg);
+    }
 
     // ── Boat state ────────────────────────────────────────────
     boatState.init();

@@ -56,7 +56,7 @@ public:
     WebServer(ConfigManager* cm, WiFiManager* wm, TCPServer* tcp, UARTHandler* uart,
               NMEAParser* nmea, BoatState* bs, BLEManager* ble,
               SeatalkManager* stMgr, LogManager* logManager ,SDManager* sdMgr = nullptr,
-              AlarmManager* alarmMgr = nullptr);
+              AlarmManager* alarmMgr = nullptr, DataSourceManager* dataSourceManager = nullptr);
 
     void init();
     void start();
@@ -82,6 +82,10 @@ private:
     // ── Conversion handlers ───────────────────────────────────────────────────
     void handleGetConversionConfig(AsyncWebServerRequest* request);
     void handlePostConversionConfig(AsyncWebServerRequest* request, uint8_t* data, size_t len);
+
+    // ── Data source selection handlers ────────────────────────────────────────
+    void handleGetDataSourceConfig(AsyncWebServerRequest* request);
+    void handlePostDataSourceConfig(AsyncWebServerRequest* request, uint8_t* data, size_t len);
 
     // ── BLE handlers ──────────────────────────────────────────────────────────
     void handleGetBLEConfig(AsyncWebServerRequest* request);
@@ -182,6 +186,7 @@ private:
     SDManager*      sdManager;      ///< May be nullptr when SD is disabled
     LogManager*     logManager;
     AlarmManager*   alarmManager;   ///< May be nullptr when alarms are disabled
+    DataSourceManager* dataSourceManager; ///< May be nullptr when not wired in
     bool            running;
 
     // ── OTA state ─────────────────────────────────────────────────────────────

@@ -14,7 +14,13 @@
 #include "functions.h"
 #include <stdlib.h>
 
-NMEAParser::NMEAParser(BoatState* bs) : validSentences(0), invalidSentences(0), boatState(bs) {}
+NMEAParser::NMEAParser(BoatState* bs, DataSourceManager* dsm)
+    : validSentences(0), invalidSentences(0), boatState(bs), dataSourceManager(dsm) {}
+
+bool NMEAParser::srcActive(uint8_t field, DataSubSource sub) const {
+    if (!dataSourceManager) return true;
+    return dataSourceManager->isActive(field, sub);
+}
 
 bool NMEAParser::parseLine(const char* line, NMEASentence& out) {
     // Accept '$' (NMEA standard) and '!' (AIS)
@@ -164,7 +170,9 @@ void NMEAParser::parseGGA(const char* line) {
     float hdop = atof(buffer);
 
     if (fixQuality > 0 && strlen(lat) > 0 && strlen(lon) > 0) {
-        boatState->setGPSPosition(parseLatitude(lat, ns), parseLongitude(lon, ew));
+        if (srcActive(DS_GPS_POSITION, DS_SUB_NMEA_GGA)) {
+            boatState->setGPSPosition(parseLatitude(lat, ns), parseLongitude(lon, ew));
+        }
         boatState->setGPSSatellites(satellites);
         boatState->setGPSFixQuality(fixQuality);
         boatState->setGPSHDOP(hdop);
@@ -191,11 +199,11 @@ void NMEAParser::parseRMC(const char* line) {
     parseField(line, 8, buffer, sizeof(buffer));
     float cog = parseDegrees(buffer);
 
-    if (strlen(lat) > 0 && strlen(lon) > 0) {
+    if (strlen(lat) > 0 && strlen(lon) > 0 && srcActive(DS_GPS_POSITION, DS_SUB_NMEA_RMC)) {
         boatState->setGPSPosition(parseLatitude(lat, ns), parseLongitude(lon, ew));
     }
-    if (sog >= 0)            boatState->setGPSSOG(sog);
-    if (cog >= 0 && cog < 360) boatState->setGPSCOG(cog);
+    if (sog >= 0 && srcActive(DS_GPS_SOG, DS_SUB_NMEA_RMC))            boatState->setGPSSOG(sog);
+    if (cog >= 0 && cog < 360 && srcActive(DS_GPS_COG, DS_SUB_NMEA_RMC)) boatState->setGPSCOG(cog);
 }
 
 // $GPGLL - Geographic Position
@@ -211,7 +219,7 @@ void NMEAParser::parseGLL(const char* line) {
     parseField(line, 3, lon, sizeof(lon));
     parseField(line, 4, ew,  sizeof(ew));
 
-    if (strlen(lat) > 0 && strlen(lon) > 0) {
+    if (strlen(lat) > 0 && strlen(lon) > 0 && srcActive(DS_GPS_POSITION, DS_SUB_NMEA_GLL)) {
         boatState->setGPSPosition(parseLatitude(lat, ns), parseLongitude(lon, ew));
     }
 }
@@ -226,8 +234,8 @@ void NMEAParser::parseVTG(const char* line) {
     parseField(line, 5, buffer, sizeof(buffer));
     float sog = parseKnots(buffer);
 
-    if (cog >= 0 && cog < 360) boatState->setGPSCOG(cog);
-    if (sog >= 0)               boatState->setGPSSOG(sog);
+    if (cog >= 0 && cog < 360 && srcActive(DS_GPS_COG, DS_SUB_NMEA_VTG)) boatState->setGPSCOG(cog);
+    if (sog >= 0 && srcActive(DS_GPS_SOG, DS_SUB_NMEA_VTG))               boatState->setGPSSOG(sog);
 }
 
 // $HCHDT - True Heading
@@ -235,7 +243,7 @@ void NMEAParser::parseHDT(const char* line) {
     char buffer[32];
     parseField(line, 1, buffer, sizeof(buffer));
     float heading = parseDegrees(buffer);
-    if (heading >= 0 && heading < 360) boatState->setTrueHeading(heading);
+    if (heading >= 0 && heading < 360 && srcActive(DS_HEADING_TRUE, DS_SUB_NMEA_HDT)) boatState->setTrueHeading(heading);
 }
 
 // $HCHDM - Magnetic Heading
@@ -243,7 +251,7 @@ void NMEAParser::parseHDM(const char* line) {
     char buffer[32];
     parseField(line, 1, buffer, sizeof(buffer));
     float heading = parseDegrees(buffer);
-    if (heading >= 0 && heading < 360) boatState->setMagneticHeading(heading);
+    if (heading >= 0 && heading < 360 && srcActive(DS_HEADING_MAG, DS_SUB_NMEA_HDM)) boatState->setMagneticHeading(heading);
 }
 
 // $SDDPT - Depth
@@ -256,7 +264,7 @@ void NMEAParser::parseDPT(const char* line) {
     parseField(line, 2, buffer, sizeof(buffer));
     float offset = atof(buffer);
 
-    if (depth > 0)   boatState->setDepth(depth);
+    if (depth > 0 && srcActive(DS_DEPTH, DS_SUB_NMEA_DPT))   boatState->setDepth(depth);
     if (offset != 0) boatState->setDepthOffset(offset);
 }
 
@@ -265,7 +273,7 @@ void NMEAParser::parseDBT(const char* line) {
     char buffer[32];
     parseField(line, 3, buffer, sizeof(buffer));
     float depth = atof(buffer);
-    if (depth > 0) boatState->setDepth(depth);
+    if (depth > 0 && srcActive(DS_DEPTH, DS_SUB_NMEA_DBT)) boatState->setDepth(depth);
 }
 
 // $WIMWV - Wind Speed and Angle
@@ -288,9 +296,9 @@ void NMEAParser::parseMWV(const char* line) {
     if (buffer[0] != 'A') return;  // V=invalid
 
     if (reference == 'R') {
-        boatState->setApparentWind(speed, angle);
+        if (srcActive(DS_WIND_APPARENT, DS_SUB_NMEA_MWV)) boatState->setApparentWind(speed, angle);
     } else if (reference == 'T') {
-        boatState->setTrueWind(speed, angle, angle);
+        if (srcActive(DS_WIND_TRUE, DS_SUB_NMEA_MWV)) boatState->setTrueWind(speed, angle, angle);
     }
 }
 
@@ -304,7 +312,7 @@ void NMEAParser::parseMWD(const char* line) {
     parseField(line, 5, buffer, sizeof(buffer));
     float speed = parseKnots(buffer);
 
-    if (trueDir >= 0 && trueDir < 360) boatState->setTrueWind(speed, 0.0f, trueDir);
+    if (trueDir >= 0 && trueDir < 360 && srcActive(DS_WIND_TRUE, DS_SUB_NMEA_MWD)) boatState->setTrueWind(speed, 0.0f, trueDir);
 }
 
 // $YXMTW - Water Temperature
@@ -312,7 +320,7 @@ void NMEAParser::parseMTW(const char* line) {
     char buffer[32];
     parseField(line, 1, buffer, sizeof(buffer));
     float temp = atof(buffer);
-    if (temp != 0) boatState->setWaterTemp(temp);
+    if (temp != 0 && srcActive(DS_WATER_TEMP, DS_SUB_NMEA_MTW)) boatState->setWaterTemp(temp);
 }
 
 // $VWVHW - Water Speed and Heading
@@ -328,9 +336,9 @@ void NMEAParser::parseVHW(const char* line) {
     parseField(line, 5, buffer, sizeof(buffer));
     float stw = parseKnots(buffer);
 
-    if (trueHeading >= 0 && trueHeading < 360) boatState->setTrueHeading(trueHeading);
-    if (magHeading  >= 0 && magHeading  < 360) boatState->setMagneticHeading(magHeading);
-    if (stw >= 0)                               boatState->setSTW(stw);
+    if (trueHeading >= 0 && trueHeading < 360 && srcActive(DS_HEADING_TRUE, DS_SUB_NMEA_VHW)) boatState->setTrueHeading(trueHeading);
+    if (magHeading  >= 0 && magHeading  < 360 && srcActive(DS_HEADING_MAG, DS_SUB_NMEA_VHW)) boatState->setMagneticHeading(magHeading);
+    if (stw >= 0 && srcActive(DS_STW, DS_SUB_NMEA_VHW))                               boatState->setSTW(stw);
 }
 
 // $VWVLW - Distance Traveled through Water
@@ -343,8 +351,8 @@ void NMEAParser::parseVLW(const char* line) {
     parseField(line, 3, buffer, sizeof(buffer));
     float trip = atof(buffer);
 
-    if (total >= 0) boatState->setTotal(total);
-    if (trip  >= 0) boatState->setTrip(trip);
+    if (total >= 0 && srcActive(DS_TOTAL, DS_SUB_NMEA_VLW)) boatState->setTotal(total);
+    if (trip  >= 0 && srcActive(DS_TRIP, DS_SUB_NMEA_VLW))  boatState->setTrip(trip);
 }
 
 // $GPZDA - UTC Date and Time

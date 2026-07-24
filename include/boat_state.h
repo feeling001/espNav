@@ -7,6 +7,7 @@
 #include <ArduinoJson.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
+#include "data_source_manager.h"
 
 // Timeout values in milliseconds
 #define DATA_TIMEOUT_DEFAULT 10000  // 10 seconds for most data
@@ -334,7 +335,7 @@ struct AlarmState {
  */
 class BoatState {
 public:
-    BoatState();
+    BoatState(DataSourceManager* dataSourceManager = nullptr);
     ~BoatState();
 
     /** Polar diagram — public for direct load/query access from web_server */
@@ -464,6 +465,9 @@ private:
     
     // Thread safety
     SemaphoreHandle_t mutex;
+
+    // Data source selection (may be nullptr — all compute paths active by default)
+    DataSourceManager* dataSourceManager;
 
     // ── EMA damping state ──────────────────────────────────────────────────
     float    _dampingTau   = 0.0f;   ///< Time constant in seconds (0 = disabled)

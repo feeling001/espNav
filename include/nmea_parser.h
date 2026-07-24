@@ -4,10 +4,11 @@
 #include <Arduino.h>
 #include "types.h"
 #include "boat_state.h"
+#include "data_source_manager.h"
 
 class NMEAParser {
 public:
-    NMEAParser(BoatState* boatState = nullptr);
+    NMEAParser(BoatState* boatState = nullptr, DataSourceManager* dataSourceManager = nullptr);
     
     bool parseLine(const char* line, NMEASentence& out);
     bool validateChecksum(const char* line);
@@ -52,10 +53,15 @@ private:
     float parseKnots(const char* speed);
     float parseDegrees(const char* degrees);
     int parseField(const char* line, int fieldIndex, char* buffer, size_t bufferSize);
-    
+
+    // True if `sub` is the currently selected source for `field` (or if no
+    // DataSourceManager was wired in, in which case every source is active).
+    bool srcActive(uint8_t field, DataSubSource sub) const;
+
     uint32_t validSentences;
     uint32_t invalidSentences;
     BoatState* boatState;
+    DataSourceManager* dataSourceManager;
 };
 
 #endif // NMEA_PARSER_H

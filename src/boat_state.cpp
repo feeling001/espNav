@@ -2,7 +2,7 @@
 #include "functions.h"
 #include <math.h>
 
-BoatState::BoatState() {
+BoatState::BoatState(DataSourceManager* dsm) : dataSourceManager(dsm) {
     mutex = xSemaphoreCreateMutex();
 }
 
@@ -181,8 +181,9 @@ void BoatState::setSTW(float stw) {
     xSemaphoreTake(mutex, portMAX_DELAY);
     speed.stw.set(stw, "kn");
     xSemaphoreGive(mutex);
-    // Recompute performance metrics with the new STW value
+    // Recompute performance metrics and derived wind data with the new STW value
     updatePerformance();
+    calculateDerivedData();
 }
 
 void BoatState::setTrip(float trip) {
@@ -205,6 +206,10 @@ void BoatState::setMagneticHeading(float heading_val) {
     xSemaphoreTake(mutex, portMAX_DELAY);
     heading.magnetic.set(heading_val, "deg");
     xSemaphoreGive(mutex);
+
+    // Recompute True Heading if it is configured to be derived from
+    // magnetic heading + variation.
+    calculateDerivedData();
 }
 
 void BoatState::setTrueHeading(float heading_val) {
@@ -429,31 +434,52 @@ void BoatState::cleanupStaleData() {
 void BoatState::calculateDerivedData() {
     xSemaphoreTake(mutex, portMAX_DELAY);
     
-    // Calculate True Wind from Apparent Wind if we have STW and COG
-    if (wind.aws.valid && wind.awa.valid && speed.stw.valid && heading.true_heading.valid) {
-        float awa_rad = wind.awa.value * PI / 180.0;
-        
-        float boat_speed = speed.stw.value;
-        float boat_vx = boat_speed * sin(0);
-        float boat_vy = boat_speed * cos(0);
-        
-        float aws = wind.aws.value;
-        float aw_vx = aws * sin(awa_rad);
-        float aw_vy = aws * cos(awa_rad);
-        
-        float tw_vx = aw_vx - boat_vx;
-        float tw_vy = aw_vy - boat_vy;
-        
-        float tws = sqrt(tw_vx * tw_vx + tw_vy * tw_vy);
-        float twa = atan2(tw_vx, tw_vy) * 180.0 / PI;
-        
-        float twd = heading.true_heading.value + twa;
-        if (twd < 0) twd += 360;
-        if (twd >= 360) twd -= 360;
-        
-        wind.tws.set(tws, "kn");
-        wind.twa.set(twa, "deg");
-        wind.twd.set(twd, "deg");
+    // Calculate True Heading from Magnetic Heading + variation (compute source)
+    // Done first so it's available below for True Wind Direction (TWD).
+    if (dataSourceManager && dataSourceManager->isActive(DS_HEADING_TRUE, DS_SUB_COMPUTE)) {
+        if (heading.magnetic.valid) {
+            float trueHdg = heading.magnetic.value + dataSourceManager->getMagneticVariation();
+            trueHdg = fmodf(trueHdg, 360.0f);
+            if (trueHdg < 0) trueHdg += 360.0f;
+            heading.true_heading.set(trueHdg, "deg");
+        }
+    }
+
+    // Calculate True Wind from Apparent Wind + STW.
+    // TWS/TWA are boat-relative and only need AWS/AWA/STW. TWD (absolute
+    // direction) additionally needs a heading reference — prefer true
+    // heading, fall back to magnetic heading if true heading isn't available.
+    if (!dataSourceManager || dataSourceManager->isActive(DS_WIND_TRUE, DS_SUB_COMPUTE)) {
+        if (wind.aws.valid && wind.awa.valid && speed.stw.valid) {
+            float awa_rad = wind.awa.value * PI / 180.0;
+            
+            float boat_speed = speed.stw.value;
+            float boat_vx = boat_speed * sin(0);
+            float boat_vy = boat_speed * cos(0);
+            
+            float aws = wind.aws.value;
+            float aw_vx = aws * sin(awa_rad);
+            float aw_vy = aws * cos(awa_rad);
+            
+            float tw_vx = aw_vx - boat_vx;
+            float tw_vy = aw_vy - boat_vy;
+            
+            float tws = sqrt(tw_vx * tw_vx + tw_vy * tw_vy);
+            float twa = atan2(tw_vx, tw_vy) * 180.0 / PI;
+            
+            wind.tws.set(tws, "kn");
+            wind.twa.set(twa, "deg");
+            
+            const DataPoint* headingRef = heading.true_heading.valid ? &heading.true_heading
+                                         : heading.magnetic.valid     ? &heading.magnetic
+                                                                       : nullptr;
+            if (headingRef) {
+                float twd = headingRef->value + twa;
+                if (twd < 0) twd += 360;
+                if (twd >= 360) twd -= 360;
+                wind.twd.set(twd, "deg");
+            }
+        }
     }
     
     // Calculate VMG to wind

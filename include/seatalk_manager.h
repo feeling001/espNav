@@ -5,6 +5,7 @@
 #include "seatalk_rmt.h"
 #include "boat_state.h"
 #include "types.h"
+#include "data_source_manager.h"
 
 /**
  * @brief Semantic SeaTalk1 layer — sits above SeatalkRMT.
@@ -55,7 +56,7 @@ public:
      * @param boatState Pointer to the shared BoatState; updated when AP frames
      *                  are received.  May be nullptr (parsing disabled).
      */
-    SeatalkManager(SeatalkRMT* rmt, BoatState* boatState = nullptr);
+    SeatalkManager(SeatalkRMT* rmt, BoatState* boatState = nullptr, DataSourceManager* dataSourceManager = nullptr);
     ~SeatalkManager();
 
     // ── Autopilot command dispatch ────────────────────────────────────────────
@@ -123,6 +124,7 @@ public:
 private:
     SeatalkRMT*       rmt;
     BoatState*        boatState;
+    DataSourceManager* dataSourceManager;
     SemaphoreHandle_t txMutex;
 
     // ── Conversion state ──────────────────────────────────────────────────────
@@ -162,6 +164,13 @@ private:
     /// Encode a 0-359° angle to the Seatalk U-nibble / VW byte format
     /// used by datagrams 0x53, 0x89, 0x9C.
     static void encodeAngle(uint16_t deg, uint8_t& U_nibble, uint8_t& VW);
+
+    /// Decode the U-nibble / VW byte angle format back to degrees (0-359).
+    static float decodeAngle(uint8_t U_nibble, uint8_t VW);
+
+    /// True if `sub` is the currently selected source for `field` (or if no
+    /// DataSourceManager was wired in, in which case every source is active).
+    bool srcActive(uint8_t field, DataSubSource sub) const;
 
     // ── Incoming frame parser ─────────────────────────────────────────────────
 

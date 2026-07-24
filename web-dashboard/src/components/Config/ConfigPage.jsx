@@ -5,6 +5,7 @@ import { BLEConfig }         from './BLEConfig';
 import { OTAUpdate }         from './OTAUpdate';
 import { StorageManager }    from './StorageManager';
 import { ConversionsConfig } from './ConversionsConfig';
+import { DataSourceConfig }  from './DataSourceConfig';
 import { DebugConsole }      from './DebugConsole';
 
 const TABS = [
@@ -12,6 +13,7 @@ const TABS = [
   { id: 'serial',      label: '🔌 Serial'        },
   { id: 'ble',         label: '🔵 Bluetooth'     },
   { id: 'conversions', label: '🔄 Conversions'   },
+  { id: 'datasources', label: '📡 Sources'       },
   { id: 'ota',         label: '⬆ Firmware'      },
   { id: 'storage',     label: '💾 Storage'       },
   { id: 'debug',       label: '🐞 Debug'         },
@@ -41,6 +43,7 @@ export function ConfigPage() {
         {activeTab === 'serial'      && <SerialConfig />}
         {activeTab === 'ble'         && <BLEConfig />}
         {activeTab === 'conversions' && <ConversionsConfig />}
+        {activeTab === 'datasources' && <DataSourceConfig />}
         {activeTab === 'ota'         && <OTAUpdate />}
         {activeTab === 'storage'     && <StorageManager />}
         {activeTab === 'debug'       && <DebugConsole />}

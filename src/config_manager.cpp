@@ -231,6 +231,28 @@ bool ConfigManager::setConversionConfig(const ConversionConfig& config) {
     return true;
 }
 
+bool ConfigManager::getDataSourceConfig(DataSourceConfig& config) {
+    DataSourceConfig defaults;
+    for (int i = 0; i < DS_FIELD_COUNT; i++) {
+        char key[20];
+        snprintf(key, sizeof(key), "ds_src_%d", i);
+        config.source[i] = (uint8_t)nvs.getUChar(key, defaults.source[i]);
+    }
+    config.magneticVariation = nvs.getFloat("ds_magvar", 0.0f);
+    return true;
+}
+
+bool ConfigManager::setDataSourceConfig(const DataSourceConfig& config) {
+    for (int i = 0; i < DS_FIELD_COUNT; i++) {
+        char key[20];
+        snprintf(key, sizeof(key), "ds_src_%d", i);
+        nvs.putUChar(key, config.source[i]);
+    }
+    nvs.putFloat("ds_magvar", config.magneticVariation);
+    serialPrintf("[Config] \u2713 Data source config saved\n");
+    return true;
+}
+
 void ConfigManager::factoryReset() {
     serialPrintf("[Config] Performing factory reset...\n");
     

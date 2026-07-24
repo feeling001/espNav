@@ -36,8 +36,8 @@ static const struct { const char* name; uint8_t nibble; } LAMP_TABLE[] = {
 
 // ── Constructor / Destructor ──────────────────────────────────────────────────
 
-SeatalkManager::SeatalkManager(SeatalkRMT* r, BoatState* bs)
-    : rmt(r), boatState(bs) {
+SeatalkManager::SeatalkManager(SeatalkRMT* r, BoatState* bs, DataSourceManager* dsm)
+    : rmt(r), boatState(bs), dataSourceManager(dsm) {
     txMutex   = xSemaphoreCreateMutex();
     _convMutex = xSemaphoreCreateMutex();
     memset(_convLastSent, 0, sizeof(_convLastSent));
@@ -316,6 +316,21 @@ void SeatalkManager::encodeAngle(uint16_t deg, uint8_t& U_nibble, uint8_t& VW) {
     VW       = vw_val & 0x3F;
 }
 
+// ── Private: decodeAngle ──────────────────────────────────────────────────────
+// Inverse of encodeAngle(): (U & 0x3)*90 + (VW & 0x3F)*2 + (U & 0xC)/8
+float SeatalkManager::decodeAngle(uint8_t U_nibble, uint8_t VW) {
+    float deg = (U_nibble & 0x3) * 90.0f + (VW & 0x3F) * 2.0f + (U_nibble & 0xC) / 8.0f;
+    deg = fmodf(deg, 360.0f);
+    if (deg < 0.0f) deg += 360.0f;
+    return deg;
+}
+
+// ── Private: srcActive ─────────────────────────────────────────────────────
+bool SeatalkManager::srcActive(uint8_t field, DataSubSource sub) const {
+    if (!dataSourceManager) return true;
+    return dataSourceManager->isActive(field, sub);
+}
+
 // ── Private: convSendCOG ── datagram 0x53 ────────────────────────────────────
 // Ref: 53  U0  VW   COG: (U&3)*90 + (VW&0x3F)*2 + (U&0xC)/8
 bool SeatalkManager::convSendCOG(float cog_deg) {
@@ -488,7 +503,7 @@ void SeatalkManager::parseFrame(const uint8_t* frame, uint8_t len) {
 
             uint16_t headingRaw = ((uint16_t)(frame[2] & 0x03) << 8) | frame[3];
             float heading = headingRaw / 2.0f;
-            if (heading >= 0.0f && heading < 360.0f) {
+            if (heading >= 0.0f && heading < 360.0f && srcActive(DS_HEADING_MAG, DS_SUB_SEATALK)) {
                 boatState->setMagneticHeading(heading);
             }
 
@@ -502,7 +517,7 @@ void SeatalkManager::parseFrame(const uint8_t* frame, uint8_t len) {
             if (len < 4) break;
             uint16_t stwRaw = ((uint16_t)frame[2] << 8) | frame[3];
             float stw = stwRaw / 10.0f;
-            if (stw >= 0.0f && stw < 100.0f) {
+            if (stw >= 0.0f && stw < 100.0f && srcActive(DS_STW, DS_SUB_SEATALK)) {
                 boatState->setSTW(stw);
             }
             break;
@@ -514,9 +529,11 @@ void SeatalkManager::parseFrame(const uint8_t* frame, uint8_t len) {
             uint16_t awaRaw = ((uint16_t)(frame[2] & 0x03) << 8) | frame[3];
             float awa = awaRaw / 2.0f;
             if (awa > 180.0f) awa -= 360.0f;
-            WindData w = boatState->getWind();
-            float aws = w.aws.valid ? w.aws.value : 0.0f;
-            boatState->setApparentWind(aws, awa);
+            if (srcActive(DS_WIND_APPARENT, DS_SUB_SEATALK)) {
+                WindData w = boatState->getWind();
+                float aws = w.aws.valid ? w.aws.value : 0.0f;
+                boatState->setApparentWind(aws, awa);
+            }
             break;
         }
 
@@ -526,9 +543,106 @@ void SeatalkManager::parseFrame(const uint8_t* frame, uint8_t len) {
             float aws = (float)frame[2];
             uint8_t frac = (frame[3] >> 4) & 0x0F;
             aws += frac * 0.1f;
-            WindData w = boatState->getWind();
-            float awa = w.awa.valid ? w.awa.value : 0.0f;
-            boatState->setApparentWind(aws, awa);
+            if (srcActive(DS_WIND_APPARENT, DS_SUB_SEATALK)) {
+                WindData w = boatState->getWind();
+                float awa = w.awa.valid ? w.awa.value : 0.0f;
+                boatState->setApparentWind(aws, awa);
+            }
+            break;
+        }
+
+        // ── 0x00: Depth below transducer ───────────────────────────────────
+        // Ref: 00 02 YZ XX XX — Depth: XXXX/10 feet
+        case 0x00: {
+            if (len < 5) break;
+            uint16_t raw = ((uint16_t)frame[4] << 8) | frame[3];
+            float depth_ft = raw / 10.0f;
+            float depth_m  = depth_ft / 3.28084f;
+            if (depth_m > 0.0f && srcActive(DS_DEPTH, DS_SUB_SEATALK)) {
+                boatState->setDepth(depth_m);
+            }
+            break;
+        }
+
+        // ── 0x27: Water temperature ─────────────────────────────────────────
+        // Ref: 27 01 XX XX — Temp: (XXXX-100)/10 °C
+        case 0x27: {
+            if (len < 4) break;
+            uint16_t raw = ((uint16_t)frame[3] << 8) | frame[2];
+            float temp_c = (raw - 100) / 10.0f;
+            if (srcActive(DS_WATER_TEMP, DS_SUB_SEATALK)) {
+                boatState->setWaterTemp(temp_c);
+            }
+            break;
+        }
+
+        // ── 0x52: Speed Over Ground ──────────────────────────────────────────
+        // Ref: 52 01 XX XX — SOG: XXXX/10 knots
+        case 0x52: {
+            if (len < 4) break;
+            uint16_t raw = ((uint16_t)frame[3] << 8) | frame[2];
+            float sog = raw / 10.0f;
+            if (sog >= 0.0f && srcActive(DS_GPS_SOG, DS_SUB_SEATALK)) {
+                boatState->setGPSSOG(sog);
+            }
+            break;
+        }
+
+        // ── 0x53: Course Over Ground ─────────────────────────────────────────
+        // Ref: 53 U0 VW — COG: (U&3)*90 + (VW&0x3F)*2 + (U&0xC)/8
+        case 0x53: {
+            if (len < 3) break;
+            float cog = decodeAngle(frame[1] >> 4, frame[2]);
+            if (srcActive(DS_GPS_COG, DS_SUB_SEATALK)) {
+                boatState->setGPSCOG(cog);
+            }
+            break;
+        }
+
+        // ── 0x50 / 0x51: Latitude / Longitude ────────────────────────────────
+        // Ref: 50 Z2 XX YY YY — LAT: XX deg, (YYYY&0x7FFF)/100 min, South if bit15
+        //      51 Z2 XX YY YY — LON: XX deg, (YYYY&0x7FFF)/100 min, East  if bit15
+        case 0x50:
+        case 0x51: {
+            if (len < 5) break;
+            uint8_t  deg  = frame[2];
+            uint16_t yyyy = ((uint16_t)frame[4] << 8) | frame[3];
+            float    minutes = (yyyy & 0x7FFF) / 100.0f;
+            float    value   = deg + minutes / 60.0f;
+            bool     negative = (cmd == 0x50) ? ((yyyy & 0x8000) != 0)   // South
+                                               : ((yyyy & 0x8000) == 0); // West
+            if (negative) value = -value;
+
+            if (srcActive(DS_GPS_POSITION, DS_SUB_SEATALK)) {
+                GPSData gps = boatState->getGPS();
+                float lat = (cmd == 0x50) ? value : (gps.position.lat.valid ? gps.position.lat.value : 0.0f);
+                float lon = (cmd == 0x51) ? value : (gps.position.lon.valid ? gps.position.lon.value : 0.0f);
+                boatState->setGPSPosition(lat, lon);
+            }
+            break;
+        }
+
+        // ── 0x21: Trip distance ───────────────────────────────────────────────
+        // Ref: 21 02 XX XX — Trip: XXXX/10 nm
+        case 0x21: {
+            if (len < 4) break;
+            uint16_t raw = ((uint16_t)frame[3] << 8) | frame[2];
+            float trip = raw / 10.0f;
+            if (srcActive(DS_TRIP, DS_SUB_SEATALK)) {
+                boatState->setTrip(trip);
+            }
+            break;
+        }
+
+        // ── 0x22: Total distance (log) ────────────────────────────────────────
+        // Ref: 22 02 XX XX — Total: XXXX/10 nm
+        case 0x22: {
+            if (len < 4) break;
+            uint16_t raw = ((uint16_t)frame[3] << 8) | frame[2];
+            float total = raw / 10.0f;
+            if (srcActive(DS_TOTAL, DS_SUB_SEATALK)) {
+                boatState->setTotal(total);
+            }
             break;
         }
 
