@@ -147,7 +147,14 @@ bool SeatalkManager::sendExtraCommand(const char* command) {
 // ── Public: update ────────────────────────────────────────────────────────────
 
 void SeatalkManager::update() {
-    if (rmt) rmt->task();
+    if (!rmt) return;
+    rmt->task();
+
+    uint8_t frame[18];
+    uint8_t len = 0;
+    if (rmt->getFrame(frame, len)) {
+        parseFrame(frame, len);
+    }
 }
 
 // ── Private: sendCmd86 ────────────────────────────────────────────────────────
@@ -474,40 +481,51 @@ void SeatalkManager::parseFrame(const uint8_t* frame, uint8_t len) {
 
         // ── 0x84: Autopilot heading, mode, status ─────────────────────────
         case 0x84: {
-            if (len < 11) break;
+            if (len < 9) break;
 
-            uint8_t am = frame[5];
-            const char* mode = "standby";
-            if      (am & 0x08) mode = "track";
-            else if (am & 0x04) mode = "wind";
-            else if (am & 0x02) mode = "auto";
-
+            // --- Mode pilote (nibble bas de l'octet "0Z" = frame[4]) ---
+            uint8_t z = frame[4] & 0x0F;
+            const char* mode = "standby";           // Z & 0x2 == 0
+            if      (z & 0x08) mode = "track";      // Z & 0x8
+            else if (z & 0x04) mode = "wind";       // Z & 0x4
+            else if (z & 0x02) mode = "auto";       // Z & 0x2
             boatState->setAutopilotMode(String(mode));
 
-            uint16_t thRaw = ((uint16_t)(frame[9] & 0x03) << 8) | frame[10];
-            float targetHeading = thRaw / 10.0f;
+            // --- Alarmes (octet "0M" = frame[5]) ---
+            uint8_t m = frame[5] & 0x0F;
+            bool offCourse = (m & 0x04) != 0;
+            bool windShift  = (m & 0x08) != 0;
+            boatState->setAutopilotStatus((offCourse || windShift) ? String("alarm") : String("engaged"));
+
+            // --- Cap de consigne autopilote ---
+            uint8_t V  = frame[2] >> 4;
+            uint8_t XY = frame[3];
+            float targetHeading = ((V >> 2) & 0x03) * 90.0f + XY / 2.0f;
             boatState->setAutopilotHeadingTarget(targetHeading);
 
-            int8_t rudder = (int8_t)frame[4];
+            // --- Angle gouvernail (RR = frame[6], signé) ---
+            int8_t rudder = (int8_t)frame[6];
             boatState->setAutopilotRudderAngle((float)rudder);
-
-            uint8_t ar = frame[3];
-            bool offCourse = (ar & 0x10) != 0;
-            boatState->setAutopilotStatus(offCourse ? String("alarm") : String("engaged"));
             break;
         }
 
         // ── 0x9C: Compass heading + rudder position ───────────────────────
         case 0x9C: {
-            if (len < 5) break;
+            if (len < 4) break;   // trame réelle = 4 octets (index 0..3)
 
-            uint16_t headingRaw = ((uint16_t)(frame[2] & 0x03) << 8) | frame[3];
-            float heading = headingRaw / 2.0f;
+            uint8_t U  = frame[1] >> 4;   // nibble haut de U1
+            uint8_t VW = frame[2];
+
+            uint8_t adj = 0;
+            if (U & 0x0C) adj = ((U & 0x0C) == 0x0C) ? 2 : 1;
+
+            float heading = (U & 0x03) * 90.0f + (VW & 0x3F) * 2.0f + adj;
+
             if (heading >= 0.0f && heading < 360.0f && srcActive(DS_HEADING_MAG, DS_SUB_SEATALK)) {
-                boatState->setMagneticHeading(heading);
+               boatState->setMagneticHeading(heading);
             }
 
-            int8_t rudder = (int8_t)frame[4];
+            int8_t rudder = (int8_t)frame[3];   // RR est bien le 4e octet (index 3)
             boatState->setAutopilotRudderAngle((float)rudder);
             break;
         }

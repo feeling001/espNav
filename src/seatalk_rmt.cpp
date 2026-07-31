@@ -82,6 +82,21 @@ void SeatalkRMT::handleframe() {
     serialPrintf("]\n");
     
     _logManager->logSeatalk(_frame, _framelen);
+    _frameReady = true;
+}
+
+bool SeatalkRMT::getFrame(uint8_t* outFrame, uint8_t& outLen) {
+    bool has = false;
+    if (_rxMutex && xSemaphoreTake(_rxMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        if (_frameReady) {
+            outLen = _framelen;
+            for (uint8_t i = 0; i < _framelen; i++) outFrame[i] = _frame[i];
+            _frameReady = false;
+            has = true;
+        }
+        xSemaphoreGive(_rxMutex);
+    }
+    return has;
 }
 
 void SeatalkRMT::addchar() {

@@ -1620,6 +1620,41 @@ void WebServer::handleGetNavigation(AsyncWebServerRequest* request) {
     if (speed.total.valid && !speed.total.isStale())  { doc["total"]["value"] = speed.total.value; doc["total"]["unit"] = speed.total.unit; }
     else                                              { doc["total"]["value"] = nullptr;            doc["total"]["unit"] = "nm"; }
 
+    // ── Autopilot ─────────────────────────────────────────────────
+    {
+        AutopilotData ap = boatState->getAutopilot();
+        JsonObject apObj = doc["autopilot"].to<JsonObject>();
+
+        if (ap.valid && !ap.isStale()) {
+            apObj["mode"]   = ap.mode;
+            apObj["status"] = ap.status;
+            apObj["alarm"]  = ap.alarm;
+            apObj["age"]    = (millis() - ap.timestamp) / 1000.0;
+
+            auto addAP = [&](const char* key, const DataPoint& dp, const char* unit) {
+                if (dp.valid && !dp.isStale()) {
+                    apObj[key]["value"] = dp.value;
+                    apObj[key]["unit"]  = dp.unit;
+                    apObj[key]["age"]   = (millis() - dp.timestamp) / 1000.0;
+                } else {
+                    apObj[key]["value"] = nullptr;
+                    apObj[key]["unit"]  = unit;
+                    apObj[key]["age"]   = nullptr;
+                }
+            };
+
+            addAP("heading_target",    ap.heading_target,    "deg");
+            addAP("wind_angle_target", ap.wind_angle_target, "deg");
+            addAP("rudder_angle",      ap.rudder_angle,      "deg");
+            addAP("xte",               ap.xte,               "nm");
+        } else {
+            apObj["mode"]   = nullptr;
+            apObj["status"] = nullptr;
+            apObj["alarm"]  = nullptr;
+            apObj["age"]    = nullptr;
+        }
+    }
+
     String response;
     serializeJson(doc, response);
     request->send(200, "application/json", response);

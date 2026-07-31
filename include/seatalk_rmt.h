@@ -55,6 +55,18 @@ public:
     void task();                            ///< Call regularly from a FreeRTOS task.
     bool sendDatagram(uint8_t* buffer, uint8_t len);
 
+    /**
+     * @brief Retrieve the last fully-decoded RX frame, if any is pending.
+     *
+     * Thread-safe (guarded by _rxMutex). Clears the pending flag once read,
+     * so each completed frame is only delivered once. Call this after
+     * task() to feed SeatalkManager::parseFrame().
+     *
+     * @param outFrame  Buffer to receive the frame bytes (must hold >= 18 bytes).
+     * @param outLen    Set to the frame length when a frame is returned.
+     * @return true if a new frame was copied into outFrame.
+     */
+    bool getFrame(uint8_t* outFrame, uint8_t& outLen);
 
 private:
     // ── Pin / channel configuration ───────────────────────────────────────────
@@ -88,6 +100,7 @@ private:
     uint16_t            _shiftreg;
     uint8_t             _framelen;
     uint8_t             _frame[18];
+    bool                _frameReady = false;   ///< Set by handleframe(), cleared by getFrame().
 
     // ── TX item buffer ────────────────────────────────────────────────────────
     rmt_item32_t        _items[128];
