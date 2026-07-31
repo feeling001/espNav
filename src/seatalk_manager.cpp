@@ -641,11 +641,15 @@ void SeatalkManager::parseFrame(const uint8_t* frame, uint8_t len) {
         }
 
         // ── 0x21: Trip distance ───────────────────────────────────────────────
-        // Ref: 21 02 XX XX — Trip: XXXX/10 nm
+        // Ref (thomasknauf.de/rap/seatalk2.htm):
+        //   21 02 XX XX 0X  Trip Mileage: XXXXX/100 nautical miles
+        // 3 data bytes: frame[2]=low, frame[3]=mid, low nibble of frame[4]=high bits
         case 0x21: {
-            if (len < 4) break;
-            uint16_t raw = ((uint16_t)frame[3] << 8) | frame[2];
-            float trip = raw / 10.0f;
+            if (len < 5) break;
+            uint32_t raw = (uint32_t)frame[2]
+                         | ((uint32_t)frame[3] << 8)
+                         | ((uint32_t)(frame[4] & 0x0F) << 16);
+            float trip = raw / 100.0f;
             if (srcActive(DS_TRIP, DS_SUB_SEATALK)) {
                 boatState->setTrip(trip);
             }
@@ -653,7 +657,8 @@ void SeatalkManager::parseFrame(const uint8_t* frame, uint8_t len) {
         }
 
         // ── 0x22: Total distance (log) ────────────────────────────────────────
-        // Ref: 22 02 XX XX — Total: XXXX/10 nm
+        // Ref (thomasknauf.de/rap/seatalk2.htm):
+        //   22 02 XX XX 00  Total Mileage: XXXX/10 nautical miles
         case 0x22: {
             if (len < 4) break;
             uint16_t raw = ((uint16_t)frame[3] << 8) | frame[2];
