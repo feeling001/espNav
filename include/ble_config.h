@@ -71,6 +71,19 @@
 #define BLE_CHAR_ALARM_CMD_UUID         "4d475743-0602-4e41-5649-474154494f4e"
 
 // ============================================================
+// AIS Service
+// Exposes AIS targets (same data as the /api/boat/ais REST endpoint).
+// ============================================================
+#define BLE_SERVICE_AIS_UUID            "4d475743-0007-4e41-5649-474154494f4e"
+
+/// READ + NOTIFY — AIS targets: target_count + targets[] (see BLE_Client_Documentation.md)
+#define BLE_CHAR_AIS_DATA_UUID          "4d475743-0701-4e41-5649-474154494f4e"
+
+/// Max number of targets sent over BLE per notification (closest first),
+/// kept low to stay within the BLE attribute/MTU size limit.
+#define BLE_AIS_MAX_TARGETS             6
+
+// ============================================================
 // Limits & task config
 // ============================================================
 #define BLE_MAX_CONNECTIONS     3

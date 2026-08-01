@@ -56,15 +56,17 @@ public:
     bool sendDatagram(uint8_t* buffer, uint8_t len);
 
     /**
-     * @brief Retrieve the last fully-decoded RX frame, if any is pending.
+     * @brief Pop the oldest fully-decoded RX frame from the internal queue,
+     *        if any is pending.
      *
-     * Thread-safe (guarded by _rxMutex). Clears the pending flag once read,
-     * so each completed frame is only delivered once. Call this after
-     * task() to feed SeatalkManager::parseFrame().
+     * Thread-safe (guarded by _rxMutex). Each completed frame is delivered
+     * exactly once, in FIFO order. Call this repeatedly (in a loop, until it
+     * returns false) after task() to feed SeatalkManager::parseFrame() —
+     * several frames may have completed since the last poll.
      *
      * @param outFrame  Buffer to receive the frame bytes (must hold >= 18 bytes).
      * @param outLen    Set to the frame length when a frame is returned.
-     * @return true if a new frame was copied into outFrame.
+     * @return true if a frame was copied into outFrame.
      */
     bool getFrame(uint8_t* outFrame, uint8_t& outLen);
 
@@ -100,7 +102,18 @@ private:
     uint16_t            _shiftreg;
     uint8_t             _framelen;
     uint8_t             _frame[18];
-    bool                _frameReady = false;   ///< Set by handleframe(), cleared by getFrame().
+
+    /// Small FIFO queue of fully-decoded frames awaiting consumption by
+    /// getFrame(). A single-slot buffer would silently drop frames whenever
+    /// several datagrams complete between two getFrame() polls (e.g. rare
+    /// datagrams like 0x21/0x22 trip/total getting overwritten by frequent
+    /// ones such as 0x53 COG or 0x9C heading before they can be read).
+    static const uint8_t kFrameQueueSize = 8;
+    uint8_t             _frameQueue[kFrameQueueSize][18];
+    uint8_t             _frameQueueLen[kFrameQueueSize];
+    uint8_t             _frameQueueHead = 0;   ///< Next slot to pop from.
+    uint8_t             _frameQueueTail = 0;   ///< Next slot to push into.
+    uint8_t             _frameQueueCount = 0;  ///< Number of frames currently queued.
 
     // ── TX item buffer ────────────────────────────────────────────────────────
     rmt_item32_t        _items[128];

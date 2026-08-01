@@ -278,6 +278,7 @@ BLEManager::BLEManager()
       pPerformanceService(nullptr), pPerformanceDataChar(nullptr),
       pAdminService(nullptr),       pAdminDataChar(nullptr),     pAdminCmdChar(nullptr),
       pAlarmService(nullptr),       pAlarmDataChar(nullptr),     pAlarmCmdChar(nullptr),
+      pAisService(nullptr),         pAisDataChar(nullptr),
       serverCallbacks(nullptr), autopilotCmdCallbacks(nullptr), adminCmdCallbacks(nullptr),
       alarmCmdCallbacks(nullptr),
       boatState(nullptr), seatalkManager(nullptr),
@@ -385,6 +386,7 @@ void BLEManager::update() {
     updatePerformanceData();
     updateAdminData();
     updateAlarmData();
+    updateAisData();
 }
 
 void BLEManager::updateTask(void* param) {
@@ -480,6 +482,13 @@ void BLEManager::setupServices() {
         NIMBLE_PROPERTY::WRITE);
     pAlarmCmdChar->setCallbacks(alarmCmdCallbacks);
     serialPrintf("[BLE]   ✓ Alarm service\n");
+
+    // ── AIS ──────────────────────────────────────────
+    pAisService  = pServer->createService(BLE_SERVICE_AIS_UUID);
+    pAisDataChar = pAisService->createCharacteristic(
+        BLE_CHAR_AIS_DATA_UUID,
+        NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
+    serialPrintf("[BLE]   ✓ AIS service\n");
 
     serialPrintf("[BLE] ✓ All services created\n");
 }
@@ -598,6 +607,13 @@ void BLEManager::updateAlarmData() {
     String json = buildAlarmJSON();
     pAlarmDataChar->setValue(json.c_str());
     pAlarmDataChar->notify();
+}
+
+void BLEManager::updateAisData() {
+    if (!pAisDataChar) return;
+    String json = buildAisJSON();
+    pAisDataChar->setValue(json.c_str());
+    pAisDataChar->notify();
 }
 
 // ============================================================
@@ -770,6 +786,67 @@ String BLEManager::buildAlarmJSON() {
     doc["ais_trigger_mmsi"] = state.ais_trigger_mmsi;
     doc["any_active"]       = state.anyActive();
     doc["any_unacked"]      = state.anyUnacked();
+
+    String out;
+    serializeJson(doc, out);
+    return out;
+}
+
+String BLEManager::buildAisJSON() {
+    JsonDocument doc;
+
+    if (!boatState) {
+        String out;
+        serializeJson(doc, out);
+        return out;
+    }
+
+    AISData ais = boatState->getAIS();
+
+    // Collect non-stale targets, then keep only the closest ones so the
+    // notification stays within the BLE attribute/MTU size limit.
+    AISTarget* valid[MAX_AIS_TARGETS];
+    int validCount = 0;
+    unsigned long now = millis();
+
+    for (int i = 0; i < ais.targetCount; i++) {
+        AISTarget& target = ais.targets[i];
+        if ((now - target.timestamp) <= DATA_TIMEOUT_AIS) {
+            valid[validCount++] = &target;
+        }
+    }
+
+    // Simple insertion sort by distance (ascending) — target counts are small.
+    for (int i = 1; i < validCount; i++) {
+        AISTarget* key = valid[i];
+        int j = i - 1;
+        while (j >= 0 && valid[j]->distance > key->distance) {
+            valid[j + 1] = valid[j];
+            j--;
+        }
+        valid[j + 1] = key;
+    }
+
+    int sentCount = validCount < BLE_AIS_MAX_TARGETS ? validCount : BLE_AIS_MAX_TARGETS;
+
+    doc["target_count"] = sentCount;
+    JsonArray targetsArray = doc["targets"].to<JsonArray>();
+    for (int i = 0; i < sentCount; i++) {
+        AISTarget* target = valid[i];
+        JsonObject targetObj = targetsArray.add<JsonObject>();
+        targetObj["mmsi"]     = target->mmsi;
+        targetObj["name"]     = target->name;
+        targetObj["lat"]      = target->lat;
+        targetObj["lon"]      = target->lon;
+        targetObj["cog"]      = target->cog;
+        targetObj["sog"]      = target->sog;
+        targetObj["heading"]  = target->heading;
+        targetObj["distance"] = target->distance;
+        targetObj["bearing"]  = target->bearing;
+        targetObj["cpa"]      = target->cpa;
+        targetObj["tcpa"]     = target->tcpa;
+        targetObj["age"]      = (uint32_t)((now - target->timestamp) / 1000);
+    }
 
     String out;
     serializeJson(doc, out);

@@ -1,5 +1,6 @@
 #include "seatalk_rmt.h"
 #include "functions.h"
+#include <string.h>
 
 SeatalkRMT::SeatalkRMT(LogManager* logManager) {
     _logManager = logManager;
@@ -82,16 +83,31 @@ void SeatalkRMT::handleframe() {
     serialPrintf("]\n");
     
     _logManager->logSeatalk(_frame, _framelen);
-    _frameReady = true;
+
+    // Push into the FIFO queue. If the queue is full (consumer too slow),
+    // drop the oldest queued frame to make room rather than silently
+    // dropping this newly-completed one — either way a frame is lost, but
+    // this keeps the queue full of the most recent data.
+    if (_frameQueueCount == kFrameQueueSize) {
+        _frameQueueHead = (_frameQueueHead + 1) % kFrameQueueSize;
+        _frameQueueCount--;
+        serialPrintf("[SeaTalk] RX queue full, dropping oldest frame\n");
+    }
+    uint8_t len = (_framelen > sizeof(_frame)) ? sizeof(_frame) : _framelen;
+    memcpy(_frameQueue[_frameQueueTail], _frame, len);
+    _frameQueueLen[_frameQueueTail] = len;
+    _frameQueueTail = (_frameQueueTail + 1) % kFrameQueueSize;
+    _frameQueueCount++;
 }
 
 bool SeatalkRMT::getFrame(uint8_t* outFrame, uint8_t& outLen) {
     bool has = false;
     if (_rxMutex && xSemaphoreTake(_rxMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-        if (_frameReady) {
-            outLen = _framelen;
-            for (uint8_t i = 0; i < _framelen; i++) outFrame[i] = _frame[i];
-            _frameReady = false;
+        if (_frameQueueCount > 0) {
+            outLen = _frameQueueLen[_frameQueueHead];
+            memcpy(outFrame, _frameQueue[_frameQueueHead], outLen);
+            _frameQueueHead = (_frameQueueHead + 1) % kFrameQueueSize;
+            _frameQueueCount--;
             has = true;
         }
         xSemaphoreGive(_rxMutex);

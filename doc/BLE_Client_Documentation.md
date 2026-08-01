@@ -18,18 +18,19 @@
 7. [Sail Performance Service](#7-sail-performance-service)
 8. [Admin Service](#8-admin-service)
 9. [Alarm Service](#9-alarm-service)
-10. [Sending Autopilot Commands](#10-sending-autopilot-commands)
-11. [Sending Admin Commands](#11-sending-admin-commands)
-12. [Sending Alarm Commands](#12-sending-alarm-commands)
-13. [Behavior and Timing](#13-behavior-and-timing)
-14. [Integration Flow Example](#14-integration-flow-example)
-15. [UUID Reference Table](#15-uuid-reference-table)
+10. [AIS Service](#10-ais-service)
+11. [Sending Autopilot Commands](#11-sending-autopilot-commands)
+12. [Sending Admin Commands](#12-sending-admin-commands)
+13. [Sending Alarm Commands](#13-sending-alarm-commands)
+14. [Behavior and Timing](#14-behavior-and-timing)
+15. [Integration Flow Example](#15-integration-flow-example)
+16. [UUID Reference Table](#16-uuid-reference-table)
 
 ---
 
 ## 1. Overview
 
-The Marine Gateway is an ESP32-based bridge that reads NMEA 0183 data from a serial port and exposes it over Bluetooth Low Energy (BLE). It implements a custom GATT profile organized into **6 services**:
+The Marine Gateway is an ESP32-based bridge that reads NMEA 0183 data from a serial port and exposes it over Bluetooth Low Energy (BLE). It implements a custom GATT profile organized into **7 services**:
 
 | Service | Purpose |
 |---|---|
@@ -38,7 +39,8 @@ The Marine Gateway is an ESP32-based bridge that reads NMEA 0183 data from a ser
 | Autopilot | Autopilot state + command input |
 | Sail Performance | VMG, polar efficiency, polar target speed |
 | Admin | System status (uptime, datetime) + administration commands (restart, WiFi config) |
-| **Alarm** | **Depth / AIS proximity / GPS lost alarm configuration, runtime state, acknowledge and beep commands** |
+| Alarm | Depth / AIS proximity / GPS lost alarm configuration, runtime state, acknowledge and beep commands |
+| **AIS** | **Nearby AIS targets (position, course, speed, CPA/TCPA), same data as the `/api/boat/ais` REST endpoint** |
 
 Data is encoded as **UTF-8 JSON** in each characteristic and updated at **1 Hz** (every second).
 
@@ -126,6 +128,13 @@ All UUIDs are 128-bit. The custom base is `4D475743-xxxx-4E41-5649-474154494F4E`
 | **AlarmData Characteristic** | `4d475743-0601-4e41-5649-474154494f4e` |
 | **AlarmCmd Characteristic** | `4d475743-0602-4e41-5649-474154494f4e` |
 
+#### AIS Service
+
+| Element | UUID |
+|---|---|
+| **Service** | `4d475743-0007-4e41-5649-474154494f4e` |
+| **AisData Characteristic** | `4d475743-0701-4e41-5649-474154494f4e` |
+
 ### Characteristic Properties
 
 | Characteristic | READ | NOTIFY | WRITE |
@@ -137,8 +146,9 @@ All UUIDs are 128-bit. The custom base is `4D475743-xxxx-4E41-5649-474154494F4E`
 | PerformanceData | ✅ | ✅ | ❌ |
 | AdminData | ✅ | ✅ | ❌ |
 | AdminCmd | ❌ | ❌ | ✅ |
-| **AlarmData** | **✅** | **✅** | **❌** |
-| **AlarmCmd** | **❌** | **❌** | **✅** |
+| AlarmData | ✅ | ✅ | ❌ |
+| AlarmCmd | ❌ | ❌ | ✅ |
+| **AisData** | **✅** | **✅** | **❌** |
 
 > All `NOTIFY` characteristics include a **CCCD** (UUID `0x2902`).  
 > The client **must enable notifications** on each desired characteristic to receive updates.
@@ -378,7 +388,61 @@ There is no write-response mechanism (the characteristic uses WRITE without resp
 
 ---
 
-## 9. Sending Autopilot Commands
+## 10. AIS Service
+
+**Service UUID:** `4d475743-0007-4e41-5649-474154494f4e`  
+**Characteristic UUID:** `4d475743-0701-4e41-5649-474154494f4e`
+
+This service exposes the same AIS target data as the REST `/api/boat/ais` endpoint: nearby vessels received via the AIS receiver, with position, course, speed, and collision-avoidance metrics (CPA/TCPA).
+
+### Data Format
+
+```json
+{
+  "target_count": 2,
+  "targets": [
+    {
+      "mmsi": 227003660,
+      "name": "SV EXAMPLE",
+      "lat": 47.2456,
+      "lon": -2.1122,
+      "cog": 92.0,
+      "sog": 6.5,
+      "heading": 90.0,
+      "distance": 1.8,
+      "bearing": 112.0,
+      "cpa": 0.3,
+      "tcpa": 12.5,
+      "age": 4
+    }
+  ]
+}
+```
+
+| Field | Type | Unit | Description |
+|---|---|---|---|
+| `target_count` | int | — | Number of targets included in this notification. |
+| `targets` | array | — | List of AIS targets, **closest first**. |
+| `targets[].mmsi` | uint32 | — | Maritime Mobile Service Identity of the target vessel. |
+| `targets[].name` | string | — | Vessel name (may be empty if not yet received). |
+| `targets[].lat` | float | decimal degrees | Target latitude. |
+| `targets[].lon` | float | decimal degrees | Target longitude. |
+| `targets[].cog` | float | degrees (0–360°) | Course Over Ground. |
+| `targets[].sog` | float | kn | Speed Over Ground. |
+| `targets[].heading` | float | degrees (0–360°) | True heading. |
+| `targets[].distance` | float | nm | Distance from own ship to the target. |
+| `targets[].bearing` | float | degrees (0–360°) | Bearing from own ship to the target. |
+| `targets[].cpa` | float | nm | Closest Point of Approach. |
+| `targets[].tcpa` | float | min | Time to Closest Point of Approach. |
+| `targets[].age` | uint32 | s | Time elapsed since the last AIS message received for this target. |
+
+> **Note on target limit:** to stay within the BLE attribute/MTU size limit, only the `BLE_AIS_MAX_TARGETS` (currently **6**) closest non-stale targets are sent per notification, sorted by ascending distance. This may be fewer than the total number of targets available via the REST API. A target is excluded once its AIS data is older than the **AIS data timeout (60 s)**.
+
+> This characteristic is **read-only** — there is no AIS command characteristic. Alarm thresholds related to AIS proximity (`ais_enabled`, `ais_distance_nm`, `own_mmsi`) are configured via the [Alarm Service](#9-alarm-service) `set_config` command.
+
+---
+
+## 11. Sending Autopilot Commands
 
 **Command Characteristic UUID:** `4d475743-0302-4e41-5649-474154494f4e`  
 **Property:** WRITE (no response expected)
@@ -406,7 +470,7 @@ There is no write-response mechanism (the characteristic uses WRITE without resp
 
 ---
 
-## 11. Sending Admin Commands
+## 12. Sending Admin Commands
 
 **Command Characteristic UUID:** `4d475743-0502-4e41-5649-474154494f4e`  
 **Property:** WRITE (no response expected)
@@ -431,7 +495,7 @@ There is no write-response mechanism (the characteristic uses WRITE without resp
 
 ---
 
-## 12. Sending Alarm Commands
+## 13. Sending Alarm Commands
 
 **Command Characteristic UUID:** `4d475743-0602-4e41-5649-474154494f4e`  
 **Property:** WRITE (no response expected)
@@ -459,14 +523,15 @@ There is no write-response mechanism (the characteristic uses WRITE without resp
 
 ---
 
-## 13. Behavior and Timing
+## 14. Behavior and Timing
 
 | Parameter | Value |
 |---|---|
-| Update frequency | **1 Hz** (every 1000 ms) — all services including Admin |
+| Update frequency | **1 Hz** (every 1000 ms) — all services including Admin and AIS |
 | Max simultaneous connections | **3** devices |
 | NMEA data timeout | **10 seconds** (navigation, wind, performance, autopilot) |
 | AIS data timeout | **60 seconds** |
+| Max AIS targets per notification | **6** (closest first) |
 | Reconnection | Automatic (advertising restarts after disconnection) |
 | Reboot delay after `restart` command | **2 seconds** |
 | Reboot delay after `wifi_sta` / `wifi_ap` command | **3 seconds** |
@@ -475,12 +540,12 @@ There is no write-response mechanism (the characteristic uses WRITE without resp
 
 Every second, the device:
 1. Reads the current `BoatState` and system status (FreeRTOS mutex protected).
-2. Serializes all 6 characteristics to JSON.
+2. Serializes all 7 characteristics to JSON.
 3. Sends a BLE notification on each characteristic to all subscribed clients.
 
 ---
 
-## 14. Integration Flow Example
+## 15. Integration Flow Example
 
 ```
 1. SCAN
@@ -506,7 +571,8 @@ Every second, the device:
    ├── Write 0x0100 to AutopilotData CCCD
    ├── Write 0x0100 to PerformanceData CCCD
    ├── Write 0x0100 to AdminData CCCD
-   └── Write 0x0100 to AlarmData CCCD
+   ├── Write 0x0100 to AlarmData CCCD
+   └── Write 0x0100 to AisData CCCD
 
 6. RECEIVE DATA (every ~1 s)
    ├── NavData         → position, speed, heading, depth
@@ -514,7 +580,8 @@ Every second, the device:
    ├── AutopilotData   → autopilot state
    ├── PerformanceData → vmg, polar_pct, target_stw, polar_loaded
    ├── AdminData       → uptime_s, datetime_utc, wifi_mode, wifi_ssid, free_heap
-   └── AlarmData       → alarm config + depth/ais/gps_lost active/acknowledged state
+   ├── AlarmData       → alarm config + depth/ais/gps_lost active/acknowledged state
+   └── AisData         → target_count + list of nearby AIS targets (closest first)
 
 7. HANDLE POLAR STATE
    ├── if polar_loaded == false → show "No polar loaded" in UI
@@ -540,7 +607,7 @@ Every second, the device:
 
 ---
 
-## 15. UUID Reference Table
+## 16. UUID Reference Table
 
 | Element | 128-bit UUID |
 |---|---|
@@ -556,7 +623,9 @@ Every second, the device:
 | Admin Service | `4d475743-0005-4e41-5649-474154494f4e` |
 | Admin Data Characteristic | `4d475743-0501-4e41-5649-474154494f4e` |
 | Admin Command Characteristic | `4d475743-0502-4e41-5649-474154494f4e` |
-| **Alarm Service** | **`4d475743-0006-4e41-5649-474154494f4e`** |
-| **Alarm Data Characteristic** | **`4d475743-0601-4e41-5649-474154494f4e`** |
-| **Alarm Command Characteristic** | **`4d475743-0602-4e41-5649-474154494f4e`** |
+| Alarm Service | `4d475743-0006-4e41-5649-474154494f4e` |
+| Alarm Data Characteristic | `4d475743-0601-4e41-5649-474154494f4e` |
+| Alarm Command Characteristic | `4d475743-0602-4e41-5649-474154494f4e` |
+| **AIS Service** | **`4d475743-0007-4e41-5649-474154494f4e`** |
+| **AIS Data Characteristic** | **`4d475743-0701-4e41-5649-474154494f4e`** |
 | CCCD (enable notifications) | `0x2902` (standard Bluetooth SIG) |

@@ -150,9 +150,13 @@ void SeatalkManager::update() {
     if (!rmt) return;
     rmt->task();
 
+    // Drain the whole RX queue: several frames may have completed since the
+    // last call (e.g. frequent COG/heading datagrams alongside rarer ones
+    // like trip/total). Processing only one per update() would starve the
+    // infrequent commands.
     uint8_t frame[18];
     uint8_t len = 0;
-    if (rmt->getFrame(frame, len)) {
+    while (rmt->getFrame(frame, len)) {
         parseFrame(frame, len);
     }
 }

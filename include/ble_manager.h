@@ -192,6 +192,10 @@ private:
     NimBLEService*        pPerformanceService;
     NimBLECharacteristic* pPerformanceDataChar;
 
+    // AIS service
+    NimBLEService*        pAisService;
+    NimBLECharacteristic* pAisDataChar;
+
     // Admin service
     NimBLEService*        pAdminService;
     NimBLECharacteristic* pAdminDataChar;   // READ + NOTIFY
@@ -235,6 +239,7 @@ private:
     void updatePerformanceData();
     void updateAdminData();
     void updateAlarmData();
+    void updateAisData();
 
     String buildNavJSON();
     String buildWindJSON();
@@ -242,6 +247,7 @@ private:
     String buildPerformanceJSON();
     String buildAdminJSON();
     String buildAlarmJSON();
+    String buildAisJSON();
 };
 
 #endif // BLE_MANAGER_H
