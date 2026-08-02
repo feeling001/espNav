@@ -81,7 +81,17 @@
 
 /// Max number of targets sent over BLE per notification (closest first),
 /// kept low to stay within the BLE attribute/MTU size limit.
-#define BLE_AIS_MAX_TARGETS             6
+///
+/// NOTE: a GATT *notification* (unlike a read) is never fragmented across
+/// multiple ATT PDUs — its payload is hard-capped to (negotiated ATT MTU - 3)
+/// bytes and anything beyond that is silently dropped on the air. Each AIS
+/// target is roughly 150-200 bytes of JSON, so this value must stay low
+/// enough to fit within the MTU that real BLE clients typically negotiate
+/// (commonly ~185-247 bytes of usable payload, sometimes only the default
+/// 20 bytes if the client never requests a bigger MTU). The server requests
+/// up to 517 bytes (see NimBLEDevice::setMTU in BLEManager::init), but the
+/// final negotiated size is controlled by the client.
+#define BLE_AIS_MAX_TARGETS             3
 
 // ============================================================
 // Limits & task config

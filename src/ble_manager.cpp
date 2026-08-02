@@ -323,6 +323,11 @@ void BLEManager::init(const BLEConfig& cfg, BoatState* state,
 
     NimBLEDevice::init(config.device_name);
     NimBLEDevice::setPower(9);
+    // Ask for a larger ATT MTU so notifications (e.g. AIS with several
+    // targets) aren't silently truncated on the air. The actual negotiated
+    // MTU still depends on what the connecting client requests — this only
+    // raises the ceiling on our side.
+    NimBLEDevice::setMTU(517);
 
     setupSecurity();
 
@@ -614,6 +619,14 @@ void BLEManager::updateAisData() {
     String json = buildAisJSON();
     pAisDataChar->setValue(json.c_str());
     pAisDataChar->notify();
+#ifdef BLE_DEBUG_AIS
+    // Printed directly (not via serialPrintf, which truncates at 256 bytes)
+    // so the full JSON is visible for debugging.
+    Serial.print("[BLE] AIS notify (");
+    Serial.print(json.length());
+    Serial.print(" bytes): ");
+    Serial.println(json);
+#endif
 }
 
 // ============================================================

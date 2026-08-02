@@ -436,7 +436,13 @@ This service exposes the same AIS target data as the REST `/api/boat/ais` endpoi
 | `targets[].tcpa` | float | min | Time to Closest Point of Approach. |
 | `targets[].age` | uint32 | s | Time elapsed since the last AIS message received for this target. |
 
-> **Note on target limit:** to stay within the BLE attribute/MTU size limit, only the `BLE_AIS_MAX_TARGETS` (currently **6**) closest non-stale targets are sent per notification, sorted by ascending distance. This may be fewer than the total number of targets available via the REST API. A target is excluded once its AIS data is older than the **AIS data timeout (60 s)**.
+> **Note on target limit:** to stay within the BLE attribute/MTU size limit, only the `BLE_AIS_MAX_TARGETS` (currently **3**) closest non-stale targets are sent per notification, sorted by ascending distance. This may be fewer than the total number of targets available via the REST API. A target is excluded once its AIS data is older than the **AIS data timeout (60 s)**.
+
+> **Important — MTU and notification truncation:** a GATT *notification* (unlike a *read*) is never fragmented across multiple ATT PDUs. Its payload is hard-capped to `negotiated ATT MTU - 3` bytes, and anything beyond that is silently dropped on the air — it will **not** appear as an error, the JSON will just be cut off mid-object. The device requests an MTU of up to 517 bytes on its side, but the final negotiated value depends entirely on what the connecting client requests:
+> - If your client never performs an MTU exchange (stays at the default 23 bytes ATT MTU), only ~20 bytes of payload will get through per notification — not even one full target.
+> - Most modern iOS/Android BLE stacks auto-negotiate a larger MTU (commonly ~185–247 usable bytes), which is normally enough for `BLE_AIS_MAX_TARGETS = 3` targets.
+>
+> **Client recommendation:** explicitly request the largest MTU your BLE stack supports right after connecting (e.g. `requestMtu(517)` on Android, or rely on iOS's automatic negotiation) *before* enabling notifications on `AisData`. If you still need to display more than 3 targets, prefer doing a **characteristic read** of `AisData` instead of relying on the notification — reads are automatically split into multiple ATT Read Blob PDUs and are therefore not limited by a single notification's MTU cap.
 
 > This characteristic is **read-only** — there is no AIS command characteristic. Alarm thresholds related to AIS proximity (`ais_enabled`, `ais_distance_nm`, `own_mmsi`) are configured via the [Alarm Service](#9-alarm-service) `set_config` command.
 
@@ -531,7 +537,7 @@ This service exposes the same AIS target data as the REST `/api/boat/ais` endpoi
 | Max simultaneous connections | **3** devices |
 | NMEA data timeout | **10 seconds** (navigation, wind, performance, autopilot) |
 | AIS data timeout | **60 seconds** |
-| Max AIS targets per notification | **6** (closest first) |
+| Max AIS targets per notification | **3** (closest first) |
 | Reconnection | Automatic (advertising restarts after disconnection) |
 | Reboot delay after `restart` command | **2 seconds** |
 | Reboot delay after `wifi_sta` / `wifi_ap` command | **3 seconds** |
