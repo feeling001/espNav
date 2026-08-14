@@ -648,8 +648,14 @@ void SeatalkManager::parseFrame(const uint8_t* frame, uint8_t len) {
         // Ref (thomasknauf.de/rap/seatalk2.htm):
         //   21 02 XX XX 0X  Trip Mileage: XXXXX/100 nautical miles
         // 3 data bytes: frame[2]=low, frame[3]=mid, low nibble of frame[4]=high bits
+        // Strict validation: the datagram is always exactly 5 bytes with
+        // attribute byte 0x02 and a zero high nibble on the last byte. This
+        // rejects bus-noise / mis-synced captures that happen to start with
+        // a byte matching 0x21 but aren't a real trip datagram — without it,
+        // a bogus value could be shown for a while right after boot, before
+        // the SeaTalk RMT decoder locks onto real frames.
         case 0x21: {
-            if (len < 5) break;
+            if (len != 5 || frame[1] != 0x02 || (frame[4] & 0xF0) != 0x00) break;
             uint32_t raw = (uint32_t)frame[2]
                          | ((uint32_t)frame[3] << 8)
                          | ((uint32_t)(frame[4] & 0x0F) << 16);
@@ -663,8 +669,10 @@ void SeatalkManager::parseFrame(const uint8_t* frame, uint8_t len) {
         // ── 0x22: Total distance (log) ────────────────────────────────────────
         // Ref (thomasknauf.de/rap/seatalk2.htm), see doc/ErratumKnauf.md:
         //   22 02 XX XX 00  Total Mileage: (XX + YY*256) / 10 nautical miles
+        // Strict validation: exactly 5 bytes, attribute byte 0x02, last byte
+        // must be 0x00 (see note above on 0x21 — same rationale).
         case 0x22: {
-            if (len < 4) break;
+            if (len != 5 || frame[1] != 0x02 || frame[4] != 0x00) break;
             uint16_t raw = ((uint16_t)frame[3] << 8) | frame[2];
             float total = raw / 10.0f;
             if (srcActive(DS_TOTAL, DS_SUB_SEATALK)) {
@@ -681,8 +689,10 @@ void SeatalkManager::parseFrame(const uint8_t* frame, uint8_t len) {
         // Note: Knauf's original doc states "Z0*4096" for Total, which is
         // numerically equivalent to Z*65536 (Z0 as a byte = Z*16, and
         // 16*4096 = 65536), so both notations agree once correctly parsed.
+        // Strict validation: exactly 7 bytes with attribute low nibble 0x4
+        // (see note on 0x21/0x22 above — rejects bus-noise/mis-synced frames).
         case 0x25: {
-            if (len < 7) break;
+            if (len != 7 || (frame[1] & 0x0F) != 0x04) break;
             uint8_t z = (frame[1] >> 4) & 0x0F;
             uint8_t w = frame[6] & 0x0F;
 
