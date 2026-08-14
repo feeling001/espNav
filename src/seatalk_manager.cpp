@@ -484,8 +484,11 @@ void SeatalkManager::parseFrame(const uint8_t* frame, uint8_t len) {
     switch (cmd) {
 
         // ── 0x84: Autopilot heading, mode, status ─────────────────────────
+        // Ref: 84 U6 VW XY 0Z 0M RR SS TT — attribute low nibble fixed to 6,
+        // total length 9. Strict validation (see note on 0x00/0x21/0x22/0x25
+        // above) rejects bus-noise/mis-synced captures.
         case 0x84: {
-            if (len < 9) break;
+            if (len != 9 || (frame[1] & 0x0F) != 0x06) break;
 
             // --- Mode pilote (nibble bas de l'octet "0Z" = frame[4]) ---
             uint8_t z = frame[4] & 0x0F;
@@ -514,8 +517,10 @@ void SeatalkManager::parseFrame(const uint8_t* frame, uint8_t len) {
         }
 
         // ── 0x9C: Compass heading + rudder position ───────────────────────
+        // Ref: 9C U1 VW RR — attribute low nibble fixed to 1, length 4.
+        // Strict validation (see note on 0x00/0x21/0x22/0x25 above).
         case 0x9C: {
-            if (len < 4) break;   // trame réelle = 4 octets (index 0..3)
+            if (len != 4 || (frame[1] & 0x0F) != 0x01) break;
 
             uint8_t U  = frame[1] >> 4;   // nibble haut de U1
             uint8_t VW = frame[2];
@@ -535,8 +540,10 @@ void SeatalkManager::parseFrame(const uint8_t* frame, uint8_t len) {
         }
 
         // ── 0x10: Speed Through Water ─────────────────────────────────────
+        // Attribute byte fixed to 0x01, length 4. Strict validation (see note
+        // on 0x00/0x21/0x22/0x25 above).
         case 0x10: {
-            if (len < 4) break;
+            if (len != 4 || frame[1] != 0x01) break;
             uint16_t stwRaw = ((uint16_t)frame[2] << 8) | frame[3];
             float stw = stwRaw / 10.0f;
             if (stw >= 0.0f && stw < 100.0f && srcActive(DS_STW, DS_SUB_SEATALK)) {
@@ -546,8 +553,10 @@ void SeatalkManager::parseFrame(const uint8_t* frame, uint8_t len) {
         }
 
         // ── 0x20: Apparent Wind Angle ─────────────────────────────────────
+        // Attribute byte fixed to 0x01, length 4. Strict validation (see note
+        // on 0x00/0x21/0x22/0x25 above).
         case 0x20: {
-            if (len < 4) break;
+            if (len != 4 || frame[1] != 0x01) break;
             uint16_t awaRaw = ((uint16_t)(frame[2] & 0x03) << 8) | frame[3];
             float awa = awaRaw / 2.0f;
             if (awa > 180.0f) awa -= 360.0f;
@@ -560,8 +569,11 @@ void SeatalkManager::parseFrame(const uint8_t* frame, uint8_t len) {
         }
 
         // ── 0x11: Apparent Wind Speed ─────────────────────────────────────
+        // Ref: 11 01 XX 0Y — attribute fixed to 0x01, length 4, high nibble
+        // of the last byte fixed to 0. Strict validation (see note on
+        // 0x00/0x21/0x22/0x25 above).
         case 0x11: {
-            if (len < 4) break;
+            if (len != 4 || frame[1] != 0x01 || (frame[3] & 0xF0) != 0x00) break;
             float aws = (float)frame[2];
             uint8_t frac = (frame[3] >> 4) & 0x0F;
             aws += frac * 0.1f;
@@ -575,8 +587,15 @@ void SeatalkManager::parseFrame(const uint8_t* frame, uint8_t len) {
 
         // ── 0x00: Depth below transducer ───────────────────────────────────
         // Ref: 00 02 YZ XX XX — Depth: XXXX/10 feet
+        //   Z&4 = 4: transducer defective/not connected
+        // Strict validation: exactly 5 bytes with attribute byte 0x02 (see
+        // note on 0x21/0x22/0x25 above — rejects bus-noise/mis-synced
+        // frames that would otherwise show a bogus depth right after boot),
+        // and the transducer-defective flag must not be set.
         case 0x00: {
-            if (len < 5) break;
+            if (len != 5 || frame[1] != 0x02) break;
+            uint8_t z = frame[2] & 0x0F;
+            if (z & 0x04) break;   // transducer defective/not connected
             uint16_t raw = ((uint16_t)frame[4] << 8) | frame[3];
             float depth_ft = raw / 10.0f;
             float depth_m  = depth_ft / 3.28084f;
@@ -588,8 +607,10 @@ void SeatalkManager::parseFrame(const uint8_t* frame, uint8_t len) {
 
         // ── 0x27: Water temperature ─────────────────────────────────────────
         // Ref: 27 01 XX XX — Temp: (XXXX-100)/10 °C
+        // Attribute byte fixed to 0x01, length 4. Strict validation (see
+        // note on 0x00/0x21/0x22/0x25 above).
         case 0x27: {
-            if (len < 4) break;
+            if (len != 4 || frame[1] != 0x01) break;
             uint16_t raw = ((uint16_t)frame[3] << 8) | frame[2];
             float temp_c = (raw - 100) / 10.0f;
             if (srcActive(DS_WATER_TEMP, DS_SUB_SEATALK)) {
@@ -600,8 +621,10 @@ void SeatalkManager::parseFrame(const uint8_t* frame, uint8_t len) {
 
         // ── 0x52: Speed Over Ground ──────────────────────────────────────────
         // Ref: 52 01 XX XX — SOG: XXXX/10 knots
+        // Attribute byte fixed to 0x01, length 4. Strict validation (see
+        // note on 0x00/0x21/0x22/0x25 above).
         case 0x52: {
-            if (len < 4) break;
+            if (len != 4 || frame[1] != 0x01) break;
             uint16_t raw = ((uint16_t)frame[3] << 8) | frame[2];
             float sog = raw / 10.0f;
             if (sog >= 0.0f && srcActive(DS_GPS_SOG, DS_SUB_SEATALK)) {
@@ -612,8 +635,10 @@ void SeatalkManager::parseFrame(const uint8_t* frame, uint8_t len) {
 
         // ── 0x53: Course Over Ground ─────────────────────────────────────────
         // Ref: 53 U0 VW — COG: (U&3)*90 + (VW&0x3F)*2 + (U&0xC)/8
+        // Attribute low nibble fixed to 0, length 3. Strict validation (see
+        // note on 0x00/0x21/0x22/0x25 above).
         case 0x53: {
-            if (len < 3) break;
+            if (len != 3 || (frame[1] & 0x0F) != 0x00) break;
             float cog = decodeAngle(frame[1] >> 4, frame[2]);
             if (srcActive(DS_GPS_COG, DS_SUB_SEATALK)) {
                 boatState->setGPSCOG(cog);
@@ -624,9 +649,11 @@ void SeatalkManager::parseFrame(const uint8_t* frame, uint8_t len) {
         // ── 0x50 / 0x51: Latitude / Longitude ────────────────────────────────
         // Ref: 50 Z2 XX YY YY — LAT: XX deg, (YYYY&0x7FFF)/100 min, South if bit15
         //      51 Z2 XX YY YY — LON: XX deg, (YYYY&0x7FFF)/100 min, East  if bit15
+        // Attribute low nibble fixed to 2, length 5. Strict validation (see
+        // note on 0x00/0x21/0x22/0x25 above).
         case 0x50:
         case 0x51: {
-            if (len < 5) break;
+            if (len != 5 || (frame[1] & 0x0F) != 0x02) break;
             uint8_t  deg  = frame[2];
             uint16_t yyyy = ((uint16_t)frame[4] << 8) | frame[3];
             float    minutes = (yyyy & 0x7FFF) / 100.0f;
