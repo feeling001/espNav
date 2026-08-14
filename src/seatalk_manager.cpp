@@ -661,14 +661,46 @@ void SeatalkManager::parseFrame(const uint8_t* frame, uint8_t len) {
         }
 
         // ── 0x22: Total distance (log) ────────────────────────────────────────
-        // Ref (thomasknauf.de/rap/seatalk2.htm):
-        //   22 02 XX XX 00  Total Mileage: XXXX/10 nautical miles
+        // Ref (thomasknauf.de/rap/seatalk2.htm), see doc/ErratumKnauf.md:
+        //   22 02 XX XX 00  Total Mileage: (XX + YY*256) / 10 nautical miles
         case 0x22: {
             if (len < 4) break;
             uint16_t raw = ((uint16_t)frame[3] << 8) | frame[2];
             float total = raw / 10.0f;
             if (srcActive(DS_TOTAL, DS_SUB_SEATALK)) {
                 boatState->setTotal(total);
+            }
+            break;
+        }
+
+        // ── 0x25: Total & Trip log ───────────────────────────────────────────
+        // Ref (thomasknauf.de/rap/seatalk2.htm), corrected per doc/ErratumKnauf.md:
+        //   25 Z4 XX YY UU VV AW  Total & Trip Log
+        //   Total = (XX + YY*256 + Z*65536) / 10   nautical miles  (20-bit counter)
+        //   Trip  = (UU + VV*256 + W*65536) / 100  nautical miles
+        // Note: Knauf's original doc states "Z0*4096" for Total, which is
+        // numerically equivalent to Z*65536 (Z0 as a byte = Z*16, and
+        // 16*4096 = 65536), so both notations agree once correctly parsed.
+        case 0x25: {
+            if (len < 7) break;
+            uint8_t z = (frame[1] >> 4) & 0x0F;
+            uint8_t w = frame[6] & 0x0F;
+
+            uint32_t totalRaw = (uint32_t)frame[2]
+                              | ((uint32_t)frame[3] << 8)
+                              | ((uint32_t)z << 16);
+            float total = totalRaw / 10.0f;
+
+            uint32_t tripRaw = (uint32_t)frame[4]
+                             | ((uint32_t)frame[5] << 8)
+                             | ((uint32_t)w << 16);
+            float trip = tripRaw / 100.0f;
+
+            if (srcActive(DS_TOTAL, DS_SUB_SEATALK_25)) {
+                boatState->setTotal(total);
+            }
+            if (srcActive(DS_TRIP, DS_SUB_SEATALK_25)) {
+                boatState->setTrip(trip);
             }
             break;
         }

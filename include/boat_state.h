@@ -12,6 +12,11 @@
 // Timeout values in milliseconds
 #define DATA_TIMEOUT_DEFAULT 10000  // 10 seconds for most data
 #define DATA_TIMEOUT_AIS     60000  // 60 seconds for AIS
+// Trip/total (log) datagrams are only re-transmitted by SeaTalk sources when
+// the value actually changes, not on a regular cadence like other data. Use a
+// very long timeout so the last known value is kept instead of being flagged
+// as stale/invalid between updates.
+#define DATA_TIMEOUT_ODOMETER (24UL * 60UL * 60UL * 1000UL)  // 24 hours
 
 // Maximum AIS targets to keep in memory
 #define MAX_AIS_TARGETS 20
@@ -479,7 +484,8 @@ private:
     uint32_t _lastPerfMs   = 0;
 
     // Helper functions
-    void addDataPointToJSON(JsonObject obj, const char* key, const DataPoint& dp);
+    void addDataPointToJSON(JsonObject obj, const char* key, const DataPoint& dp,
+                             unsigned long timeout = DATA_TIMEOUT_DEFAULT);
 };
 
 #endif // BOAT_STATE_H

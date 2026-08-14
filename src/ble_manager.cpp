@@ -3,6 +3,7 @@
 #include "wifi_manager.h"
 #include "alarm_manager.h"
 #include "functions.h"
+#include "debug_log.h"
 #include <ArduinoJson.h>
 #include <esp_system.h>
 
@@ -621,11 +622,27 @@ void BLEManager::updateAisData() {
     pAisDataChar->notify();
 #ifdef BLE_DEBUG_AIS
     // Printed directly (not via serialPrintf, which truncates at 256 bytes)
-    // so the full JSON is visible for debugging.
+    // so the full JSON is visible on the physical serial console.
     Serial.print("[BLE] AIS notify (");
     Serial.print(json.length());
     Serial.print(" bytes): ");
     Serial.println(json);
+
+    // Also mirror into the web dashboard debug console (/ws/debug). Serial.print()
+    // above bypasses DebugLog entirely, so without this the web debug page never
+    // shows anything. DebugLog lines are capped at DEBUG_LOG_LINE_LEN-1 chars, so
+    // split long JSON payloads into several chunks.
+    {
+        char header[48];
+        snprintf(header, sizeof(header), "[BLE] AIS notify (%u bytes):", (unsigned)json.length());
+        DebugLog::instance().push(header);
+
+        const size_t chunkSize = DEBUG_LOG_LINE_LEN - 1;
+        for (size_t offset = 0; offset < json.length(); offset += chunkSize) {
+            String chunk = json.substring(offset, offset + chunkSize);
+            DebugLog::instance().push(chunk.c_str());
+        }
+    }
 #endif
 }
 

@@ -545,9 +545,9 @@ String WebServer::buildBoatStateJSON() {
         if (gps.fix_quality.valid && !gps.fix_quality.isStale()) quality["fix_quality"] = (int)gps.fix_quality.value; else quality["fix_quality"] = nullptr;
         if (gps.hdop.valid        && !gps.hdop.isStale())        quality["hdop"]        = gps.hdop.value;             else quality["hdop"]        = nullptr;
 
-        if (speed.trip.valid  && !speed.trip.isStale())  { nav["trip"]["value"]  = speed.trip.value;  nav["trip"]["unit"]  = speed.trip.unit; }
+        if (speed.trip.valid  && !speed.trip.isStale(DATA_TIMEOUT_ODOMETER))  { nav["trip"]["value"]  = speed.trip.value;  nav["trip"]["unit"]  = speed.trip.unit; }
         else                                              { nav["trip"]["value"]  = nullptr;            nav["trip"]["unit"]  = "nm"; }
-        if (speed.total.valid && !speed.total.isStale())  { nav["total"]["value"] = speed.total.value; nav["total"]["unit"] = speed.total.unit; }
+        if (speed.total.valid && !speed.total.isStale(DATA_TIMEOUT_ODOMETER))  { nav["total"]["value"] = speed.total.value; nav["total"]["unit"] = speed.total.unit; }
         else                                              { nav["total"]["value"] = nullptr;            nav["total"]["unit"] = "nm"; }
     }
 
@@ -1615,9 +1615,9 @@ void WebServer::handleGetNavigation(AsyncWebServerRequest* request) {
     if (gps.fix_quality.valid && !gps.fix_quality.isStale()) quality["fix_quality"] = (int)gps.fix_quality.value; else quality["fix_quality"] = nullptr;
     if (gps.hdop.valid        && !gps.hdop.isStale())        quality["hdop"]        = gps.hdop.value;             else quality["hdop"]        = nullptr;
 
-    if (speed.trip.valid  && !speed.trip.isStale())  { doc["trip"]["value"]  = speed.trip.value;  doc["trip"]["unit"]  = speed.trip.unit; }
+    if (speed.trip.valid  && !speed.trip.isStale(DATA_TIMEOUT_ODOMETER))  { doc["trip"]["value"]  = speed.trip.value;  doc["trip"]["unit"]  = speed.trip.unit; }
     else                                              { doc["trip"]["value"]  = nullptr;            doc["trip"]["unit"]  = "nm"; }
-    if (speed.total.valid && !speed.total.isStale())  { doc["total"]["value"] = speed.total.value; doc["total"]["unit"] = speed.total.unit; }
+    if (speed.total.valid && !speed.total.isStale(DATA_TIMEOUT_ODOMETER))  { doc["total"]["value"] = speed.total.value; doc["total"]["unit"] = speed.total.unit; }
     else                                              { doc["total"]["value"] = nullptr;            doc["total"]["unit"] = "nm"; }
 
     // ── Autopilot ─────────────────────────────────────────────────

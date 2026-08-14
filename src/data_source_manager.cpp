@@ -34,6 +34,7 @@ static const char* DS_SUB_IDS[DS_SUB_COUNT] = {
     "nmea_vlw",   // DS_SUB_NMEA_VLW
     "seatalk",    // DS_SUB_SEATALK
     "compute",    // DS_SUB_COMPUTE
+    "seatalk_25", // DS_SUB_SEATALK_25
 };
 
 DataSourceManager::DataSourceManager() {}

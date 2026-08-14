@@ -621,9 +621,10 @@ void BoatState::updatePerformance() {
 // JSON Serialization
 // ============================================================
 
-void BoatState::addDataPointToJSON(JsonObject obj, const char* key, const DataPoint& dp) {
+void BoatState::addDataPointToJSON(JsonObject obj, const char* key, const DataPoint& dp,
+                                    unsigned long timeout) {
     JsonObject point = obj[key].to<JsonObject>();
-    if (dp.valid && !dp.isStale()) {
+    if (dp.valid && !dp.isStale(timeout)) {
         point["value"] = dp.value;
         point["unit"] = dp.unit;
         point["age"] = (millis() - dp.timestamp) / 1000.0;
@@ -653,8 +654,8 @@ String BoatState::toJSON() {
     // Speed
     JsonObject speedObj = doc["speed"].to<JsonObject>();
     addDataPointToJSON(speedObj, "stw", speed.stw);
-    addDataPointToJSON(speedObj, "trip", speed.trip);
-    addDataPointToJSON(speedObj, "total", speed.total);
+    addDataPointToJSON(speedObj, "trip", speed.trip, DATA_TIMEOUT_ODOMETER);
+    addDataPointToJSON(speedObj, "total", speed.total, DATA_TIMEOUT_ODOMETER);
     
     // Heading
     JsonObject headingObj = doc["heading"].to<JsonObject>();

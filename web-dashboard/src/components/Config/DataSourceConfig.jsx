@@ -97,16 +97,18 @@ const FIELD_CATALOGUE = [
     id: 'trip',
     label: 'Distance trip (loch)',
     options: [
-      { value: 'nmea_vlw', label: 'NMEA – VLW' },
-      { value: 'seatalk',  label: 'SeaTalk – 0x21' },
+      { value: 'nmea_vlw',    label: 'NMEA – VLW' },
+      { value: 'seatalk',     label: 'SeaTalk – 0x21' },
+      { value: 'seatalk_25',  label: 'SeaTalk – 0x25 (Total & Trip)' },
     ],
   },
   {
     id: 'total',
     label: 'Distance totale (loch)',
     options: [
-      { value: 'nmea_vlw', label: 'NMEA – VLW' },
-      { value: 'seatalk',  label: 'SeaTalk – 0x22' },
+      { value: 'nmea_vlw',    label: 'NMEA – VLW' },
+      { value: 'seatalk',     label: 'SeaTalk – 0x22' },
+      { value: 'seatalk_25',  label: 'SeaTalk – 0x25 (Total & Trip)' },
     ],
   },
 ];

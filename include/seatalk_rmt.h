@@ -103,6 +103,32 @@ private:
     uint8_t             _framelen;
     uint8_t             _frame[18];
 
+    /// Bumped every time handleframe() finishes decoding a frame (any frame
+    /// on the bus, not just our own echo). sendDatagram()'s collision check
+    /// uses this to know a *new* frame has landed in `_frame` since it last
+    /// looked, so it can compare each candidate frame individually instead
+    /// of only the final snapshot at the end of the wait window (which is
+    /// almost always some unrelated frame on a busy bus, causing false
+    /// collision detection and needless command retransmission).
+    volatile uint32_t   _frameSeq = 0;
+
+    /// Echo detector armed by sendDatagram() just before transmitting.
+    /// handleframe() compares *every* frame it finishes decoding against
+    /// this expected buffer the instant it completes — this must happen
+    /// synchronously inside handleframe(), not by re-reading `_frame`
+    /// afterward from sendDatagram()'s wait loop: a single processIncoming()
+    /// call can drain a whole backlog of ring-buffer items (e.g. built up
+    /// during the "wait for bus silence" polling loop, which never drains
+    /// the RX ring buffer) and decode several frames back-to-back, so our
+    /// own echo can be overwritten by a later, unrelated frame before the
+    /// wait loop gets a chance to look at `_frame` again. That caused false
+    /// "collision" detections and needless real retransmissions of the same
+    /// command (e.g. a single "+1" keystroke reaching the autopilot 3-5
+    /// times).
+    const uint8_t*      _expectEcho    = nullptr;
+    uint8_t             _expectEchoLen = 0;
+    volatile bool       _echoMatched   = false;
+
     /// Small FIFO queue of fully-decoded frames awaiting consumption by
     /// getFrame(). A single-slot buffer would silently drop frames whenever
     /// several datagrams complete between two getFrame() polls (e.g. rare

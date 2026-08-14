@@ -81,7 +81,16 @@ void SeatalkRMT::handleframe() {
         serialPrintf("0x%02X ",_frame[i]);
     }
     serialPrintf("]\n");
-    
+
+    // Check this frame against sendDatagram()'s armed echo expectation *right
+    // now*, while _frame still holds this exact frame — a later frame
+    // decoded within the same processIncoming() call would otherwise
+    // overwrite _frame before the wait loop gets a chance to compare it.
+    if (_expectEcho && _framelen == _expectEchoLen &&
+        memcmp(_frame, _expectEcho, _framelen) == 0) {
+        _echoMatched = true;
+    }
+
     _logManager->logSeatalk(_frame, _framelen);
 
     // Push into the FIFO queue. If the queue is full (consumer too slow),
@@ -98,6 +107,19 @@ void SeatalkRMT::handleframe() {
     _frameQueueLen[_frameQueueTail] = len;
     _frameQueueTail = (_frameQueueTail + 1) % kFrameQueueSize;
     _frameQueueCount++;
+
+    // Signal to sendDatagram()'s collision check that a new frame has just
+    // been decoded into _frame/_framelen.
+    _frameSeq++;
+
+    // A frame is now complete. Force re-sync on the next start bit instead
+    // of leaving _inframe set — otherwise any further bit transitions before
+    // the SEATALK_FRAME_TIMOUT silence window (bus noise, a following
+    // character sent by another device, etc.) would keep calling addchar()
+    // and writing past the end of this now-"finished" frame with no bounds
+    // check, corrupting adjacent memory (buffer overflow -> random crashes).
+    _inframe = 0;
+    _charpos = 0;
 }
 
 bool SeatalkRMT::getFrame(uint8_t* outFrame, uint8_t& outLen) {
@@ -132,6 +154,18 @@ void SeatalkRMT::addchar() {
     }
 
     // serialPrintf(" [start = %d][cd = %d][stop = %d][len = %d] \n",((_shiftreg>>10) & 1),((_shiftreg>>1) & 1),(_shiftreg & 1),_framelen);
+
+    // Defensive bounds check: never write past the _frame buffer. This can
+    // only be reached if the state machine somehow desyncs (e.g. bus noise
+    // producing more characters than a properly terminated frame would),
+    // since _framelen is otherwise capped at 3 + 0x0F = 18 == sizeof(_frame).
+    if (_charpos >= sizeof(_frame)) {
+        _inframe = 0;
+        _charpos = 0;
+        _shiftreg = 0;
+        _bitpos = 0;
+        return;
+    }
 
     _frame[_charpos] = newchar;
     _charpos++;
@@ -263,6 +297,22 @@ bool SeatalkRMT::sendDatagram(uint8_t* buffer, uint8_t len) {
         }
         
 
+        // Arm the echo detector *before* transmitting: handleframe() will
+        // compare every frame it decodes against `buffer` the instant it
+        // completes (see _expectEcho doc in seatalk_rmt.h). This must happen
+        // synchronously inside handleframe(), not by re-reading `_frame`
+        // here afterward — a single processIncoming() call below can drain
+        // a backlog of several frames at once (e.g. built up during the
+        // "wait for bus silence" loop above, which never drains the RX ring
+        // buffer), and our own echo could be overwritten by a later,
+        // unrelated frame before we get a chance to look at `_frame` again.
+        // That caused false "collision" detections and needless real
+        // retransmissions of the same command (e.g. a single "+1" keystroke
+        // reaching the autopilot 3-5 times).
+        _echoMatched   = false;
+        _expectEchoLen = len;
+        _expectEcho    = buffer;
+
         // Send the datagram
         sendDatagramNoCD(buffer, len);
 
@@ -270,20 +320,15 @@ bool SeatalkRMT::sendDatagram(uint8_t* buffer, uint8_t len) {
         // Wait ( len*11*SEATALK_BIT_US ) us for the frame sending.  ~ len*3ms
         // NOTE: we must keep draining the RX ring buffer (processIncoming)
         // during this wait — this task is single-threaded with RX decoding,
-        // so a blind delay() here would starve _frame updates and make every
-        // echo comparison fail against stale data (false collisions).
+        // so a blind delay() here would starve frame decoding.
+        compareok = false;
         uint32_t waitMs = ( len * 3 ) + 100;
         uint32_t waitStart = millis();
         while (millis() - waitStart < waitMs) {
             processIncoming(5);
+            if (_echoMatched) { compareok = true; break; }
         }
-
-        // serialPrintf("compare : ");
-        for(int i=0;i<len;i++) {
-            // serialPrintf("[ %02X - %02X  = %d]",buffer[i],_frame[i], (buffer[i] == _frame[i]) );
-            if (buffer[i] != _frame[i]) compareok = false;
-
-        }
+        _expectEcho = nullptr;
         if(compareok) { return true; }
         serialPrintf("Collision detectee, retry %d...\n", attempt + 1);
 

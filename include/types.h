@@ -166,6 +166,7 @@ enum DataSubSource {
     DS_SUB_NMEA_VLW,
     DS_SUB_SEATALK,
     DS_SUB_COMPUTE,
+    DS_SUB_SEATALK_25,   // SeaTalk 0x25 (Total & Trip Log, see doc/ErratumKnauf.md)
     DS_SUB_COUNT
 };
 
