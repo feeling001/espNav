@@ -6,6 +6,7 @@ import { OTAUpdate }         from './OTAUpdate';
 import { StorageManager }    from './StorageManager';
 import { ConversionsConfig } from './ConversionsConfig';
 import { DataSourceConfig }  from './DataSourceConfig';
+import { AISConfig }         from './AISConfig';
 import { DebugConsole }      from './DebugConsole';
 
 const TABS = [
@@ -14,6 +15,7 @@ const TABS = [
   { id: 'ble',         label: '🔵 Bluetooth'     },
   { id: 'conversions', label: '🔄 Conversions'   },
   { id: 'datasources', label: '📡 Sources'       },
+  { id: 'ais',         label: '🛥 AIS'           },
   { id: 'ota',         label: '⬆ Firmware'      },
   { id: 'storage',     label: '💾 Storage'       },
   { id: 'debug',       label: '🐞 Debug'         },
@@ -44,6 +46,7 @@ export function ConfigPage() {
         {activeTab === 'ble'         && <BLEConfig />}
         {activeTab === 'conversions' && <ConversionsConfig />}
         {activeTab === 'datasources' && <DataSourceConfig />}
+        {activeTab === 'ais'         && <AISConfig />}
         {activeTab === 'ota'         && <OTAUpdate />}
         {activeTab === 'storage'     && <StorageManager />}
         {activeTab === 'debug'       && <DebugConsole />}

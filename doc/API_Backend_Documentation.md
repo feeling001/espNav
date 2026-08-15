@@ -20,6 +20,7 @@
 7. [Boat Data — Navigation](#7-boat-data--navigation)
 8. [Boat Data — Wind](#8-boat-data--wind)
 9. [Boat Data — AIS](#9-boat-data--ais)
+   - 9.1 [AIS Configuration](#91-ais-configuration)
 10. [Boat Data — Performance](#10-boat-data--performance)
 11. [Boat Data — Full State](#11-boat-data--full-state)
 12. [NMEA WebSocket](#12-nmea-websocket)
@@ -29,6 +30,7 @@
 16. [Debug Log WebSocket](#16-debug-log-websocket)
 17. [Autopilot Commands](#17-autopilot-commands)
 18. [SeaTalk Extra Commands](#18-seatalk-extra-commands)
+19. [Storage — LittleFS & SD Card](#19-storage--littlefs--sd-card)
 
 ---
 
@@ -452,7 +454,9 @@ When a value is absent or stale, the `value` field is `null` and `age` is `null`
 
 ### `GET /api/boat/ais`
 
-Returns the list of active AIS targets (age < 60 seconds).
+Returns the list of active AIS targets — i.e. targets whose `age` is below
+the configurable **AIS target retention time** (default **5 minutes**, see
+[9.1 AIS Configuration](#91-ais-configuration) below).
 
 **Response:**
 ```json
@@ -500,6 +504,55 @@ Returns the list of active AIS targets (age < 60 seconds).
 | `proximity.cpa` | float | Closest Point of Approach in nm |
 | `proximity.tcpa` | float | Time to CPA in minutes |
 | `age` | int | Age of the last update in seconds |
+
+### 9.1 AIS Configuration
+
+AIS transponders do not transmit continuously. Reporting intervals depend on
+vessel class, speed and navigational status — from as little as ~2 seconds
+for a fast-moving Class A vessel up to several minutes for a slow/anchored
+vessel, a Class B unit, an aid to navigation, or a base station
+(see [Comar Systems — What are AIS reporting intervals?](https://comarsystems.com/support-hub/what-are-ais-reporting-intervals/)).
+
+To avoid targets disappearing between two reports, received targets are kept
+in memory (an "echo") for a configurable retention time after their last
+report, instead of being dropped immediately. This is exposed via the
+dashboard's **Config → AIS** tab.
+
+#### `GET /api/ais/config`
+
+**Response:**
+```json
+{
+  "target_timeout_s": 300
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `target_timeout_s` | int | AIS target retention ("echo") time in seconds |
+
+#### `POST /api/ais/config`
+
+**Request body:**
+```json
+{
+  "target_timeout_s": 300
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `target_timeout_s` | int | Retention time in seconds. Clamped to **10–3600 s**. Default: **300 s (5 minutes)** |
+
+**Response:**
+```json
+{
+  "success": true,
+  "target_timeout_s": 300
+}
+```
+
+The value is persisted to NVS and applied immediately — no restart required.
 
 ---
 
@@ -1028,4 +1081,127 @@ Sends a utility / instrument command over the SeaTalk1 bus — lamp intensity, a
 ```
 ```json
 { "success": false, "error": "Transmission failed or unknown command" }
+```
+
+---
+
+## 19. Storage — LittleFS & SD Card
+
+Two independent storage backends are exposed:
+
+- **LittleFS** (`/api/storage/*`) — internal flash filesystem. Always present; holds the embedded web dashboard, polar diagrams, and config backups.
+- **SD Card** (`/api/sd/*`) — optional external SPI SD card for navigation logs, NMEA dumps, etc. All endpoints return `503` with `{"enabled": false}`-style bodies when no `SDManager` is configured in the firmware build, and gracefully report `mounted: false` when no card is present.
+
+### `GET /api/storage/info`
+
+Returns LittleFS usage statistics.
+
+**Response:**
+```json
+{
+  "total_bytes": 1441792,
+  "used_bytes": 892928,
+  "free_bytes": 548864,
+  "used_pct": 62
+}
+```
+
+### `GET /api/storage/files`
+
+Recursively lists all files on LittleFS.
+
+**Response:**
+```json
+{ "count": 3, "files": [ { "path": "/polar.pol", "size": 1821, "isDir": false } ] }
+```
+
+### `DELETE /api/storage/delete?path=<file>`
+
+Deletes a single file from LittleFS.
+
+### `POST /api/storage/format`
+
+Erases the entire LittleFS partition (dashboard, polar diagram, config backups). Synchronous — LittleFS format is fast enough not to need the background-job pattern used for the SD card below.
+
+---
+
+### `GET /api/sd/status`
+
+Returns SD card mount status, storage statistics, and the progress of any in-flight background mount/format job (see below).
+
+**Response (idle):**
+```json
+{
+  "enabled": true,
+  "mounted": true,
+  "card_type": "SDHC",
+  "total_bytes": 4008636416,
+  "used_bytes": 120832,
+  "free_bytes": 4008515584,
+  "used_pct": 0,
+  "total_mb": 3823,
+  "free_mb": 3822,
+  "busy": false,
+  "last_job": "mount",
+  "last_job_success": true,
+  "last_job_message": "SD card mounted"
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `enabled` | bool | `false` if no `SDManager` is configured in the firmware build |
+| `mounted` | bool | Whether the SD card is currently mounted |
+| `card_type` | string | `"SDSC"`, `"SDHC"`, `"None"`, or `"Unknown"` |
+| `total_bytes`/`used_bytes`/`free_bytes` | uint32 | Low 32 bits of the byte counts (see `total_mb`/`free_mb` for cards > 4 GB) |
+| `used_pct` | int | Percentage used (0–100) |
+| `busy` | bool | `true` while a background mount job (started via `/api/sd/mount`) is still running |
+| `last_job` | string | `"mount"` or `"format"` — type of the most recently started job (present once any job has run) |
+| `last_job_success` | bool | Result of the last completed job (only present once `busy` is `false`) |
+| `last_job_message` | string | Human-readable result message of the last completed job (only present once `busy` is `false`) |
+
+### `GET /api/sd/files?dir=<path>`
+
+Recursively lists files on the SD card (default `dir=/`, max depth 4). Returns `503` if not mounted.
+
+**Response:**
+```json
+{ "dir": "/", "count": 2, "files": [ { "path": "/logs/nmea_2024.csv", "size": 20480, "isDir": false } ] }
+```
+
+### `GET /api/sd/download?path=<file>`
+
+Streams a file from the SD card as an attachment. Returns `400`/`404`/`503` on invalid path, missing file, or unmounted card respectively.
+
+### `DELETE /api/sd/delete?path=<file>`
+
+Deletes a single file from the SD card.
+
+### `POST /api/sd/mkdir`
+
+**Request body:** `{ "path": "/logs" }`
+
+Creates a directory on the SD card.
+
+### `POST /api/sd/mount` — start mounting the SD card (background job)
+
+Starts (re-)mounting the SD card and **returns immediately** without waiting for the operation to finish. Mounting performs blocking SPI transactions (`SD.begin()`) that can occasionally take longer than expected — e.g. no card present, marginal wiring/power, or SPI retries — so it always runs on a background task instead of the HTTP request handler. Poll `GET /api/sd/status` (`busy` / `last_job_*`) until `busy` becomes `false` to get the result.
+
+**Response (job started, HTTP 202):**
+```json
+{ "success": true, "busy": true, "message": "Mount started" }
+```
+
+**Response (another SD job already running, HTTP 409):**
+```json
+{ "success": false, "error": "An SD operation is already in progress" }
+```
+
+### `POST /api/sd/unmount`
+
+Safely unmounts the SD card so it can be physically removed. Synchronous (SD.end() is fast).
+
+**Response:**
+```json
+{ "success": true, "message": "SD card unmounted safely" }
 ```

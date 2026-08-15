@@ -126,6 +126,23 @@ export const api = {
     });
   },
 
+  // ── AIS configuration ─────────────────────────────────
+  async getAISConfig() {
+    const response = await fetch(`${API_BASE}/ais/config`);
+    if (!response.ok) throw new Error('Failed to get AIS config');
+    return response.json();
+  },
+
+  async setAISConfig(config) {
+    const response = await fetch(`${API_BASE}/ais/config`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config)
+    });
+    if (!response.ok) throw new Error('Failed to set AIS config');
+    return response.json();
+  },
+
   // ── LittleFS Storage ──────────────────────────────────────────
   async getStorageInfo() {
     const response = await fetch(`${API_BASE}/storage/info`);
@@ -171,8 +188,8 @@ export const api = {
    * @param {string} dir  Root directory to list (default "/")
    * @returns {Promise<{dir, count, files: Array<{path, size, isDir}>}>}
    */
-  async listSDFiles(dir = '/') {
-    const url = `${API_BASE}/sd/files?dir=${encodeURIComponent(dir)}`;
+  async listSDFiles(dir = '/', force = false) {
+    const url = `${API_BASE}/sd/files?dir=${encodeURIComponent(dir)}${force ? '&force=1' : ''}`;
     const response = await fetch(url);
     if (!response.ok) throw new Error('Failed to list SD files');
     return response.json();
@@ -216,21 +233,12 @@ export const api = {
   },
 
   /**
-   * POST /api/sd/format — erase all files on the SD card.
-   * WARNING: destructive.
-   */
-  async formatSD() {
-    const response = await fetch(`${API_BASE}/sd/format`, { method: 'POST' });
-    if (!response.ok) throw new Error('Failed to format SD card');
-    return response.json();
-  },
-
-  /**
-   * POST /api/sd/mount — (re-)mount the SD card.
+   * POST /api/sd/mount — starts a background mount job for the SD card.
+   * Returns immediately with {success, busy, message}; poll getSDStatus()
+   * for completion ("busy"/"last_job_success"/"last_job_message").
    */
   async mountSD() {
     const response = await fetch(`${API_BASE}/sd/mount`, { method: 'POST' });
-    if (!response.ok) throw new Error('Failed to mount SD card');
     return response.json();
   },
 

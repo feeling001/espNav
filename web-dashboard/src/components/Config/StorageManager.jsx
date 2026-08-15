@@ -266,18 +266,21 @@ function SDCardPanel() {
   const [loading, setLoading]         = useState(true);
   const [message, setMessage]         = useState(null);
   const [deleting, setDeleting]       = useState(null);
-  const [formatting, setFormatting]   = useState(false);
-  const [confirmFormat, setConfirmFormat] = useState(false);
   const [mounting, setMounting]       = useState(false);
 
-  const loadStatus = useCallback(async () => {
+  const [refreshing, setRefreshing]   = useState(false);
+
+  const loadStatus = useCallback(async (force = false) => {
     try {
       const status = await api.getSDStatus();
       setSDStatus(status);
       if (status.mounted) {
-        const list = await api.listSDFiles('/');
-        // Only show files (not directories) at the top level for simplicity;
-        // full recursive listing from the API.
+        // force=true invalidates the server-side cache and triggers a fresh scan.
+        let list = await api.listSDFiles('/', force);
+        for (let i = 0; list.busy && i < 60; i++) {
+          await sleep(500);
+          list = await api.listSDFiles('/');
+        }
         setFiles(list.files || []);
       } else {
         setFiles([]);
@@ -286,23 +289,50 @@ function SDCardPanel() {
       setMessage({ type: 'error', text: 'Failed to load SD card info.' });
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }, []);
 
+  const handleRefresh = () => {
+    setRefreshing(true);
+    setMessage(null);
+    loadStatus(true);
+  };
+
   useEffect(() => { loadStatus(); }, [loadStatus]);
+
+  // Mount/format run as a background job on the device (see /api/sd/status
+  // "busy" field) so the request returns immediately; poll until it's done.
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  const waitForSDJob = async (setProgress) => {
+    for (let i = 0; i < 240; i++) {  // up to ~2 minutes @ 500ms
+      const status = await api.getSDStatus();
+      if (!status.busy) return status;
+      if (setProgress) setProgress(i);
+      await sleep(500);
+    }
+    throw new Error('Timed out waiting for the SD card operation to complete.');
+  };
 
   const handleMount = async () => {
     setMounting(true);
     setMessage(null);
     try {
-      const result = await api.mountSD();
+      const started = await api.mountSD();
+      if (!started.success) {
+        setMessage({ type: 'error', text: started.error || started.message });
+        return;
+      }
+      setMessage({ type: 'success', text: 'Mounting SD card…' });
+      const status = await waitForSDJob();
       setMessage({
-        type: result.success ? 'success' : 'error',
-        text: result.message || result.error
+        type: status.last_job_success ? 'success' : 'error',
+        text: status.last_job_message || (status.mounted ? 'SD card mounted' : 'Mount failed'),
       });
       await loadStatus();
-    } catch {
-      setMessage({ type: 'error', text: 'Mount failed.' });
+    } catch (e) {
+      setMessage({ type: 'error', text: e.message || 'Mount failed.' });
     } finally {
       setMounting(false);
     }
@@ -344,21 +374,6 @@ function SDCardPanel() {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-  };
-
-  const handleFormat = async () => {
-    setConfirmFormat(false);
-    setFormatting(true);
-    setMessage(null);
-    try {
-      await api.formatSD();
-      setMessage({ type: 'success', text: 'SD card formatted (all files removed).' });
-      await loadStatus();
-    } catch {
-      setMessage({ type: 'error', text: 'Format failed.' });
-    } finally {
-      setFormatting(false);
-    }
   };
 
   if (loading) return <div style={{ color: '#7f8c8d', padding: 12 }}>Loading…</div>;
@@ -420,9 +435,9 @@ function SDCardPanel() {
               {mounting ? 'Unmounting…' : '⏏ Unmount'}
             </button>
           )}
-          <button className="secondary" onClick={loadStatus}
+          <button className="secondary" onClick={handleRefresh} disabled={refreshing}
             style={{ padding: '6px 12px', fontSize: 13 }}>
-            ↺ Refresh
+            {refreshing ? 'Refreshing…' : '↺ Refresh'}
           </button>
         </div>
       </div>
@@ -467,20 +482,6 @@ function SDCardPanel() {
             </div>
           )}
         </>
-      )}
-
-      {/* ── Format / danger zone ── */}
-      {mounted && (
-        <DangerZone
-          onFormat={handleFormat}
-          formatting={formatting}
-          confirmFormat={confirmFormat}
-          setConfirmFormat={setConfirmFormat}
-          label="Format SD Card"
-          warning={`Formatting removes all files from the SD card (FAT32 wipe).
-Navigation logs, NMEA dumps, and any other data stored on the card will be
-permanently lost. The card will remain mounted afterwards.`}
-        />
       )}
 
       {!mounted && (

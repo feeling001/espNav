@@ -21,6 +21,9 @@
 // Constructor / Destructor
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Static instance for SD mount callback
+LogManager* LogManager::s_instance = nullptr;
+
 LogManager::LogManager(SDManager* sdMgr, BoatState* bs)
     : sdManager(sdMgr), boatState(bs),
       queue(nullptr), taskHandle(nullptr), statsMutex(nullptr),
@@ -52,11 +55,31 @@ bool LogManager::hasGPSFix() const {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Callback for SD mount event
+// ─────────────────────────────────────────────────────────────────────────────
+
+void LogManager::onSDMounted() {
+    if (!hasOpenFiles() && hasGPSFix()) {
+        serialPrintf("[Log] SD card mounted + GPS fix available → opening log files now\n");
+        tryOpenFiles();
+    }
+}
+
+void LogManager::_onMountedCallback() {
+    if (s_instance) {
+        s_instance->onSDMounted();
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Lifecycle
 // ─────────────────────────────────────────────────────────────────────────────
 
 void LogManager::init() {
     if (initialized) return;
+
+    // Register singleton for SD mount callback
+    s_instance = this;
 
     statsMutex = xSemaphoreCreateMutex();
 
@@ -73,6 +96,11 @@ void LogManager::init() {
                   config.nmeaEnabled, config.seatalkEnabled,
                   config.csvEnabled, config.csvIntervalMin);
     serialPrintf("[Log] Waiting for GPS fix before opening log files...\n");
+
+    // Register callback so we retry opening files if SD mounts after init
+    if (sdManager) {
+        sdManager->setOnMountedCallback(&LogManager::_onMountedCallback);
+    }
 }
 
 void LogManager::start() {
@@ -370,6 +398,33 @@ void LogManager::closeFiles() {
     if (nmeaFile)    { nmeaFile.close();    }
     if (seatalkFile) { seatalkFile.close(); }
     if (csvFile)     { csvFile.close();     }
+}
+
+bool LogManager::closeFileIfOpen(const char* filePath) {
+    if (!filePath) return false;
+
+    // Build expected paths for all three possible log files.
+    // Log files are stored in /logs/ with naming pattern:
+    // log_YYYYMMDD_HHmm_nmea.raw, log_YYYYMMDD_HHmm_seatalk.hex, log_YYYYMMDD_HHmm_metrics.csv
+    
+    String toDelete = String(filePath);
+    
+    // Check if the path matches any open log file
+    // For now, we'll use a simple check: if the file path contains one of our log extensions
+    // and the corresponding file handle is open, close all files.
+    if ((toDelete.endsWith("_nmea.raw") && nmeaFile) ||
+        (toDelete.endsWith("_seatalk.hex") && seatalkFile) ||
+        (toDelete.endsWith("_metrics.csv") && csvFile) ||
+        (toDelete.endsWith(".nmea") && nmeaFile) ||
+        (toDelete.endsWith(".st1") && seatalkFile) ||
+        (toDelete.endsWith(".csv") && csvFile)) {
+        
+        serialPrintf("[Log] File requested for deletion is currently open: %s → closing all log files\n", filePath);
+        closeFiles();
+        return true;
+    }
+    
+    return false;
 }
 
 void LogManager::processEntry(const LogEntry& entry) {

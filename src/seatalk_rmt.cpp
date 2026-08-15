@@ -76,11 +76,16 @@ uint8_t SeatalkRMT::reverse8(uint8_t x) {
 }
 
 void SeatalkRMT::handleframe() {
+    #ifdef DEBUG_SEATALK
+
     serialPrintf("FRAME READ : [ ");
     for(uint8_t i = 0; i < _framelen; i++) {
         serialPrintf("0x%02X ",_frame[i]);
     }
     serialPrintf("]\n");
+    
+    #endif
+
 
     // Check this frame against sendDatagram()'s armed echo expectation *right
     // now*, while _frame still holds this exact frame — a later frame

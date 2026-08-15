@@ -26,6 +26,10 @@ public:
     bool getAlarmConfig(AlarmConfig& config);
     bool setAlarmConfig(const AlarmConfig& config);
 
+    // AIS configuration (target retention / "echo" timeout)
+    bool getAISConfig(AISConfig& config);
+    bool setAISConfig(const AISConfig& config);
+
     // Bus conversion configuration
     bool getConversionConfig(ConversionConfig& config);
     bool setConversionConfig(const ConversionConfig& config);

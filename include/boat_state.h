@@ -11,7 +11,12 @@
 
 // Timeout values in milliseconds
 #define DATA_TIMEOUT_DEFAULT 10000  // 10 seconds for most data
-#define DATA_TIMEOUT_AIS     60000  // 60 seconds for AIS
+// Default AIS target retention ("echo") time: how long a target is kept
+// after its last received report before being dropped as stale. AIS class A
+// units may only report every few minutes when stationary or far away, so a
+// short timeout would make targets flicker in/out. This default can be
+// overridden at runtime via AISConfig (see types.h / ConfigManager).
+#define DATA_TIMEOUT_AIS      300000  // 5 minutes for AIS
 // Trip/total (log) datagrams are only re-transmitted by SeaTalk sources when
 // the value actually changes, not on a regular cadence like other data. Use a
 // very long timeout so the last known value is kept instead of being flagged
@@ -444,6 +449,16 @@ public:
     /** @brief Return the current EMA damping time constant (seconds). */
     float getDampingTau() const;
 
+    /**
+     * @brief Set how long an AIS target is kept after its last report before
+     *        being considered stale and dropped (the AIS "echo" retention).
+     * @param seconds  Retention time in seconds. Clamped to [10, 3600].
+     */
+    void setAISTargetTimeout(uint32_t seconds);
+
+    /** @brief Return the current AIS target retention time (seconds). */
+    uint32_t getAISTargetTimeout() const;
+
     // Utility functions
     void cleanupStaleData();
     void calculateDerivedData();
@@ -482,6 +497,9 @@ private:
     float    _emaCosTWA    = 1.0f;
     bool     _emaInit      = false;
     uint32_t _lastPerfMs   = 0;
+
+    // AIS target retention ("echo") timeout, in milliseconds
+    uint32_t _aisTargetTimeoutMs = DATA_TIMEOUT_AIS;
 
     // Helper functions
     void addDataPointToJSON(JsonObject obj, const char* key, const DataPoint& dp,

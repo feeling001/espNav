@@ -94,8 +94,22 @@ public:
     /**
      * @brief Return storage statistics.
      * @return SDStorageInfo struct; mounted=false when no card is present.
+     * @note Acquires the SPI mutex and calls SD.usedBytes() — may block for
+     *       several seconds on a large card.  Do NOT call from the
+     *       AsyncWebServer (async_tcp) task; use getLastKnownInfo() instead.
      */
     SDStorageInfo getStorageInfo();
+
+    /**
+     * @brief Return the cached storage statistics from the last successful
+     *        mount.  Completely non-blocking and safe to call from any
+     *        context, including the async_tcp web-server task.
+     *
+     * The cache is populated by mount() (which runs on a background task)
+     * and cleared by unmount().  It returns a zeroed SDStorageInfo with
+     * mounted=false when no card has been successfully mounted yet.
+     */
+    SDStorageInfo getLastKnownInfo() const { return m_cachedInfo; }
 
     // ── File operations ───────────────────────────────────────────────────────
 
@@ -143,16 +157,6 @@ public:
     File openForWrite(const char* path, bool append = false);
 
     /**
-     * @brief Format the SD card as FAT32.
-     *
-     * This is a destructive operation that erases all data.
-     * The card is remounted automatically on success.
-     *
-     * @return true on success.
-     */
-    bool format();
-
-    /**
      * @brief Check whether a path exists on the SD card.
      * @param path Absolute path.
      * @return true if the path exists.
@@ -166,10 +170,18 @@ public:
      */
     bool mkdir(const char* path);
 
+    /**
+     * @brief Register a callback to be invoked when mount() completes successfully.
+     * Used by LogManager to retry file opens when the SD card becomes available.
+     */
+    void setOnMountedCallback(void (*cb)(void)) { onMountedCallback = cb; }
+
 private:
     bool               mounted;
     SPIClass*          spi;
     SemaphoreHandle_t  mutex;
+    SDStorageInfo      m_cachedInfo;  ///< Populated by mount(); read by getLastKnownInfo()
+    void (*onMountedCallback)(void) = nullptr; ///< Callback when mount() succeeds
 
     // Internal recursive listing helper
     void listDir(File& dir, std::vector<SDFileInfo>& out, uint8_t depth,

@@ -140,6 +140,17 @@ public:
      */
     void newSession();
 
+    /**
+     * @brief Close a specific log file if it's currently open.
+     *
+     * Called before deleting a log file from the web API.
+     * Safe to call from any task (closes all files if any match).
+     *
+     * @param filePath Full path to the file (e.g., "/logs/log_20260815_1254.csv").
+     * @return true if a file was closed.
+     */
+    bool closeFileIfOpen(const char* filePath);
+
     // ── Producer API (called from NMEA / SeaTalk tasks) ───────────────────────
 
     /**
@@ -181,6 +192,12 @@ public:
      * Empty string when no files are open.
      */
     String   openFilePaths() const;
+
+    /**
+     * @brief Public callback invoked when SDManager successfully mounts the card.
+     * Retries file opening if they weren't open before.
+     */
+    void onSDMounted();
 
 private:
     // ── GPS fix guard ─────────────────────────────────────────────────────────
@@ -235,6 +252,8 @@ private:
     // ── FreeRTOS task ─────────────────────────────────────────────────────────
 
     static void logTask(void* param);
+    static LogManager* s_instance;  ///< Singleton ref for SD mount callback
+    static void _onMountedCallback();  ///< Static wrapper for sdManager callback
 
     // ── Members ───────────────────────────────────────────────────────────────
 

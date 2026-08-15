@@ -86,10 +86,33 @@ bool SDManager::mount() {
 
     if (ok) {
         mounted = true;
-        serialPrintf("[SD] Card type: %s  total: %llu MB\n",
-                      SD.cardType() == CARD_SDHC ? "SDHC/SDXC" :
-                      SD.cardType() == CARD_SD   ? "SDSC"       : "Unknown",
-                      (unsigned long long)(SD.totalBytes() / (1024ULL * 1024ULL)));
+
+        // Populate the info cache while we still hold the mutex.
+        // SD.usedBytes() can be slow on a large card but this runs on a
+        // background task (see WebServer::startSDJob), never on async_tcp.
+        uint64_t total = SD.totalBytes();
+        uint64_t used  = SD.usedBytes();
+        m_cachedInfo.totalBytes = total;
+        m_cachedInfo.usedBytes  = used;
+        m_cachedInfo.freeBytes  = (total > used) ? (total - used) : 0;
+        m_cachedInfo.usedPct    = (total > 0) ? (uint8_t)((used * 100ULL) / total) : 0;
+        switch (SD.cardType()) {
+            case CARD_SD:   m_cachedInfo.cardType = "SDSC";    break;
+            case CARD_SDHC: m_cachedInfo.cardType = "SDHC";    break;
+            case CARD_NONE: m_cachedInfo.cardType = "None";    break;
+            default:        m_cachedInfo.cardType = "Unknown"; break;
+        }
+        m_cachedInfo.mounted = true;
+
+        // Notify any listeners (e.g., LogManager) that the SD card is now mounted
+        if (onMountedCallback) {
+            onMountedCallback();
+        }
+
+        serialPrintf("[SD] Card type: %s  total: %llu MB  used: %llu MB\n",
+                      m_cachedInfo.cardType.c_str(),
+                      (unsigned long long)(total / (1024ULL * 1024ULL)),
+                      (unsigned long long)(used  / (1024ULL * 1024ULL)));
     } else {
         mounted = false;
 
@@ -120,6 +143,7 @@ void SDManager::unmount() {
     if (mounted) {
         SD.end();
         mounted = false;
+        m_cachedInfo = SDStorageInfo();  // clear cached stats
 
         // Return CS to idle-high.
         pinMode(SD_CS_PIN, OUTPUT);
@@ -252,66 +276,20 @@ bool SDManager::deleteDir(const char* path) {
 }
 
 File SDManager::openForRead(const char* path) {
-    if (!mounted) return File();
-    // Intentionally not locking here: the caller manages the File lifetime.
-    // Concurrent reads are safe on FAT; concurrent write + read would need
-    // external coordination.
-    return SD.open(path, FILE_READ);
+    if (!mounted || !lock()) return File();
+    File f = SD.open(path, FILE_READ);
+    unlock();
+    return f;
 }
 
 File SDManager::openForWrite(const char* path, bool append) {
-    if (!mounted) return File();
-    return SD.open(path, append ? FILE_APPEND : FILE_WRITE);
-}
-
-bool SDManager::format() {
-    if (!lock()) return false;
-
-    serialPrintf("[SD] Formatting SD card (FAT32)...\n");
-
-    // The Arduino SD library does not expose a format function directly.
-    // We use the ESP-IDF sdmmc_full_erase + ff_mkfs approach via the
-    // FATFS layer.  Because that requires esp-idf headers not always
-    // included in the Arduino environment, we fall back to the simplest
-    // portable approach: remove all top-level entries.
-    //
-    // For a true low-level format the user should use a PC tool (e.g.
-    // SD Association Formatter, mkfs.fat, or Disk Utility).
-
-    // Remove every entry at the root level.
-    File root = SD.open("/");
-    if (!root) {
-        serialPrintf("[SD] Format: cannot open root\n");
-        unlock();
-        return false;
+    if (!mounted || !lock()) return File();
+    File f = SD.open(path, append ? FILE_APPEND : FILE_WRITE);
+    if (!f) {
+        serialPrintf("[SD] ❌ Failed to open '%s' for %s\n", path, append ? "append" : "write");
     }
-
-    // Collect names first to avoid iterator invalidation during deletion.
-    std::vector<String> entries;
-    std::vector<bool>   areDirs;
-    File entry = root.openNextFile();
-    while (entry) {
-        entries.push_back(String(entry.path()));
-        areDirs.push_back(entry.isDirectory());
-        entry.close();
-        entry = root.openNextFile();
-    }
-    root.close();
-
-    for (size_t i = 0; i < entries.size(); i++) {
-        if (areDirs[i]) {
-            // Release mutex for the recursive deleteDir call.
-            unlock();
-            deleteDir(entries[i].c_str());
-            if (!lock()) return false;
-        } else {
-            SD.remove(entries[i].c_str());
-        }
-    }
-
-    serialPrintf("[SD] ✓ SD card formatted (all files removed)\n");
     unlock();
-    return true;
+    return f;
 }
 
 bool SDManager::exists(const char* path) {

@@ -21,6 +21,8 @@
 #include <LittleFS.h>
 #include <Update.h>
 #include <Preferences.h>
+#include <functional>
+#include <atomic>
 #include "config_manager.h"
 #include "wifi_manager.h"
 #include "ble_manager.h"
@@ -65,6 +67,19 @@ public:
     void broadcastBoatState();
     /** Push any new debug-log lines (see DebugLog) to connected /ws/debug clients. */
     void broadcastDebugLog();
+
+    /**
+     * @brief Record the outcome of a completed background SD job (see
+     *        startSDJob). Public because it is invoked from the
+     *        FreeRTOS task entry point, which is a free function.
+     */
+    void finishSDJob(bool ok, const String& successMsg, const String& failMsg);
+
+    /**
+     * @brief Record the result of a completed background SD file-listing job.
+     *        Called from sdListTaskEntry (a free function) so it must be public.
+     */
+    void finishSDListJob(const String& json);
 
 private:
     void registerRoutes();
@@ -119,6 +134,10 @@ private:
     void handlePostAlarmsBeepOn(AsyncWebServerRequest* request);
     void handlePostAlarmsBeepOff(AsyncWebServerRequest* request);
 
+    // ── AIS handlers ──────────────────────────────────────────
+    void handleGetAISConfig(AsyncWebServerRequest* request);
+    void handlePostAISConfig(AsyncWebServerRequest* request, uint8_t* data, size_t len);
+
     // ── WiFi scan handlers ────────────────────────────────────────────────────
     void handleStartWiFiScan(AsyncWebServerRequest* request);
     void handleGetWiFiScanResults(AsyncWebServerRequest* request);
@@ -155,14 +174,66 @@ private:
     /** POST /api/sd/mkdir — create a directory  body: {"path":"/logs"} */
     void handleMkdirSD(AsyncWebServerRequest* request, uint8_t* data, size_t len);
 
-    /** POST /api/sd/format — erase all files on the SD card */
-    void handleFormatSD(AsyncWebServerRequest* request);
-
     /** POST /api/sd/mount — (re-)mount the SD card */
     void handleMountSD(AsyncWebServerRequest* request);
 
     /** POST /api/sd/unmount — safely unmount the SD card */
     void handleUnmountSD(AsyncWebServerRequest* request);
+
+    /**
+     * @brief Run a blocking SD/SPI operation on a dedicated FreeRTOS task
+     *        while keeping the calling task (async_tcp) fed to the task
+     *        watchdog.
+     *
+     * Used only for short operations (e.g. unmount). For anything that can
+     * take an unbounded amount of time (mount, format), use startSDJob()
+     * instead — see its documentation for why a wait loop is not safe.
+     *
+     * @param fn Blocking function to execute; its return value is
+     *           returned by this helper.
+     */
+    bool runBlockingSD(std::function<bool()> fn);
+
+    /**
+     * @brief Kick off a long-running SD/SPI operation on a background task
+     *        and return immediately (fire-and-forget).
+     *
+     * AsyncWebServer route handlers execute directly on the "async_tcp"
+     * task, which is registered with the Task Watchdog Timer. The
+     * "async_tcp" task is created with no fixed core affinity, so it can
+     * end up sharing a core with any helper task we spawn. Operations like
+     * SD.begin() (no card / bad wiring) or formatting a card with many
+     * files perform many short blocking SPI transactions back-to-back; if
+     * our own polling/wait loop happens to run on the same core it can be
+     * starved long enough to miss the watchdog deadline. The only fully
+     * safe approach is for the request handler to never wait on the
+     * result at all: it starts the job and returns immediately, and the
+     * frontend polls /api/sd/status (busy/last_job_*) for completion.
+     *
+     * @param type        Short identifier stored in sdJobType ("mount", "format", …).
+     * @param fn          Blocking function to execute on the background task.
+     * @param successMsg  Message stored in sdJobMessage when fn() returns true.
+     * @param failMsg     Message stored in sdJobMessage when fn() returns false.
+     * @return true if the job was started; false if another job is already
+     *         running or the task could not be created.
+     */
+    bool startSDJob(const char* type, std::function<bool()> fn,
+                     const char* successMsg, const char* failMsg);
+
+    /**
+     * @brief Kick off a background file-listing job.
+     *
+     * sdManager->listFiles() holds the SDManager mutex for the entire duration
+     * of a recursive directory scan, which can take many seconds on a large
+     * card — enough to trigger the Task Watchdog if run directly on async_tcp.
+     * This helper spawns the listing on a background task (core 0) and caches
+     * the result as a JSON string in sdListJson.  handleListSDFiles() returns
+     * the cache immediately, or HTTP 202 while the job is running.
+     *
+     * @param dir Directory to list (e.g. "/").
+     * @return true if the job was started; false if already running.
+     */
+    bool startSDListJob(const String& dir);
 
     // ── WebSocket handlers ────────────────────────────────────────────────────
     void handleWebSocketEvent(AsyncWebSocket* server, AsyncWebSocketClient* client,
@@ -175,6 +246,17 @@ private:
     AsyncWebSocket* wsBoatState;
     AsyncWebSocket* wsDebug;
     uint32_t        debugLogLastSeq = 0; ///< Last DebugLog sequence number already broadcast
+
+    // ── SD background job state (see startSDJob) ──────────────────────────────
+    std::atomic<bool> sdJobBusy{false};
+    std::atomic<bool> sdJobSuccess{false};
+    String             sdJobType;      ///< "mount" | "format" | ""
+    String             sdJobMessage;   ///< Result message of the last completed job
+
+    // ── SD file-listing background job state (see startSDListJob) ───────────────
+    std::atomic<bool> sdListBusy{false};
+    String             sdListJson;  ///< Cached JSON from last listFiles run
+    String             sdListDir;   ///< Directory of last listing
     ConfigManager*  configManager;
     WiFiManager*    wifiManager;
     TCPServer*      tcpServer;

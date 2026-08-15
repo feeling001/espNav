@@ -427,7 +427,7 @@ void BoatState::acknowledgeAllAlarms() {
 
 void BoatState::cleanupStaleData() {
     xSemaphoreTake(mutex, portMAX_DELAY);
-    ais.removeStaleTargets();
+    ais.removeStaleTargets(_aisTargetTimeoutMs);
     xSemaphoreGive(mutex);
 }
 
@@ -524,6 +524,18 @@ void BoatState::setDampingTau(float tau) {
 
 float BoatState::getDampingTau() const {
     return _dampingTau;
+}
+
+void BoatState::setAISTargetTimeout(uint32_t seconds) {
+    if (seconds < 10)   seconds = 10;
+    if (seconds > 3600) seconds = 3600;
+    xSemaphoreTake(mutex, portMAX_DELAY);
+    _aisTargetTimeoutMs = seconds * 1000UL;
+    xSemaphoreGive(mutex);
+}
+
+uint32_t BoatState::getAISTargetTimeout() const {
+    return _aisTargetTimeoutMs / 1000UL;
 }
 
 // ============================================================
@@ -717,7 +729,7 @@ String BoatState::toJSON() {
         AISTarget& target = ais.targets[i];
         unsigned long age = (millis() - target.timestamp) / 1000;
         
-        if (age <= DATA_TIMEOUT_AIS / 1000) {
+        if (age <= _aisTargetTimeoutMs / 1000) {
             JsonObject targetObj = aisArray.add<JsonObject>();
             targetObj["mmsi"] = target.mmsi;
             targetObj["name"] = target.name;
@@ -791,7 +803,7 @@ String BoatState::getAISJSON() {
         AISTarget& target = ais.targets[i];
         unsigned long age = (millis() - target.timestamp) / 1000;
         
-        if (age <= DATA_TIMEOUT_AIS / 1000) {
+        if (age <= _aisTargetTimeoutMs / 1000) {
             JsonObject targetObj = aisArray.add<JsonObject>();
             targetObj["mmsi"] = target.mmsi;
             targetObj["name"] = target.name;

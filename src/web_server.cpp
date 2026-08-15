@@ -22,6 +22,7 @@
 #include <Update.h>
 #include <esp_ota_ops.h>
 #include <esp_partition.h>
+#include <esp_task_wdt.h>
 
 // External variables from main.cpp for monitoring
 extern volatile uint32_t g_nmeaQueueOverflows;
@@ -289,6 +290,19 @@ void WebServer::registerRoutes() {
         this->handlePostAlarmsBeepOff(request);
     });
 
+    // ── AIS ────────────────────────────────────────────────────
+    server->on("/api/ais/config", HTTP_GET, [this](AsyncWebServerRequest* request) {
+        this->handleGetAISConfig(request);
+    });
+    server->on("/api/ais/config", HTTP_POST,
+        [](AsyncWebServerRequest* request) {},
+        NULL,
+        [this](AsyncWebServerRequest* request, uint8_t* data, size_t len,
+               size_t index, size_t total) {
+            this->handlePostAISConfig(request, data, len);
+        }
+    );
+
     // ── OTA Update ─────────────────────────────────────────────
     server->on("/api/ota/status", HTTP_GET, [this](AsyncWebServerRequest* request) {
         this->handleGetOTAStatus(request);
@@ -353,10 +367,6 @@ void WebServer::registerRoutes() {
             this->handleMkdirSD(request, data, len);
         }
     );
-
-    server->on("/api/sd/format", HTTP_POST, [this](AsyncWebServerRequest* request) {
-        this->handleFormatSD(request);
-    });
 
     server->on("/api/sd/mount", HTTP_POST, [this](AsyncWebServerRequest* request) {
         this->handleMountSD(request);
@@ -585,7 +595,7 @@ String WebServer::buildBoatStateJSON() {
         for (int i = 0; i < ais.targetCount; i++) {
             AISTarget& t      = ais.targets[i];
             unsigned long age = (millis() - t.timestamp) / 1000;
-            if (age > DATA_TIMEOUT_AIS / 1000) continue;
+            if (age > boatState->getAISTargetTimeout()) continue;
 
             JsonObject obj = targets.add<JsonObject>();
             obj["mmsi"] = t.mmsi;
@@ -955,6 +965,167 @@ static inline void sdNotAvailable(AsyncWebServerRequest* request,
     request->send(503, "application/json", body);
 }
 
+// ── Blocking SD helper ────────────────────────────────────────────────────────
+namespace {
+struct BlockingSDJob {
+    std::function<bool()> fn;
+    volatile bool          done   = false;
+    volatile bool          result = false;
+};
+
+void blockingSDTaskEntry(void* param) {
+    BlockingSDJob* job = static_cast<BlockingSDJob*>(param);
+    job->result = job->fn();
+    job->done   = true;
+    vTaskDelete(nullptr);
+}
+}  // namespace
+
+bool WebServer::runBlockingSD(std::function<bool()> fn) {
+    BlockingSDJob* job = new BlockingSDJob();
+    job->fn = std::move(fn);
+
+    // Pin the blocking task to core 0 — deliberately NOT the same core as
+    // the "async_tcp" task (core 1). SD.begin()/SD.end() SPI transactions
+    // can enter interrupt-disabling critical sections on a failing/absent
+    // card; if that ran on core 1 it would stall the scheduler on that
+    // core and prevent async_tcp from ever running to reset its own
+    // watchdog, even while we poll from "inside" it. Running on the other
+    // core keeps async_tcp fully schedulable throughout.
+    BaseType_t created = xTaskCreatePinnedToCore(
+        blockingSDTaskEntry, "sd_blocking", 4096, job, 1, nullptr, 0);
+
+    if (created != pdPASS) {
+        // Fall back to running inline; better a possible watchdog trip
+        // than silently losing the operation.
+        bool result = job->fn();
+        delete job;
+        return result;
+    }
+
+    // Poll for completion while keeping this task (async_tcp) fed to the
+    // Task Watchdog Timer so a slow SD/SPI operation cannot abort() the
+    // firmware.
+    while (!job->done) {
+        esp_task_wdt_reset();
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+
+    bool result = job->result;
+    delete job;
+    return result;
+}
+
+// ── Fire-and-forget SD job helper ─────────────────────────────────────────────
+namespace {
+struct SDAsyncJobCtx {
+    WebServer*             self;
+    std::function<bool()>  fn;
+    String                 successMsg;
+    String                 failMsg;
+};
+
+void sdAsyncJobTaskEntry(void* param) {
+    SDAsyncJobCtx* ctx = static_cast<SDAsyncJobCtx*>(param);
+    bool ok = ctx->fn();
+    ctx->self->finishSDJob(ok, ctx->successMsg, ctx->failMsg);
+    delete ctx;
+    vTaskDelete(nullptr);
+}
+}  // namespace
+
+void WebServer::finishSDJob(bool ok, const String& successMsg, const String& failMsg) {
+    sdJobMessage = ok ? successMsg : failMsg;
+    sdJobSuccess = ok;
+    // Any SD state change (mount, format, unmount) invalidates the file list
+    // cache so the next /api/sd/files request triggers a fresh background listing.
+    sdListJson   = "";
+    sdJobBusy    = false;  // publish last, after all other fields are visible
+}
+
+bool WebServer::startSDJob(const char* type, std::function<bool()> fn,
+                           const char* successMsg, const char* failMsg) {
+    bool expected = false;
+    if (!sdJobBusy.compare_exchange_strong(expected, true)) {
+        return false;  // another job already running
+    }
+
+    sdJobType = type;
+    SDAsyncJobCtx* ctx = new SDAsyncJobCtx{this, std::move(fn), successMsg, failMsg};
+
+    BaseType_t created = xTaskCreatePinnedToCore(
+        sdAsyncJobTaskEntry, "sd_job", 4096, ctx, 1, nullptr, 0);
+
+    if (created != pdPASS) {
+        sdJobBusy = false;
+        delete ctx;
+        return false;
+    }
+
+    return true;
+}
+
+// ── Background file-listing job ─────────────────────────────────────────────────
+namespace {
+struct SDListCtx {
+    WebServer* self;
+    SDManager* sd;
+    String     dir;
+};
+
+void sdListTaskEntry(void* param) {
+    SDListCtx* ctx = static_cast<SDListCtx*>(param);
+
+    std::vector<SDFileInfo> files = ctx->sd->listFiles(ctx->dir.c_str(), 4);
+
+    JsonDocument doc;
+    doc["dir"]   = ctx->dir;
+    doc["count"] = files.size();
+    JsonArray arr = doc["files"].to<JsonArray>();
+    for (const auto& f : files) {
+        JsonObject obj = arr.add<JsonObject>();
+        obj["path"]  = f.path;
+        obj["size"]  = f.size;
+        obj["isDir"] = f.isDir;
+    }
+    String json;
+    serializeJson(doc, json);
+
+    ctx->self->finishSDListJob(json);
+    delete ctx;
+    vTaskDelete(nullptr);
+}
+}  // namespace (SDListCtx / sdListTaskEntry)
+
+void WebServer::finishSDListJob(const String& json) {
+    sdListJson = json;
+    // sdListBusy release must come after sdListJson is written so the reader
+    // on async_tcp sees the updated string when it observes busy=false.
+    sdListBusy.store(false, std::memory_order_release);
+}
+
+bool WebServer::startSDListJob(const String& dir) {
+    bool expected = false;
+    if (!sdListBusy.compare_exchange_strong(expected, true)) {
+        return false;  // already listing
+    }
+
+    sdListDir  = dir;
+
+    SDListCtx* ctx = new SDListCtx{this, sdManager, dir};
+
+    BaseType_t created = xTaskCreatePinnedToCore(
+        sdListTaskEntry, "sd_list", 8192, ctx, 1, nullptr, 0);
+
+    if (created != pdPASS) {
+        sdListBusy = false;
+        delete ctx;
+        return false;
+    }
+
+    return true;
+}
+
 void WebServer::handleGetSDStatus(AsyncWebServerRequest* request) {
     JsonDocument doc;
 
@@ -968,7 +1139,10 @@ void WebServer::handleGetSDStatus(AsyncWebServerRequest* request) {
         return;
     }
 
-    SDStorageInfo info = sdManager->getStorageInfo();
+    // Use the cached info populated by mount() (runs on a background task).
+    // This is completely non-blocking — no mutex, no SPI.  SD.usedBytes() is
+    // intentionally NOT called here; it lives in the background mount task.
+    SDStorageInfo info = sdManager->getLastKnownInfo();
 
     doc["enabled"]      = true;
     doc["mounted"]      = info.mounted;
@@ -981,6 +1155,17 @@ void WebServer::handleGetSDStatus(AsyncWebServerRequest* request) {
     doc["total_mb"]     = (uint32_t)(info.totalBytes / (1024ULL * 1024ULL));
     doc["free_mb"]      = (uint32_t)(info.freeBytes  / (1024ULL * 1024ULL));
 
+    // Background mount/format job progress (see startSDJob)
+    bool busy = sdJobBusy.load();
+    doc["busy"] = busy;
+    if (sdJobType.length()) {
+        doc["last_job"] = sdJobType;
+        if (!busy) {
+            doc["last_job_success"] = sdJobSuccess.load();
+            doc["last_job_message"] = sdJobMessage;
+        }
+    }
+
     String response;
     serializeJson(doc, response);
     request->send(200, "application/json", response);
@@ -992,28 +1177,41 @@ void WebServer::handleListSDFiles(AsyncWebServerRequest* request) {
         return;
     }
 
-    const char* dir = "/";
+    String dir = "/";
     if (request->hasParam("dir")) {
-        dir = request->getParam("dir")->value().c_str();
+        dir = request->getParam("dir")->value();
     }
 
-    std::vector<SDFileInfo> files = sdManager->listFiles(dir, 4);
+    // ─ Return cached result if available for the same directory ──────────────
+    // ?force=1 invalidates the cache and always triggers a fresh background scan.
+    bool forceRefresh = request->hasParam("force") &&
+                        request->getParam("force")->value() == "1";
+    if (forceRefresh) sdListJson = "";
 
-    JsonDocument doc;
-    doc["dir"]   = dir;
-    doc["count"] = files.size();
-    JsonArray arr = doc["files"].to<JsonArray>();
-
-    for (const auto& f : files) {
-        JsonObject obj = arr.add<JsonObject>();
-        obj["path"]  = f.path;
-        obj["size"]  = f.size;
-        obj["isDir"] = f.isDir;
+    bool listBusy = sdListBusy.load(std::memory_order_acquire);
+    if (!listBusy && !sdListJson.isEmpty() && sdListDir == dir) {
+        request->send(200, "application/json", sdListJson);
+        return;
     }
 
-    String response;
-    serializeJson(doc, response);
-    request->send(200, "application/json", response);
+    // ─ Listing in progress: report busy ────────────────────────────────
+    if (listBusy) {
+        request->send(202, "application/json",
+                      "{\"busy\":true,\"dir\":\"" + dir + "\",\"count\":0,\"files\":[]}");
+        return;
+    }
+
+    // ─ No cache: kick off a background listing ────────────────────────
+    // sdManager->listFiles() holds the SDManager mutex for the entire
+    // recursive scan and can take many seconds on a large card — enough
+    // to trigger the Task Watchdog if run on async_tcp directly.
+    if (startSDListJob(dir)) {
+        request->send(202, "application/json",
+                      "{\"busy\":true,\"dir\":\"" + dir + "\",\"count\":0,\"files\":[]}");
+    } else {
+        request->send(503, "application/json",
+                      "{\"error\":\"File listing unavailable\",\"files\":[]}");
+    }
 }
 
 void WebServer::handleDownloadSDFile(AsyncWebServerRequest* request) {
@@ -1090,12 +1288,20 @@ void WebServer::handleDeleteSDFile(AsyncWebServerRequest* request) {
         return;
     }
 
+    // Close the file in LogManager if it's currently open before deleting
+    if (logManager) {
+        logManager->closeFileIfOpen(path.c_str());
+    }
+
     bool ok = sdManager->deleteFile(path.c_str());
 
     if (ok) {
+        sdListJson = "";  // invalidate file list cache
+        serialPrintf("[WEB] Successfully deleted file: %s\n", path.c_str());
         request->send(200, "application/json",
                       "{\"success\":true,\"message\":\"File deleted\"}");
     } else {
+        serialPrintf("[WEB] Failed to delete file: %s\n", path.c_str());
         request->send(500, "application/json",
                       "{\"success\":false,\"error\":\"Delete failed or file not found\"}");
     }
@@ -1122,6 +1328,8 @@ void WebServer::handleMkdirSD(AsyncWebServerRequest* request,
 
     bool ok = sdManager->mkdir(path);
 
+    if (ok) sdListJson = "";  // invalidate file list cache
+
     JsonDocument resp;
     resp["success"] = ok;
     resp["path"]    = path;
@@ -1131,43 +1339,30 @@ void WebServer::handleMkdirSD(AsyncWebServerRequest* request,
     request->send(ok ? 200 : 500, "application/json", body);
 }
 
-void WebServer::handleFormatSD(AsyncWebServerRequest* request) {
-    if (!sdManager) {
-        sdNotAvailable(request, "SD manager not configured");
-        return;
-    }
-    if (!sdManager->isMounted()) {
-        sdNotAvailable(request);
-        return;
-    }
-
-    serialPrintf("[SD] Format requested via web API\n");
-    bool ok = sdManager->format();
-
-    if (ok) {
-        request->send(200, "application/json",
-                      "{\"success\":true,\"message\":\"SD card formatted (all files removed)\"}");
-    } else {
-        request->send(500, "application/json",
-                      "{\"success\":false,\"error\":\"Format failed\"}");
-    }
-}
-
 void WebServer::handleMountSD(AsyncWebServerRequest* request) {
     if (!sdManager) {
         sdNotAvailable(request, "SD manager not configured");
         return;
     }
+    if (sdJobBusy.load()) {
+        request->send(409, "application/json",
+                      "{\"success\":false,\"error\":\"An SD operation is already in progress\"}");
+        return;
+    }
 
-    bool ok = sdManager->mount();
+    // See handleFormatSD: never block the async_tcp task waiting on
+    // SD.begin() — start it in the background and let the frontend poll.
+    SDManager* sd = sdManager;
+    bool started = startSDJob("mount", [sd]() { return sd->mount(); },
+                              "SD card mounted", "No SD card found");
 
     JsonDocument doc;
-    doc["success"] = ok;
-    doc["mounted"] = sdManager->isMounted();
-    doc["message"] = ok ? "SD card mounted" : "No SD card found";
+    doc["success"] = started;
+    doc["busy"]    = started;
+    doc["message"] = started ? "Mount started" : "Failed to start mount";
     String body;
     serializeJson(doc, body);
-    request->send(ok ? 200 : 503, "application/json", body);
+    request->send(started ? 202 : 500, "application/json", body);
 }
 
 void WebServer::handleUnmountSD(AsyncWebServerRequest* request) {
@@ -1176,7 +1371,8 @@ void WebServer::handleUnmountSD(AsyncWebServerRequest* request) {
         return;
     }
 
-    sdManager->unmount();
+    SDManager* sd = sdManager;
+    runBlockingSD([sd]() { sd->unmount(); return true; });
     request->send(200, "application/json",
                   "{\"success\":true,\"message\":\"SD card unmounted safely\"}");
 }
@@ -2152,6 +2348,49 @@ void WebServer::handlePostAlarmsConfig(AsyncWebServerRequest* request,
 
     request->send(200, "application/json",
                   "{\"success\":true,\"message\":\"Alarm config saved\"}");
+}
+
+// GET /api/ais/config
+void WebServer::handleGetAISConfig(AsyncWebServerRequest* request) {
+    JsonDocument doc;
+    doc["target_timeout_s"] = boatState ? boatState->getAISTargetTimeout() : 300;
+
+    String body;
+    serializeJson(doc, body);
+    request->send(200, "application/json", body);
+}
+
+// POST /api/ais/config
+void WebServer::handlePostAISConfig(AsyncWebServerRequest* request,
+                                     uint8_t* data, size_t len) {
+    JsonDocument doc;
+    if (deserializeJson(doc, (char*)data, len)) {
+        request->send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
+        return;
+    }
+
+    if (!doc["target_timeout_s"].is<int>() && !doc["target_timeout_s"].is<unsigned int>()) {
+        request->send(400, "application/json",
+                      "{\"error\":\"target_timeout_s required (integer seconds)\"}");
+        return;
+    }
+
+    int to = doc["target_timeout_s"].as<int>();
+    if (to < 10)   to = 10;
+    if (to > 3600) to = 3600;
+
+    AISConfig cfg;
+    cfg.target_timeout_s = (uint32_t)to;
+
+    if (configManager) configManager->setAISConfig(cfg);
+    if (boatState)      boatState->setAISTargetTimeout(cfg.target_timeout_s);
+
+    JsonDocument resp;
+    resp["success"]          = true;
+    resp["target_timeout_s"] = cfg.target_timeout_s;
+    String body;
+    serializeJson(resp, body);
+    request->send(200, "application/json", body);
 }
 
 // GET /api/alarms/status

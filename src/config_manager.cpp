@@ -206,6 +206,21 @@ bool ConfigManager::setAlarmConfig(const AlarmConfig& config) {
     return true;
 }
 
+bool ConfigManager::getAISConfig(AISConfig& config) {
+    config.target_timeout_s = nvs.getUInt("ais_timeout_s", 300);
+    return true;
+}
+
+bool ConfigManager::setAISConfig(const AISConfig& config) {
+    serialPrintf("[Config] Saving AIS config to NVS\n");
+
+    nvs.putUInt("ais_timeout_s", config.target_timeout_s);
+
+    serialPrintf("[Config]   AIS target retention: %u s\n", config.target_timeout_s);
+    serialPrintf("[Config] ✓ AIS config saved\n");
+    return true;
+}
+
 bool ConfigManager::getConversionConfig(ConversionConfig& config) {
     for (int i = 0; i < CONV_COUNT; i++) {
         char keyEn[20], keyInt[20];
@@ -263,11 +278,13 @@ void ConfigManager::factoryReset() {
     UARTConfig defaultSerial;
     BLEConfigData defaultBLE;
     AlarmConfig defaultAlarm;
+    AISConfig defaultAIS;
     
     setWiFiConfig(defaultWiFi);
     setSerialConfig(defaultSerial);
     setBLEConfig(defaultBLE);
     setAlarmConfig(defaultAlarm);
+    setAISConfig(defaultAIS);
     
     serialPrintf("[Config] ✓ Factory reset complete\n");
 }

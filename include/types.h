@@ -80,6 +80,18 @@ struct AlarmConfig {
           gps_lost_enabled(true),   gps_lost_timeout_s(10) {}
 };
 
+// AIS configuration structure
+// Controls how long a received AIS target is kept ("echo" retention) after
+// its last report before it is dropped as stale. AIS transmitters do not
+// report continuously (reporting intervals depend on vessel class, speed and
+// navigational status — from ~2 s up to several minutes), so this should be
+// a few minutes rather than a few seconds.
+struct AISConfig {
+    uint32_t target_timeout_s;  // retention time in seconds
+
+    AISConfig() : target_timeout_s(300) {}  // default: 5 minutes
+};
+
 // NMEA sentence structure
 struct NMEASentence {
     char raw[128];

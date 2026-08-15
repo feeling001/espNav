@@ -185,6 +185,14 @@ void setup() {
     // ── Boat state ────────────────────────────────────────────
     boatState.init();
 
+    // ── AIS target retention ("echo") timeout ─────────────────
+    {
+        AISConfig aisCfg;
+        configManager.getAISConfig(aisCfg);
+        boatState.setAISTargetTimeout(aisCfg.target_timeout_s);
+        serialPrintf("[Config] AIS target retention: %u s\n", aisCfg.target_timeout_s);
+    }
+
     // ── Alarm manager ─────────────────────────────────────────
     alarmManager.init();
 
